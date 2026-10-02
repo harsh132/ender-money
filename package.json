@@ -1,0 +1,11 @@
+{
+  "name": "ender-money",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "onchain:check": "bun --env-file=.env scripts/onchain-check.ts"
+  },
+  "dependencies": {
+    "viem": "^2.57.2"
+  }
+}

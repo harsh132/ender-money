@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ender Money Mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Agora-derived: warm ink, olive-gold accent, sage green, Newsreader display */
+  --bg: #141411;
+  --surface: #1E1D1A;
+  --surface-2: #2A2925;
+  --line: rgba(245,241,237,0.09);
+  --fg: #F5F1ED;
+  --fg-2: rgba(245,241,237,0.64);
+  --fg-3: rgba(245,241,237,0.40);
+  --accent: #CDC971;
+  --accent-press: #B5B15C;
+  --accent-ink: #141411;
+  --berry: #E8907A;
+  --positive: #9CC5A6;
+  --warning: #E8B65C;
+  --page: #0B0B09;
+  --ui: Geist, system-ui, sans-serif;
+  --display: Newsreader, Georgia, serif;
+  --display-weight: 500;
+  --mono: "Geist Mono", monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--page);
+  color: var(--fg);
+  font-family: var(--ui);
+  font-feature-settings: "tnum" 1, "cv11" 1;
+  padding: 40px 16px 80px;
+}
+header { max-width: 1280px; margin: 0 auto 32px; }
+header h1 { font-size: 28px; font-weight: 700; }
+header p { color: var(--fg-2); font-size: 16px; margin-top: 6px; }
+.grid {
+  max-width: 1280px; margin: 0 auto;
+  display: grid; gap: 40px 32px;
+  grid-template-columns: repeat(auto-fill, minmax(390px, 1fr));
+  justify-items: center;
+}
+.cap { color: var(--fg-3); font-size: 14px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 12px; }
+.phone {
+  width: 390px; height: 844px; max-width: calc(100vw - 32px);
+  background: var(--bg); border-radius: 44px; overflow: hidden;
+  position: relative; border: 1px solid var(--line);
+  display: flex; flex-direction: column;
+}
+.status { height: 48px; padding: 16px 28px 0; display: flex; justify-content: space-between; font-size: 15px; font-weight: 600; flex: none; }
+.body { flex: 1; padding: 8px 20px 0; display: flex; flex-direction: column; position: relative; }
+.mono { font-family: var(--mono); }
+.bal, .amount, .big { font-family: var(--display); font-weight: var(--display-weight) !important; }
+.acc { stroke: var(--accent); }
+.accf { fill: var(--accent); }
+.ink { stroke: var(--accent-ink); }
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 14px; height: 64px; }
+.avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); display: grid; place-items: center; font-weight: 700; font-size: 18px; }
+.top h2 { font-size: 30px; font-weight: 700; flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--fg-2); font-size: 14px; font-weight: 500; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--positive); }
+.iconbtn { width: 48px; height: 48px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; border: 1px solid var(--line); }
+
+/* hero */
+.hero { position: relative; text-align: center; padding: 40px 0 36px; }
+.hero::before {
+  content: ""; position: absolute; inset: -40px -20px 0;
+  background:
+    radial-gradient(rgba(255,255,255,0.10) 1px, transparent 1.4px) 0 0 / 14px 14px;
+  -webkit-mask: radial-gradient(closest-side, #000 30%, transparent);
+          mask: radial-gradient(closest-side, #000 30%, transparent);
+  z-index: 0;
+}
+.hero > * { position: relative; }
+.bal { font-size: 64px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+.bal small { font-size: 36px; color: var(--fg-2); font-weight: 600; }
+.sub { color: var(--fg-2); font-size: 18px; margin-top: 12px; }
+
+/* tiles */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.tile { height: 120px; border-radius: 24px; background: var(--surface); border: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; font-size: 19px; font-weight: 600; }
+
+/* section + rows */
+.sec { display: flex; justify-content: space-between; align-items: baseline; margin: 32px 0 8px; }
+.sec h3 { font-size: 22px; font-weight: 600; }
+.sec a { color: var(--accent); font-size: 16px; font-weight: 500; text-decoration: none; }
+.row { display: flex; align-items: center; gap: 14px; height: 72px; }
+.ricon { width: 48px; height: 48px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; flex: none; border: 1px solid var(--line); }
+.rmain { flex: 1; min-width: 0; }
+.rt { font-size: 18px; font-weight: 500; }
+.rm { font-size: 16px; color: var(--fg-2); margin-top: 3px; }
+.ramt { text-align: right; font-size: 18px; font-weight: 600; }
+.ramt .rm { font-weight: 400; }
+.in { color: var(--positive); }
+.fail { color: var(--berry); }
+.day { color: var(--fg-3); font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; margin: 20px 0 4px; }
+
+/* dock */
+.dock { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; gap: 6px; padding: 8px; border-radius: 999px; background: rgba(31,31,34,0.86); backdrop-filter: blur(20px); border: 1px solid var(--line); box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+.dock span { width: 76px; height: 56px; border-radius: 999px; display: grid; place-items: center; }
+.dock span.on { background: rgba(255,255,255,0.08); }
+.scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 140px; background: linear-gradient(transparent, var(--bg) 60%); pointer-events: none; }
+
+/* buttons + fields */
+.btn { height: 60px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 19px; font-weight: 600; display: grid; place-items: center; width: 100%; }
+.btn:active { background: var(--accent-press); }
+.btn.ghost { background: var(--surface); color: var(--fg); border: 1px solid var(--line); }
+.field { height: 64px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); display: flex; align-items: center; padding: 0 18px; gap: 12px; font-size: 18px; }
+.field .ph { color: var(--fg-3); flex: 1; }
+.pill { height: 40px; padding: 0 16px; border-radius: 999px; background: var(--surface-2); font-size: 15px; font-weight: 600; display: grid; place-items: center; }
+.back { display: flex; align-items: center; gap: 10px; height: 64px; font-size: 22px; font-weight: 600; }
+
+/* amount + keypad */
+.to { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
+.amount { text-align: center; padding: 44px 0 8px; font-size: 72px; font-weight: 600; letter-spacing: -0.02em; }
+.amount .cur { color: var(--fg-3); }
+.avail { text-align: center; color: var(--fg-2); font-size: 16px; display: flex; gap: 10px; justify-content: center; align-items: center; }
+.keys { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: auto; }
+.keys span { height: 68px; display: grid; place-items: center; font-size: 30px; font-weight: 500; }
+
+/* review */
+.card { border-radius: 24px; background: var(--surface); border: 1px solid var(--line); padding: 6px 20px; }
+.kv { display: flex; justify-content: space-between; align-items: center; min-height: 60px; font-size: 18px; border-bottom: 1px solid var(--line); }
+.kv:last-child { border-bottom: 0; }
+.kv .k { color: var(--fg-2); }
+.kv .v { font-weight: 600; }
+.steps { margin-top: 24px; }
+.step { display: flex; gap: 16px; min-height: 64px; }
+.rail { display: flex; flex-direction: column; align-items: center; width: 28px; }
+.bullet { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--line); flex: none; }
+.bullet.done { background: var(--accent); border-color: transparent; }
+.bullet.now { border: 2px solid var(--accent); }
+.line { width: 2px; flex: 1; background: var(--line); margin: 4px 0; }
+.line.done { background: var(--accent); }
+.st { font-size: 18px; font-weight: 500; padding-top: 2px; }
+.sm { font-size: 15px; color: var(--fg-2); margin-top: 2px; padding-bottom: 14px; }
+.banner { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); font-size: 16px; }
+
+/* receive */
+.qr { width: 260px; height: 260px; margin: 28px auto 20px; border-radius: 28px; background: var(--fg); padding: 22px; }
+.qr div { width: 100%; height: 100%; background:
+  conic-gradient(from 90deg at 2px 2px, var(--bg) 25%, transparent 0) 0 0 / 12px 12px;
+  -webkit-mask: radial-gradient(circle, #000 60%, transparent 61%) 0 0 / 12px 12px; mask: radial-gradient(circle, #000 60%, transparent 61%) 0 0 / 12px 12px; }
+
+/* onboarding */
+.mark { width: 96px; height: 96px; border-radius: 30px; background: var(--surface); border: 1px solid var(--line); display: grid; place-items: center; margin: 80px auto 32px; }
+.big { font-size: 38px; font-weight: 700; text-align: center; line-height: 1.15; letter-spacing: -0.01em; }
+.lede { font-size: 18px; color: var(--fg-2); text-align: center; margin: 16px 12px 0; line-height: 1.5; }
+.feat { display: flex; gap: 14px; align-items: center; font-size: 17px; margin-top: 18px; }
+.toggle { width: 52px; height: 32px; border-radius: 999px; background: var(--accent); position: relative; flex: none; }
+.toggle::after { content: ""; position: absolute; right: 3px; top: 3px; width: 26px; height: 26px; border-radius: 50%; background: #fff; }
+svg { display: block; }
+.chip.test { color: var(--warning); border-color: rgba(232,182,92,0.35); }
+.chip.test .dot { background: var(--warning); }
+.toggle.off { background: var(--surface-2); }
+.toggle.off::after { right: auto; left: 3px; background: var(--fg-3); }
+.group { border-radius: 24px; background: var(--surface); border: 1px solid var(--line); padding: 0 18px; }
+.set { display: flex; align-items: center; gap: 14px; min-height: 68px; border-bottom: 1px solid var(--line); }
+.set:last-child { border-bottom: 0; }
+.set .rm { margin-top: 2px; }
+.glabel { color: var(--fg-3); font-size: 14px; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; margin: 22px 4px 8px; }
+
+h2.sect { max-width: 1280px; margin: 8px auto 20px; font-size: 22px; font-weight: 600; }
+h2.sect span { display: block; color: var(--fg-2); font-size: 15px; font-weight: 400; margin-top: 4px; }
+.grid + h2.sect { margin-top: 64px; }
+.ill { width: 120px; height: 120px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); display: grid; place-items: center; margin: 64px auto 28px; }
+.title { font-family: var(--display); font-weight: var(--display-weight); font-size: 36px; line-height: 1.15; text-align: center; letter-spacing: -0.01em; }
+.title.left { text-align: left; }
+.lede.left { text-align: left; margin-left: 0; margin-right: 0; }
+.note { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--fg-2); font-size: 14px; font-weight: 500; }
+.center { text-align: center; }
+.steps-top { display: flex; gap: 6px; margin: 4px 0 28px; }
+.steps-top i { flex: 1; height: 4px; border-radius: 4px; background: var(--surface-2); }
+.steps-top i.on { background: var(--accent); }
+.phonefield { display: flex; gap: 10px; margin-top: 28px; }
+.phonefield .cc { width: 108px; flex: none; justify-content: center; gap: 8px; }
+.phonefield .num { flex: 1; font-size: 22px; font-weight: 500; letter-spacing: .02em; }
+.hint { color: var(--fg-3); font-size: 15px; margin-top: 10px; line-height: 1.45; }
+.bubble-wrap { margin-top: 28px; border-radius: 24px; background: var(--surface); border: 1px solid var(--line); padding: 16px; }
+.bubble-to { color: var(--fg-2); font-size: 15px; margin-bottom: 12px; }
+.bubble { margin-left: auto; max-width: 88%; background: var(--surface-2); border-radius: 20px 20px 6px 20px; padding: 12px 14px; font-family: var(--mono); font-size: 14px; line-height: 1.45; color: var(--fg); word-break: break-all; }
+.spin { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--surface-2); border-top-color: var(--accent); flex: none; }
+.summary { margin-top: 28px; }
+.otp { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 32px; }
+.otp span { height: 64px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); display: grid; place-items: center; font-family: var(--display); font-size: 30px; }
+.otp span.cur { border: 2px solid var(--accent); }
+.link { color: var(--accent); font-weight: 500; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ender Money — screen mockups</h1>
+  <p>Agora-derived palette, gold accent only, one size up on type, 56pt+ targets. Static; not the app.</p>
+</header>
+
+<h2 class="sect">Onboarding<span>Online once. O1 → O2 → O3, then the gateway says whether the verified number has a wallet. New: N1 → N2 → N3. Existing: E1 → passkey → Home (E2 if the passkey is lost, then N1).</span></h2>
+<div class="grid">
+
+<div>
+  <div class="cap">O1 · Welcome</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px">
+      <div class="mark"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v10H8l-4 4z"/><path d="M9 11h6"/></svg></div>
+      <div class="big">Money by text.<br>No internet needed.</div>
+      <div class="lede">Send dollars to anyone with just a phone signal. Your face or fingerprint is your key.</div>
+      <div style="margin-top:36px">
+        <div class="feat"><div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2" stroke-linecap="round"><path d="M12 3a4 4 0 0 0-4 4v3M16 10V7a4 4 0 0 0-1-2.6M6 10h12v10H6z"/></svg></div>No seed phrase to write down</div>
+        <div class="feat"><div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2" stroke-linecap="round"><path d="M2 20h2M7 20v-4M12 20v-8M17 20V8M22 20V4"/></svg></div>Works with mobile data off</div>
+      </div>
+      <div style="margin-top:auto; display:grid; gap:12px">
+        <div class="btn">Log in</div>
+        <div class="hint center" style="margin-top:4px">Setup needs internet once. After that, just signal.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">O2 · Phone number</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px"><div class="back" style="height:56px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></div><div class="steps-top"><i class="on"></i><i></i><i></i></div>
+      <div class="title left">Your number</div>
+      <div class="lede left">We'll text you a code to check it's you. People can pay you at this number.</div>
+      <div class="phonefield">
+        <div class="field cc">🇮🇳 +91</div>
+        <div class="field num">98765 43210</div>
+      </div>
+      <div class="hint">Filled in from your SIM. Change it if it's wrong.</div>
+      <div class="hint" style="margin-top:auto; margin-bottom:16px">Ender's gateway keeps your number next to your wallet address to route payments and alerts.</div>
+      <div><div class="btn">Send code</div></div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">O3 · Enter the code</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px"><div class="back" style="height:56px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></div><div class="steps-top"><i class="on"></i><i class="on"></i><i></i></div>
+      <div class="title left">Enter the code</div>
+      <div class="lede left">We texted a 6-digit code to <b>+91 98765 43210</b>.</div>
+      <div class="otp"><span>4</span><span>8</span><span>1</span><span class="cur"></span><span></span><span></span></div>
+      <div class="hint">Fills in by itself when the text arrives.</div>
+      <div style="display:flex; justify-content:space-between; margin-top:28px; font-size:16px">
+        <span style="color:var(--fg-3)">Resend code in 0:42</span><span class="link">Wrong number?</span>
+      </div>
+      <div style="margin-top:auto"><div class="btn">Verify</div></div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">N1 · New: create passkey</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px"><div class="back" style="height:56px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></div><div class="steps-top"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+      <div class="ill" style="margin-top:36px"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="1.6" stroke-linecap="round"><path d="M12 11v3a8 8 0 0 1-1 4"/><path d="M8.5 9.5A3.5 3.5 0 0 1 15.5 11v2a12 12 0 0 1-.6 3.8"/><path d="M5.5 15.5A11 11 0 0 0 6 11a6 6 0 0 1 10.5-4"/><path d="M18.5 9.5c.3.9.5 1.9.5 3a17 17 0 0 1-.4 3.5"/><path d="M9 19.5a13 13 0 0 0 .9-3"/></svg></div>
+      <div class="title">Your fingerprint<br>is your key</div>
+      <div class="lede">Number verified. Now we'll make a passkey on this phone. No seed phrase, nothing to write down. It's saved to your Google account as “Ender”, so a new phone can get your wallet back.</div>
+      <div style="margin-top:auto"><div class="btn">Create passkey</div></div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">N2 · New: setting up</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px"><div class="back" style="height:56px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></div><div class="steps-top"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+      <div class="title left">Setting up<br>your wallet</div>
+      <div class="lede left">A few seconds.</div>
+      <div class="steps" style="margin-top:32px">
+        <div class="step"><div class="rail"><div class="bullet done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="ink" stroke-width="3.5" stroke-linecap="round"><path d="m5 12 5 5 9-10"/></svg></div><div class="line done"></div></div><div><div class="st">Number verified</div><div class="sm">+91 98765 43210</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="ink" stroke-width="3.5" stroke-linecap="round"><path d="m5 12 5 5 9-10"/></svg></div><div class="line done"></div></div><div><div class="st">Passkey created</div></div></div>
+        <div class="step"><div class="rail"><div class="spin"></div><div class="line"></div></div><div><div class="st">Setting up your wallet on Monad</div><div class="sm">No fees for you. Ender covers it.</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet"></div></div><div><div class="st" style="color:var(--fg-3)">Ready</div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">N3 · New: ready</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px">
+      <div class="ill" style="margin-top:56px"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg></div>
+      <div class="title">You're all set</div>
+      <div class="lede">Anyone can pay you at your number, and we'll text you when money arrives.</div>
+      <div class="card summary">
+        <div class="kv"><span class="k">Number</span><span class="v">+91 98765 43210</span></div>
+        <div class="kv"><span class="k">Balance</span><span class="v">$0.00</span></div>
+      </div>
+      <div class="banner" style="margin-top:16px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2" stroke-linecap="round"><path d="M2 20h2M7 20v-4M12 20v-8M17 20V8M22 20V4"/></svg>Now try it with mobile data off. Ender only needs signal.</div>
+      <div style="margin-top:auto; display:grid; gap:12px">
+        <div class="btn">Add money</div>
+        <div class="btn ghost">Go to home</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">E1 · Existing: welcome back</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px"><div class="back" style="height:56px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></div><div class="steps-top"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+      <div class="ill" style="margin-top:36px"><svg width="56" height="56" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="1.6" stroke-linecap="round"><path d="M12 11v3a8 8 0 0 1-1 4"/><path d="M8.5 9.5A3.5 3.5 0 0 1 15.5 11v2a12 12 0 0 1-.6 3.8"/><path d="M5.5 15.5A11 11 0 0 0 6 11a6 6 0 0 1 10.5-4"/><path d="M18.5 9.5c.3.9.5 1.9.5 3a17 17 0 0 1-.4 3.5"/><path d="M9 19.5a13 13 0 0 0 .9-3"/></svg></div>
+      <div class="title">Welcome back</div>
+      <div class="lede">This number already has an Ender wallet. Use your passkey to open it.</div>
+      <div class="card summary">
+        <div class="kv"><span class="k">Wallet</span><span class="v mono" style="font-size:16px">0x4b2e…91fa</span></div>
+        <div class="kv"><span class="k">Balance</span><span class="v">$12.40</span></div>
+      </div>
+      <div style="margin-top:auto; display:grid; gap:12px">
+        <div class="btn">Use my passkey</div>
+        <div class="btn ghost">I lost my passkey</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">E2 · Existing: lost passkey</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px"><div class="back" style="height:56px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg></div>
+      <div class="ill" style="margin-top:36px"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17v.5"/></svg></div>
+      <div class="title">Start a new wallet?</div>
+      <div class="lede">Without its passkey, nobody can open your old wallet, not even Ender. Check your Google account on another phone first.</div>
+      <div class="card summary">
+        <div class="kv"><span class="k">Old wallet</span><span class="v">Keeps $12.40</span></div>
+        <div class="kv"><span class="k">Number</span><span class="v">Moves to new wallet</span></div>
+      </div>
+      <div style="margin-top:auto; display:grid; gap:12px">
+        <div class="btn">Start a new wallet</div>
+        <div class="btn ghost">Try my passkey again</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<h2 class="sect">App</h2>
+<div class="grid">
+
+<!-- 2 Home -->
+<div>
+  <div class="cap">Home</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● SMS</span></div>
+    <div class="body">
+      <div class="top">
+        <div class="avatar">H</div>
+        <h2>Home</h2>
+        <div class="iconbtn" aria-label="Scan QR code"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg></div>
+      </div>
+      <div class="hero">
+        <div class="bal">$45<small>.20</small></div>
+        <div class="sub">≈ ₹3,790 · synced 2 min ago</div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9"/></svg>Send</div>
+        <div class="tile"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7 7 17M16 17H7V8"/></svg>Receive</div>
+      </div>
+      <div class="sec"><h3>Recent</h3><a href="#">See all</a></div>
+      <div class="row">
+        <div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6EE7B7" stroke-width="2.2" stroke-linecap="round"><path d="M17 7 7 17M16 17H7V8"/></svg></div>
+        <div class="rmain"><div class="rt">Ravi</div><div class="rm mono">0x12…cd · 10:42</div></div>
+        <div class="ramt in">+$10.00</div>
+      </div>
+      <div class="row">
+        <div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-width="2.2" stroke-linecap="round"><path d="M7 17 17 7M8 7h9v9"/></svg></div>
+        <div class="rmain"><div class="rt">Mom</div><div class="rm mono">0x9a…41 · Yesterday</div></div>
+        <div class="ramt">−$25.00</div>
+      </div>
+      <div class="row">
+        <div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF6FA8" stroke-width="2.2" stroke-linecap="round"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg></div>
+        <div class="rmain"><div class="rt">Shop 0x77…e0</div><div class="rm">Expired · tap to retry</div></div>
+        <div class="ramt fail">$4.50</div>
+      </div>
+      <div class="scrim"></div>
+      <div class="dock">
+        <span class="on"><svg width="26" height="26" viewBox="0 0 24 24" class="accf"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></span>
+        <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+        <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3 Send amount -->
+<div>
+  <div class="cap">QR scanner</div>
+  <div class="phone" style="background:#050504">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:32px">
+      <div style="display:flex; justify-content:space-between; align-items:center; height:64px">
+        <div class="iconbtn" aria-label="Close"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></div>
+        <div style="font-size:20px; font-weight:600">Scan to pay</div>
+        <div class="iconbtn" aria-label="Torch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2h8l-1 6H9zM9 8h6v3l-1 11h-4L9 11z"/></svg></div>
+      </div>
+      <div style="position:relative; width:270px; height:270px; margin:56px auto 0; border-radius:28px; background:radial-gradient(circle at 50% 45%, rgba(245,241,237,0.06), transparent 70%)">
+        <svg width="270" height="270" viewBox="0 0 270 270" fill="none" class="acc" stroke-width="5" stroke-linecap="round" style="position:absolute; inset:0"><path d="M10 60V30a20 20 0 0 1 20-20h30M210 10h30a20 20 0 0 1 20 20v30M260 210v30a20 20 0 0 1-20 20h-30M60 260H30a20 20 0 0 1-20-20v-30"/></svg>
+        <div style="position:absolute; left:24px; right:24px; top:50%; height:2px; background:var(--accent); opacity:.7; box-shadow:0 0 12px var(--accent)"></div>
+      </div>
+      <div class="lede" style="margin-top:28px">Point at an Ender code or any wallet address QR.</div>
+      <div style="margin-top:auto; display:grid; grid-template-columns:1fr 1fr; gap:12px">
+        <div class="btn ghost" style="font-size:17px">Paste address</div>
+        <div class="btn ghost" style="font-size:17px">Enter number</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">Send — amount</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● SMS</span></div>
+    <div class="body" style="padding-bottom:24px">
+      <div class="back"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>Send</div>
+      <div class="to">
+        <div class="avatar" style="width:44px;height:44px;font-size:16px">M</div>
+        <div class="rmain"><div class="rt">Mom</div><div class="rm mono">0x9a3f…7c41</div></div>
+        <div class="pill">Change</div>
+      </div>
+      <div class="amount"><span class="cur">$</span>25</div>
+      <div class="avail">Balance $45.20 <span class="pill" style="height:34px">Max</span></div>
+      <div class="keys">
+        <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>.</span><span>0</span>
+        <span><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5h11v14H9l-6-7z"/><path d="m13 10 4 4M17 10l-4 4"/></svg></span>
+      </div>
+      <div class="btn" style="margin-top:12px">Review</div>
+    </div>
+  </div>
+</div>
+
+<!-- 4 Review / progress -->
+<div>
+  <div class="cap">Review → progress (online)</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● 4G</span></div>
+    <div class="body" style="padding-bottom:24px">
+      <div class="back"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg><span style="flex:1">$25 to Mom</span><span class="note" style="height:32px; font-size:13px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r=".8" fill="currentColor"/></svg>Internet</span></div>
+      <div class="card">
+        <div class="kv"><span class="k">To</span><span class="v mono" style="font-size:16px">0x9a3f…7c41</span></div>
+        <div class="kv"><span class="k">Amount</span><span class="v">$25.00</span></div>
+        <div class="kv"><span class="k">Fee</span><span class="v">$0.03</span></div>
+        <div class="kv"><span class="k">Total</span><span class="v" style="font-size:20px">$25.03</span></div>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="rail"><div class="bullet done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="ink" stroke-width="3.5" stroke-linecap="round"><path d="m5 12 5 5 9-10"/></svg></div><div class="line done"></div></div><div><div class="st">Request sent</div><div class="sm">9:44</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="ink" stroke-width="3.5" stroke-linecap="round"><path d="m5 12 5 5 9-10"/></svg></div><div class="line"></div></div><div><div class="st">Quote received</div><div class="sm">Valid for 4:58</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet now"></div><div class="line"></div></div><div><div class="st">Approve with fingerprint</div><div class="sm">Signs exactly what's above</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet"></div></div><div><div class="st" style="color:var(--fg-3)">Sent</div></div></div>
+      </div>
+      <div style="margin-top:auto; display:grid; gap:12px">
+        <div class="btn">Approve &amp; send</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div>
+  <div class="cap">Review → progress (no internet: by text)</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● SMS</span></div>
+    <div class="body" style="padding-bottom:24px">
+      <div class="back"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg><span style="flex:1">$25 to Mom</span><span class="note" style="height:32px; font-size:13px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v10H8l-4 4z"/></svg>Text</span></div>
+      <div class="card">
+        <div class="kv"><span class="k">To</span><span class="v mono" style="font-size:16px">0x9a3f…7c41</span></div>
+        <div class="kv"><span class="k">Amount</span><span class="v">$25.00</span></div>
+        <div class="kv"><span class="k">Fee</span><span class="v">$0.03</span></div>
+        <div class="kv"><span class="k">Total</span><span class="v" style="font-size:20px">$25.03</span></div>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="rail"><div class="bullet done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="ink" stroke-width="3.5" stroke-linecap="round"><path d="m5 12 5 5 9-10"/></svg></div><div class="line done"></div></div><div><div class="st">Request sent</div><div class="sm">9:44</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet done"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="ink" stroke-width="3.5" stroke-linecap="round"><path d="m5 12 5 5 9-10"/></svg></div><div class="line"></div></div><div><div class="st">Quote received</div><div class="sm">Arrived by text · valid for 4:12</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet now"></div><div class="line"></div></div><div><div class="st">Approve with fingerprint</div><div class="sm">Signs exactly what's above</div></div></div>
+        <div class="step"><div class="rail"><div class="bullet"></div></div><div><div class="st" style="color:var(--fg-3)">Sent</div></div></div>
+      </div>
+      <div style="margin-top:auto; display:grid; gap:12px">
+        <div class="banner"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2" stroke-linecap="round"><path d="M2 20h2M7 20v-4M12 20v-8M17 20V8M22 20V4"/></svg>No internet, sending over SMS.</div>
+        <div class="btn">Approve &amp; send</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 5 Activity -->
+<div>
+  <div class="cap">Activity</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● SMS</span></div>
+    <div class="body">
+      <div class="top"><h2>Activity</h2></div>
+      <div class="day">Today</div>
+      <div class="row"><div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-width="2.2" stroke-linecap="round"><path d="M7 17 17 7M8 7h9v9"/></svg></div><div class="rmain"><div class="rt">Mom</div><div class="rm">Sending · 4:12 left</div></div><div class="ramt">−$25.00</div></div>
+      <div class="row"><div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6EE7B7" stroke-width="2.2" stroke-linecap="round"><path d="M17 7 7 17M16 17H7V8"/></svg></div><div class="rmain"><div class="rt">Ravi</div><div class="rm">Received · 10:42</div></div><div class="ramt in">+$10.00</div></div>
+      <div class="row"><div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF6FA8" stroke-width="2.2" stroke-linecap="round"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg></div><div class="rmain"><div class="rt">0x77…e0</div><div class="rm">Expired · 09:15</div></div><div class="ramt fail">$4.50</div></div>
+      <div class="day">Yesterday</div>
+      <div class="row"><div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-width="2.2" stroke-linecap="round"><path d="M7 17 17 7M8 7h9v9"/></svg></div><div class="rmain"><div class="rt">Mom</div><div class="rm">Sent · 18:20</div></div><div class="ramt">−$25.00</div></div>
+      <div class="row"><div class="ricon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6EE7B7" stroke-width="2.2" stroke-linecap="round"><path d="M17 7 7 17M16 17H7V8"/></svg></div><div class="rmain"><div class="rt">Asha</div><div class="rm">Received · 12:03</div></div><div class="ramt in">+$60.00</div></div>
+      <div class="scrim"></div>
+      <div class="dock">
+        <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-opacity=".7" stroke-width="2" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></span>
+        <span class="on"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+        <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 6 Receive -->
+<div>
+  <div class="cap">Receive</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● SMS</span></div>
+    <div class="body" style="padding-bottom:32px">
+      <div class="back"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#FBFAF9" stroke-width="2.2" stroke-linecap="round"><path d="m15 5-7 7 7 7"/></svg>Receive</div>
+      <div class="qr"><div></div></div>
+      <div style="text-align:center; font-size:18px; color:var(--fg-2)">Your AUSD address on Monad</div>
+      <div class="field mono" style="margin-top:16px; font-size:16px; justify-content:center">0x4b2e…91fa</div>
+      <div class="banner" style="margin-top:20px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2" stroke-linecap="round"><path d="M4 6h16v10H8l-4 4z"/></svg>We'll text you when money arrives.</div>
+      <div style="margin-top:auto; display:grid; grid-template-columns:1fr 1fr; gap:12px">
+        <div class="btn ghost">Copy</div>
+        <div class="btn">Share</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- 7 Settings -->
+<div>
+  <div class="cap">Settings (Test mode on)</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>●●● SMS</span></div>
+    <div class="body">
+      <div class="top"><h2>Settings</h2><div class="chip test"><span class="dot"></span>Test mode</div></div>
+      <div class="glabel">Account</div>
+      <div class="group">
+        <div class="set"><div class="rmain"><div class="rt">Phone number</div><div class="rm">+91 98••• ••210</div></div></div>
+        <div class="set"><div class="rmain"><div class="rt">Text me when I get paid</div></div><div class="toggle"></div></div>
+      </div>
+      <div class="glabel">Network</div>
+      <div class="group">
+        <div class="set"><div class="rmain"><div class="rt">Test mode</div><div class="rm">Monad testnet. Test money only.</div></div><div class="toggle"></div></div>
+        <div class="set"><div class="rmain"><div class="rt">Gateway</div><div class="rm">Auto · India</div></div><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-opacity=".5" stroke-width="2" stroke-linecap="round"><path d="m9 5 7 7-7 7"/></svg></div>
+        <div class="set"><div class="rmain"><div class="rt">Sync now</div><div class="rm">Last synced 2 min ago</div></div></div>
+      </div>
+      <div style="text-align:center; color:var(--fg-3); font-size:14px; margin-top:24px">Built on Monad · v0.1</div>
+      <div class="scrim"></div>
+      <div class="dock">
+        <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-opacity=".7" stroke-width="2" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></span>
+        <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F5F1ED" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+        <span class="on"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" class="acc" stroke-width="2.4" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>
