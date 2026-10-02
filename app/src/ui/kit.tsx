@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -112,6 +113,9 @@ export const BackHeader = ({ title, right }: { title?: string; right?: ReactNode
   </View>
 );
 
+/** Web preview only: drop the browser's focus outline (the field has its own border). */
+const webInput = Platform.OS === 'web' ? ({ outlineStyle: 'none', minWidth: '0px', width: '0px' } as unknown as TextStyle) : undefined;
+
 export const Field = (props: TextInputProps & { left?: ReactNode; right?: ReactNode; big?: boolean }) => {
   const { left, right, big, style, ...rest } = props;
   return (
@@ -122,7 +126,7 @@ export const Field = (props: TextInputProps & { left?: ReactNode; right?: ReactN
         selectionColor={c.accent}
         cursorColor={c.accent}
         {...rest}
-        style={[{ flex: 1, color: c.fg, fontFamily: f.uiMedium, fontSize: big ? 22 : 18, height: '100%' }, style]}
+        style={[{ flex: 1, minWidth: 0, color: c.fg, fontFamily: f.uiMedium, fontSize: big ? 22 : 18, height: '100%' }, webInput, style]}
       />
       {right}
     </View>

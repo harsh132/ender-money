@@ -13,16 +13,26 @@ import {
   type PasskeyCredentialMetadata,
   type Secp256k1SigningSession,
 } from '@category-labs/mera';
-import { reactNativeWebAuthnClient } from '@category-labs/mera/react-native-webauthn-client';
 import { toViemAccount } from '@category-labs/mera/viem';
 import { HDKey } from '@scure/bip32';
 import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import type { Address, LocalAccount } from 'viem';
 import { QUICK_SEND, RP_ID } from './config';
 
 const ETH_PATH = "m/44'/60'/0'/0/0";
+
+/**
+ * The native passkey binding on the phone. The web preview uses Mera's browser
+ * client instead (and only works on ender.money itself, the passkeys' RP ID);
+ * the native module is required lazily so the web bundle never evaluates it.
+ */
+const webAuthnClient =
+  Platform.OS === 'web'
+    ? undefined
+    : // eslint-disable-next-line @typescript-eslint/no-require-imports
+      (require('@category-labs/mera/react-native-webauthn-client') as typeof import('@category-labs/mera/react-native-webauthn-client')).reactNativeWebAuthnClient;
 
 const sessionFromPrf = (prfOutput: Uint8Array): Secp256k1SigningSession => {
   const seed = mnemonicToSeedSync(entropyToMnemonic(prfOutput, wordlist));
@@ -56,14 +66,14 @@ export const createWalletKey = async (): Promise<Unlocked> => {
   const created = await createPasskeyWithPrfOutput({
     rp: { id: RP_ID, name: 'Ender' },
     user: { name: 'Ender', displayName: 'Ender' },
-    webAuthnClient: reactNativeWebAuthnClient,
+    webAuthnClient,
   });
   return unlocked({ credentialId: created.credentialId, transports: created.transports }, sessionFromPrf(created.prfOutput));
 };
 
 /** One passkey prompt. Without `credential` the system picker lists every Ender passkey. */
 export const unlockWallet = async (credential?: PasskeyCredentialMetadata): Promise<Unlocked> => {
-  const got = await getPasskeyPrfOutput({ rpId: RP_ID, credential, webAuthnClient: reactNativeWebAuthnClient });
+  const got = await getPasskeyPrfOutput({ rpId: RP_ID, credential, webAuthnClient });
   return unlocked({ credentialId: got.credentialId, transports: credential?.transports }, sessionFromPrf(got.prfOutput));
 };
 

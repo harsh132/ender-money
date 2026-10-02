@@ -6,6 +6,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { useSyncExternalStore } from 'react';
+import { Platform } from 'react-native';
 import type { Address } from 'viem';
 import type { NetworkName } from '../../../protocol/networks';
 import { DEFAULT_INR_PER_USD, DEFAULT_NETWORK } from './config';
@@ -70,6 +71,12 @@ const initial: State = {
 const STATE_KEY = 'ender:state:v1';
 const TOKEN_KEY = 'ender.token';
 
+/** SecureStore on the phone; the web preview has none, so it falls back to plain storage there. */
+const tokenStore =
+  Platform.OS === 'web'
+    ? { get: () => AsyncStorage.getItem(TOKEN_KEY), set: (t: string) => AsyncStorage.setItem(TOKEN_KEY, t), del: () => AsyncStorage.removeItem(TOKEN_KEY) }
+    : { get: () => SecureStore.getItemAsync(TOKEN_KEY), set: (t: string) => SecureStore.setItemAsync(TOKEN_KEY, t), del: () => SecureStore.deleteItemAsync(TOKEN_KEY) };
+
 let state = initial;
 const listeners = new Set<() => void>();
 
@@ -83,7 +90,7 @@ export const setState = (patch: Partial<State> | ((s: State) => Partial<State>))
   if (!state.hydrated) return;
   const { hydrated: _h, token, ...persisted } = state;
   void AsyncStorage.setItem(STATE_KEY, JSON.stringify(persisted));
-  if (tokenChanged) void (token ? SecureStore.setItemAsync(TOKEN_KEY, token) : SecureStore.deleteItemAsync(TOKEN_KEY));
+  if (tokenChanged) void (token ? tokenStore.set(token) : tokenStore.del());
 };
 
 export const useStore = <T,>(select: (s: State) => T): T =>
@@ -97,7 +104,7 @@ export const useStore = <T,>(select: (s: State) => T): T =>
 
 export const hydrate = async () => {
   try {
-    const [raw, token] = await Promise.all([AsyncStorage.getItem(STATE_KEY), SecureStore.getItemAsync(TOKEN_KEY)]);
+    const [raw, token] = await Promise.all([AsyncStorage.getItem(STATE_KEY), tokenStore.get()]);
     let saved = raw ? (JSON.parse(raw) as Partial<State>) : {};
     let seededToken: string | undefined;
     // Dev builds only (dropped from release bundles): start logged in as a test wallet, for emulators
@@ -116,7 +123,7 @@ export const hydrate = async () => {
 
 /** Fresh device semantics: forget everything local. The wallet comes back from the passkey. */
 export const signOut = async () => {
-  await Promise.all([AsyncStorage.removeItem(STATE_KEY), SecureStore.deleteItemAsync(TOKEN_KEY)]);
+  await Promise.all([AsyncStorage.removeItem(STATE_KEY), tokenStore.del()]);
   state = { ...initial, hydrated: true };
   listeners.forEach((l) => l());
 };

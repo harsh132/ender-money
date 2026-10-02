@@ -11,8 +11,19 @@ import { handleInbound } from './sms';
 export { Relay } from './relay';
 export { Sponsor } from './sponsor';
 
+/**
+ * Any origin may call the API: auth is a bearer token, never a cookie, so a
+ * page elsewhere gains nothing a script couldn't. Lets the app's web preview work.
+ */
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'authorization, content-type',
+  'access-control-allow-methods': 'GET, POST, OPTIONS',
+  'access-control-max-age': '86400',
+};
+
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...CORS } });
 
 const body = async <T>(request: Request): Promise<T> => {
   try {
@@ -53,6 +64,7 @@ const ASSET_LINKS = [
 const route = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
   if (url.pathname === '/.well-known/assetlinks.json') return json(ASSET_LINKS);
 
