@@ -6,6 +6,7 @@ import {
   formatCommand,
   formatOtp,
   formatReply,
+  normalizePhone,
   parseCommand,
   parseReply,
   septets,
@@ -76,4 +77,11 @@ test('non-GSM characters are refused, extended ones cost two', () => {
   expect(septets('₹10')).toBeNull();
   expect(septets('{}')).toBe(4);
   expect(() => formatAlert('1', '0x12…cd', '1')).toThrow();
+});
+
+test('sender numbers normalise to E.164; non-personal senders are refused', () => {
+  for (const raw of ['+919876543210', '9876543210', '09876543210', '919876543210', '0091 98765-43210', '+91 98765 43210'])
+    expect(normalizePhone(raw)).toBe('+919876543210');
+  expect(normalizePhone('+14155550123')).toBe('+14155550123');
+  for (const raw of ['VM-AIRTEL', '56767', 'AD-HDFCBK', '+123']) expect(normalizePhone(raw)).toBeNull();
 });

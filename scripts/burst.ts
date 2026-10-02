@@ -10,7 +10,7 @@
 import { createPublicClient, createWalletClient, encodeFunctionData, http, parseUnits, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { caliburAbi, encodeExecute, erc20Abi, signedBatchTypedData, transferWithFee } from '../protocol/calibur';
-import { AUSD_DECIMALS, CALIBUR, NETWORKS } from '../protocol/networks';
+import { AUSD_DECIMALS, CALIBUR, FEE_RECIPIENT, NETWORKS } from '../protocol/networks';
 
 const args = process.argv.slice(2);
 const gi = args.indexOf('--gateway');
@@ -67,9 +67,9 @@ const tokens = await Promise.all(users.map((u) => post<{ token: string }>('/dev/
 const started = Date.now();
 const sent = await Promise.all(
   users.map(async (u, i) => {
-    type Quote = { id: string; fee: string; feeRecipient: Address; nonce: string; deadline: number };
+    type Quote = { id: string; fee: string; nonce: string; deadline: number };
     const q = await post<Quote>('/tx/quote', { network: 'testnet', to: recipient, amount: '0.01' }, tokens[i]!.token);
-    const calls = transferWithFee(net.ausd, recipient, parseUnits('0.01', AUSD_DECIMALS), q.feeRecipient, parseUnits(q.fee, AUSD_DECIMALS));
+    const calls = transferWithFee(net.ausd, recipient, parseUnits('0.01', AUSD_DECIMALS), FEE_RECIPIENT, parseUnits(q.fee, AUSD_DECIMALS));
     const signature = await u.account.signTypedData(signedBatchTypedData(u.account.address, net.chain.id, calls, BigInt(q.nonce), BigInt(q.deadline)));
     return post<{ txHash: Hex }>('/tx/sign', { id: q.id, signature }, tokens[i]!.token);
   }),

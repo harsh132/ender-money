@@ -9,7 +9,9 @@
     "gateway:dev": "wrangler dev -c gateway/wrangler.jsonc",
     "gateway:migrate:local": "wrangler d1 migrations apply ender-money --local -c gateway/wrangler.jsonc",
     "play": "bun --env-file=.env scripts/play.ts",
-    "burst": "bun --env-file=.env scripts/burst.ts"
+    "burst": "bun --env-file=.env scripts/burst.ts",
+    "fake-relay": "bun scripts/fake-relay.ts",
+    "relay:build": "cd relay && gradlew.bat assembleDebug"
   },
   "dependencies": {
     "viem": "^2.57.2"

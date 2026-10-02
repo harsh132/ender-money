@@ -6,7 +6,7 @@
 import { formatUnits, isAddress, parseUnits, recoverTypedDataAddress, type Address, type Hex, type SignedAuthorization } from 'viem';
 import { recoverAuthorizationAddress } from 'viem/utils';
 import { caliburAbi, encodeExecute, erc20Abi, isDelegatedToCalibur, signedBatchTypedData, transferWithFee, type Call } from '../../protocol/calibur';
-import { AUSD_DECIMALS, CALIBUR, MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
+import { AUSD_DECIMALS, CALIBUR, FEE_RECIPIENT, MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
 import { isPhone, SESSION_ID_ALPHABET, type Deliver } from '../../protocol/sms';
 import { publicClient } from './chain';
 import { inrPerUsd } from './fx';
@@ -49,8 +49,6 @@ export type Quote = {
   to: Address;
   amount: string;
   fee: string;
-  /** Treasury the fee goes to; the app needs it to rebuild the calls it signs. */
-  feeRecipient: Address;
   nonce: string;
   deadline: number;
   calls: Array<{ to: Address; value: string; data: Hex }>;
@@ -70,7 +68,7 @@ const useNetwork = async (env: Env, link: Link, network: NetworkName | undefined
 };
 
 const callsFor = (env: Env, s: Pick<SessionRow, 'network' | 'to_address' | 'amount' | 'fee'>): Call[] =>
-  transferWithFee(NETWORKS[s.network].ausd, s.to_address, BigInt(s.amount), env.FEE_RECIPIENT as Address, BigInt(s.fee));
+  transferWithFee(NETWORKS[s.network].ausd, s.to_address, BigInt(s.amount), FEE_RECIPIENT, BigInt(s.fee));
 
 const toQuote = (env: Env, s: SessionRow): Quote => ({
   id: s.id,
@@ -79,7 +77,6 @@ const toQuote = (env: Env, s: SessionRow): Quote => ({
   to: s.to_address,
   amount: formatUnits(BigInt(s.amount), AUSD_DECIMALS),
   fee: formatUnits(BigInt(s.fee), AUSD_DECIMALS),
-  feeRecipient: env.FEE_RECIPIENT as Address,
   nonce: s.nonce,
   deadline: s.deadline,
   calls: callsFor(env, s).map((c) => ({ to: c.to, value: c.value.toString(), data: c.data })),
@@ -202,7 +199,7 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
 
 // ---------------------------------------------------------------- sign
 
-export type SignResult = { id: string; txHash: Hex; pending?: true };
+export type SignResult = { id: string; txHash: Hex; amount: string; to: Address; pending?: true };
 
 export const sign = async (env: Env, phone: string, id: string, signature: Hex): Promise<SignResult> => {
   // Claim the session in one statement: of two racing signs, only one gets a row back.
@@ -214,11 +211,14 @@ export const sign = async (env: Env, phone: string, id: string, signature: Hex):
     .first<SessionRow>();
 
   if (!session) {
-    const existing = await env.DB.prepare('SELECT state, tx_hash, expires_at FROM sessions WHERE id = ? AND phone = ?')
+    const existing = await env.DB.prepare('SELECT state, tx_hash, amount, to_address, expires_at FROM sessions WHERE id = ? AND phone = ?')
       .bind(id, phone)
-      .first<Pick<SessionRow, 'state' | 'tx_hash' | 'expires_at'>>();
+      .first<Pick<SessionRow, 'state' | 'tx_hash' | 'amount' | 'to_address' | 'expires_at'>>();
     if (!existing) throw new GatewayError('unknown-session', 404);
-    if (existing.tx_hash) return { id, txHash: existing.tx_hash, ...(existing.state === 'sending' ? { pending: true as const } : {}) };
+    if (existing.tx_hash) {
+      const amount = formatUnits(BigInt(existing.amount), AUSD_DECIMALS);
+      return { id, txHash: existing.tx_hash, amount, to: existing.to_address, ...(existing.state === 'sending' ? { pending: true as const } : {}) };
+    }
     if (existing.state === 'sending') throw new GatewayError('in-progress', 409);
     throw new GatewayError('expired', 410);
   }
@@ -253,12 +253,12 @@ export const sign = async (env: Env, phone: string, id: string, signature: Hex):
 
   if (result.ok) {
     await env.DB.prepare(`UPDATE sessions SET state = 'sent', tx_hash = ? WHERE id = ?`).bind(result.txHash, id).run();
-    return { id, txHash: result.txHash };
+    return { id, txHash: result.txHash, amount: formatUnits(BigInt(session.amount), AUSD_DECIMALS), to: session.to_address };
   }
   if (result.error === 'timeout') {
     // Sent but unconfirmed: keep it claimed so nobody sends it twice; a retry reports the hash.
     await env.DB.prepare('UPDATE sessions SET tx_hash = ? WHERE id = ?').bind(result.txHash ?? null, id).run();
-    return { id, txHash: result.txHash!, pending: true };
+    return { id, txHash: result.txHash!, amount: formatUnits(BigInt(session.amount), AUSD_DECIMALS), to: session.to_address, pending: true };
   }
   throw await reopen(result.error, result.error === 'send-failed' ? 503 : 400);
 };

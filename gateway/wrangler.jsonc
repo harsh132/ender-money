@@ -7,9 +7,7 @@
   "observability": { "enabled": true },
 
   "vars": {
-    "FEE_AUSD": "0.001",
-    // Treasury that collects fees; defaults to the gateway key until a separate one exists.
-    "FEE_RECIPIENT": "0x458E8F51EC2B833209b5C71372376eeb1e40af08"
+    "FEE_AUSD": "0.001"
   },
 
   "d1_databases": [
@@ -17,7 +15,13 @@
   ],
 
   "durable_objects": {
-    "bindings": [{ "name": "SPONSOR", "class_name": "Sponsor" }]
+    "bindings": [
+      { "name": "SPONSOR", "class_name": "Sponsor" },
+      { "name": "RELAY", "class_name": "Relay" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sponsor"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Sponsor"] },
+    { "tag": "v2", "new_sqlite_classes": ["Relay"] }
+  ]
 }

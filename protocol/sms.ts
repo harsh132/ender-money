@@ -54,6 +54,23 @@ const oneSegment = (text: string) => {
 };
 
 export const isPhone = (s: string) => /^\+[1-9]\d{7,14}$/.test(s);
+
+/**
+ * A sender number as a carrier or the relay phone reports it, in E.164, or null
+ * for anything that isn't a personal number (alphanumeric senders like
+ * "VM-AIRTEL", short codes). Bare national numbers get the default country.
+ */
+export const normalizePhone = (raw: string, defaultCountry = '91'): string | null => {
+  const s = raw.replace(/[\s\-()]/g, '');
+  let e164: string;
+  if (s.startsWith('+')) e164 = s;
+  else if (s.startsWith('00')) e164 = `+${s.slice(2)}`;
+  else if (/^0\d{10}$/.test(s)) e164 = `+${defaultCountry}${s.slice(1)}`;
+  else if (/^\d{10}$/.test(s)) e164 = `+${defaultCountry}${s}`;
+  else if (s.startsWith(defaultCountry) && s.length === defaultCountry.length + 10) e164 = `+${s}`;
+  else return null;
+  return isPhone(e164) ? e164 : null;
+};
 /** Session ids: 4 chars, Crockford-ish base32 without look-alikes (no 0/1/I/L/O/U). */
 export const SESSION_ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
 const isSessionId = (s: string) => /^[23456789ABCDEFGHJKMNPQRSTVWXYZ]{4}$/.test(s);

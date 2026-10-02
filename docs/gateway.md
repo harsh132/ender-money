@@ -91,6 +91,8 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 | `GET /account?network=` | balance, Calibur nonce (`getSeq(0)`), delegated yes/no, and the INR rate for the `≈ ₹` line (Frankfurter / ECB daily rate, cached an hour; omitted if unavailable) |
 | `POST /tx/quote {network, to, amount, deliver?}` | `to` is an address or phone number. Returns `{id, to, amount, fee, out?, nonce, deadline, calls}`; the app rebuilds and checks `calls` before signing |
 | `POST /tx/sign {id, signature}` | runs the checks below, sends, returns `{txHash}` |
+| `GET /tx/:id` | the session's `network` (stored with it, so no parameter is needed), status (`open`, `sending`, `sent`, `failed`), tx hash and error. The app polls it while a transfer shows "Sending" (only needed when `/tx/sign` came back `pending`) |
+| `GET /activity?network=` | `network` defaults to the number's current one, as for `/account`. The number's recent incoming and outgoing AUSD transfers, read from `Transfer` logs to and from its address, so an online recipient sees money arrive without an SMS |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
 | `POST /webhooks/twilio` | inbound SMS; checks `X-Twilio-Signature` |
 | `POST /webhooks/alchemy` | address activity; checks `X-Alchemy-Signature` (port from `ender-backend`) |
@@ -98,9 +100,13 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 ## SMS commands
 
 Parsed and formatted by `protocol/sms.ts`, shared with the app. Identity is
-the sender's number as the carrier delivered it. A number with no `links`
-row gets `ERR not-registered` to every command, since signing up needs the
-app online.
+the sender's number as the carrier delivered it, normalised to E.164
+(bare Indian numbers get +91). The relay SIM also receives carrier promos,
+bank alerts and stray texts, so silence is the default: alphanumeric
+senders and short codes get nothing, an unparseable text gets nothing
+unless the number is on Ender (then `ERR bad-command`), and a well-formed
+command from a number that isn't on Ender gets `ERR not-registered`, since
+signing up needs the app online.
 
 | In | Out |
 | --- | --- |
@@ -121,8 +127,10 @@ OTP text: `Ender code: 481926. Don't share it.` plus the Retriever hash.
 
 1. Resolve the recipient: an address as given, or a phone number through
    `links` (`not-on-ender` if absent).
-2. Fee: flat 0.001 AUSD for now, from a `FEE_AUSD` var, paid to `FEE_RECIPIENT` (a
-   treasury address, not whichever sponsor key sends the transaction).
+2. Fee: flat 0.001 AUSD for now, from a `FEE_AUSD` var, paid to
+   `FEE_RECIPIENT`, a treasury address in `protocol/networks.ts` (shared, not
+   quoted: the SMS quote has no room for it and the app needs it to rebuild
+   the calls it signs).
 3. Read the Calibur nonce and balance in one batched RPC call; refuse if
    balance < amount + fee.
 4. Build the batch with `protocol/calibur.ts`: transfer + fee, or for CTK
@@ -224,7 +232,8 @@ transport it arrived on.
 
 | Direction | Message |
 | --- | --- |
-| relay → gateway | `{type: "inbound", from, body, receivedAt}` |
+| relay → gateway | `{type: "inbound", id, from, body, receivedAt}`; the relay keeps it until acked and resends unacked ones on reconnect |
+| gateway → relay | `{type: "ack", id}` once the reply (if any) is queued |
 | gateway → relay | `{type: "send", id, to, body}` |
 | relay → gateway | `{type: "sent", id, ok, error?}` and later `{type: "delivered", id}` |
 | both | `ping` / `pong` every 30 s |
@@ -281,11 +290,12 @@ number.
    `scripts/play.ts` over HTTPS against testnet.
 2. **4 Oct** — SMS ingress: `Relay` DO and `/relay`, dedup, `/dev/sms`;
    the Android relay app (~200 lines of Kotlin); play the SMS path.
-3. **5 Oct** — `/auth/*` with OTP through the relay, `/wallet/create` with
+3. **5 Oct** — `/auth/*` with OTP through the relay, `GET /tx/:id` and the
+   cron that finalises stuck sessions, `/wallet/create` with
    delegation on both networks, D1 `links`; deploy; first transfer from a fresh demo
    wallet over HTTPS and over SMS.
 4. **9 Oct** — Twilio transport, Alchemy webhook and testnet log polling,
-   alerts.
+   alerts, `GET /activity`.
 
 ## Not in the gateway
 

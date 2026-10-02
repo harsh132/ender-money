@@ -4,7 +4,9 @@ import { isNetwork } from './chain';
 import { account, delegate, GatewayError, quote, sign } from './core';
 import type { Env } from './env';
 import { signJwt, verifyJwt } from './jwt';
+import { handleInbound } from './sms';
 
+export { Relay } from './relay';
 export { Sponsor } from './sponsor';
 
 const TOKEN_TTL_SECONDS = 30 * 24 * 3600;
@@ -25,6 +27,12 @@ const phoneFrom = async (env: Env, request: Request) => {
   const claims = token ? await verifyJwt(env.JWT_SECRET, token) : null;
   if (!claims) throw new GatewayError('unauthorized', 401);
   return claims.phone;
+};
+
+/** Constant-time comparison, so the relay token can't be guessed byte by byte. */
+const sameSecret = (a: string, b: string) => {
+  const [x, y] = [new TextEncoder().encode(a), new TextEncoder().encode(b)];
+  return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
 };
 
 const route = async (request: Request, env: Env): Promise<Response> => {
@@ -55,6 +63,22 @@ const route = async (request: Request, env: Env): Promise<Response> => {
       const req = await body<{ id?: string; signature?: string }>(request);
       if (typeof req.id !== 'string' || !isHex(req.signature) || req.signature.length !== 132) throw new GatewayError('bad-request');
       return json(await sign(env, phone, req.id.toUpperCase(), req.signature as Hex));
+    }
+
+    // The Android relay phone's WebSocket.
+    case 'GET /relay': {
+      if (request.headers.get('upgrade') !== 'websocket') throw new GatewayError('upgrade-required', 426);
+      const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
+      if (!env.RELAY_TOKEN || !sameSecret(token, env.RELAY_TOKEN)) throw new GatewayError('unauthorized', 401);
+      return env.RELAY.get(env.RELAY.idFromName('relay')).fetch(request);
+    }
+
+    // Dev only: inject an inbound text as if the relay delivered it; returns the reply instead of sending it.
+    case 'POST /dev/sms': {
+      if (env.DEV !== '1') break;
+      const req = await body<{ from?: string; body?: string }>(request);
+      if (typeof req.from !== 'string' || typeof req.body !== 'string') throw new GatewayError('bad-request');
+      return json({ reply: await handleInbound(env, { from: req.from, body: req.body }) });
     }
 
     // Dev only: link a phone to an address without OTP and hand back a token. Replaced by /auth/* on 5 Oct.

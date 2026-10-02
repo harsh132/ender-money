@@ -1,3 +1,4 @@
+import type { Relay } from './relay';
 import type { Sponsor } from './sponsor';
 
 export type Env = {
@@ -6,7 +7,10 @@ export type Env = {
   GATEWAY_PRIVATE_KEY: string;
   JWT_SECRET: string;
   FEE_AUSD: string;
-  FEE_RECIPIENT: string;
+  RELAY_TOKEN: string;
+  /** Android SMS Retriever hash appended to replies; unset until the app is signed. */
+  SMS_RETRIEVER_HASH?: string;
+  RELAY: DurableObjectNamespace<Relay>;
   RPC_MAINNET?: string;
   RPC_TESTNET?: string;
   /** "1" enables the /dev/* routes. Only ever set in .dev.vars. */

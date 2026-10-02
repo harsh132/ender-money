@@ -4,14 +4,18 @@
  *
  *   link (dev only) -> account -> quote -> check the calls -> sign -> account
  *
- *   bun run play [testnet|mainnet] [amount] [--gateway http://localhost:8787]
+ *   bun run play [testnet|mainnet] [amount] [--sms] [--gateway http://localhost:8787]
+ *
+ * --sms speaks the text protocol instead (SYNC / SEND / SIG) through the dev-only
+ * /dev/sms route: the exact messages the relay phone would carry.
  *
  * The recipient is the gateway address, so the AUSD stays in our wallets.
  */
 import { formatUnits, parseUnits, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { signedBatchTypedData, transferWithFee } from '../protocol/calibur';
-import { AUSD_DECIMALS, NETWORKS, type NetworkName } from '../protocol/networks';
+import { AUSD_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../protocol/networks';
+import { formatCommand, parseReply } from '../protocol/sms';
 
 const args = process.argv.slice(2);
 const flag = (name: string) => {
@@ -19,6 +23,7 @@ const flag = (name: string) => {
   return i >= 0 ? args.splice(i, 2)[1] : undefined;
 };
 const base = flag('--gateway') ?? 'http://localhost:8787';
+const viaSms = args.includes('--sms') && !!args.splice(args.indexOf('--sms'), 1);
 const network = (args[0] ?? 'testnet') as NetworkName;
 const amount = args[1] ?? '0.10';
 if (!(network in NETWORKS)) throw new Error('usage: play [testnet|mainnet] [amount] [--gateway url]');
@@ -41,9 +46,33 @@ const call = async <T>(method: string, path: string, token?: string, payload?: u
 };
 
 type Account = { address: Address; balance: string; nonce: string; delegated: boolean };
-type Quote = { id: string; to: Address; amount: string; fee: string; feeRecipient: Address; nonce: string; deadline: number; calls: Array<{ to: Address; value: string; data: Hex }> };
+type Quote = { id: string; to: Address; amount: string; fee: string; nonce: string; deadline: number; calls: Array<{ to: Address; value: string; data: Hex }> };
 
 const { token } = await call<{ token: string }>('POST', '/dev/link', undefined, { phone: PHONE, address: user.address, network });
+
+if (viaSms) {
+  // One text in, one text out, exactly as the app and the relay would exchange them.
+  const text = async (body: string) => {
+    const started = Date.now();
+    const res = await fetch(`${base}/dev/sms`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: PHONE, body }) });
+    const { reply } = (await res.json()) as { reply: { body: string } | null };
+    console.log(`> ${body.length > 60 ? `${body.slice(0, 60)}...` : body}  (${body.length} chars)`);
+    console.log(`< ${reply?.body ?? '(no reply)'}  (${reply?.body.length ?? 0} chars, ${Date.now() - started}ms)`);
+    const parsed = reply ? parseReply(reply.body) : null;
+    if (!parsed || parsed.kind === 'error') throw new Error(`gateway said: ${reply?.body}`);
+    return parsed;
+  };
+  const ok = await text(formatCommand({ kind: 'sync', network }));
+  const q = await text(formatCommand({ kind: 'send', to: recipient.toLowerCase(), amount, deliver: 'AUSD' }));
+  if (ok.kind !== 'ok' || q.kind !== 'quote') throw new Error('unexpected reply');
+  if (q.to.toLowerCase() !== recipient.toLowerCase()) throw new Error('quote resolved a different recipient');
+  const calls = transferWithFee(NETWORKS[network].ausd, recipient, parseUnits(amount, AUSD_DECIMALS), FEE_RECIPIENT, parseUnits(q.fee, AUSD_DECIMALS));
+  const signature = await user.signTypedData(signedBatchTypedData(user.address, NETWORKS[network].chain.id, calls, q.nonce, BigInt(q.expires)));
+  await text(formatCommand({ kind: 'sig', id: q.id, signature }));
+  const after = await text(formatCommand({ kind: 'sync', network }));
+  if (after.kind === 'ok') console.log(`  balance ${ok.balance} -> ${after.balance} AUSD`);
+  process.exit(0);
+}
 const before = await call<Account>('GET', `/account?network=${network}`, token);
 console.log(`         ${before.address} ${before.balance} AUSD, nonce ${before.nonce}, delegated ${before.delegated}`);
 
@@ -52,7 +81,7 @@ console.log(`         quote ${q.id}: ${q.amount} AUSD + ${q.fee} fee, nonce ${q.
 
 // The app never signs calls it didn't build itself: rebuild them from the readable fields and compare.
 const fee = parseUnits(q.fee, AUSD_DECIMALS);
-const expected = transferWithFee(NETWORKS[network].ausd, recipient, parseUnits(amount, AUSD_DECIMALS), q.feeRecipient, fee);
+const expected = transferWithFee(NETWORKS[network].ausd, recipient, parseUnits(amount, AUSD_DECIMALS), FEE_RECIPIENT, fee);
 const same = JSON.stringify(expected.map((c) => [c.to.toLowerCase(), c.value.toString(), c.data])) === JSON.stringify(q.calls.map((c) => [c.to.toLowerCase(), c.value, c.data]));
 if (!same || q.to.toLowerCase() !== recipient.toLowerCase()) throw new Error('quoted calls differ from what the app would build');
 console.log('         calls match the readable fields');

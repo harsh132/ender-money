@@ -20,6 +20,13 @@ export const CALIBUR: Address = '0x000000005c84F8Fd50b21CAC312528A64437030e';
 /** Multicall3, standard address, deployed on both networks. */
 export const MULTICALL3: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
 
+/**
+ * Treasury that collects the flat fee. Shared, not quoted: the SMS quote has no
+ * room for it, and the app needs it to rebuild the calls it signs. For now it
+ * is the gateway key's address.
+ */
+export const FEE_RECIPIENT: Address = '0x458E8F51EC2B833209b5C71372376eeb1e40af08';
+
 /** AUSD has 6 decimals on both networks. */
 export const AUSD_DECIMALS = 6;
 
