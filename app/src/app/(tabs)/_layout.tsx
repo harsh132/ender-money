@@ -23,7 +23,7 @@ const Dock = ({ target }: { target: RefObject<View | null> }) => {
   return (
     <View pointerEvents="box-none" style={[st.wrap, { bottom: Math.max(insets.bottom, 12) + 12 }]}>
       <View style={st.shadow}>
-        <BlurView blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" intensity={40} tint="dark" style={st.dock}>
+        <BlurView blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" intensity={70} tint="dark" style={st.dock}>
           {TABS.map(({ name, label, Icon }) => {
             const on = path === `/${name}`;
             return (
@@ -72,7 +72,7 @@ const st = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
     // A warm tint over the blur keeps icons legible over bright rows.
-    backgroundColor: 'rgba(36,35,31,0.55)',
+    backgroundColor: 'rgba(24,23,20,0.72)',
     borderWidth: 1,
     borderColor: c.line,
   },
