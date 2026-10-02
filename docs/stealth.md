@@ -80,7 +80,9 @@ with separate balances, like the main wallet.
 
 A stealth address is a plain EOA. Like the main wallet, it needs an EIP-7702
 delegation to Calibur before the gateway can sponsor a transfer from it. That
-costs about 0.02 MON (about $0.0007) per address, once.
+costs about 0.02 MON (about $0.0007) per address, once, and only for addresses
+that hold a balance: a pair address is created on the first quote, and a payer
+who never pays leaves it empty, so it is never delegated.
 
 **Source selection (gateway, in the quote).** For a payment of X: use the
 fewest sources that cover X plus the fee, largest balance first, preferring
@@ -94,9 +96,10 @@ the list. The gateway's Sponsor already puts delegations and calls in the same
 transaction, so a first spend from a new address is still one transaction.
 
 **Delegate on the next online approval.** Whenever the user approves anything
-online, the app also signs authorizations for every received-but-undelegated
-stealth address, in the same session, and the gateway delegates them in the
-next batch. No extra prompt, and addresses become spendable by text.
+online, the app also signs authorizations for every stealth address that has a
+balance and is not yet delegated, in the same session, and the gateway
+delegates them in the next batch. Empty addresses are skipped. No extra
+prompt, and funded addresses become spendable by text.
 
 **Offline (SMS).** One `SIG` per source, each one segment as today. The quote
 reply gains a compact source list, e.g. `src=0:3:12.5,2:0:12.5` (index into
@@ -144,6 +147,7 @@ write-up.
 - Fluidkey key model: viewing node on the gateway, spending key on the phone.
 - Keys from a root-key signature inside the approval session (no extra prompt).
 - No delegation over SMS; offline spends use delegated sources only.
+- Delegate a stealth address only once it holds a balance.
 - No lookup rate limits for now (stealth addresses remove the harm they
   addressed).
 
