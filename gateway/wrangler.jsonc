@@ -10,6 +10,10 @@
     "FEE_AUSD": "0.001"
   },
 
+  "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } }],
+
+  "triggers": { "crons": ["* * * * *"] },
+
   "d1_databases": [
     { "binding": "DB", "database_name": "ender-money", "database_id": "local-only", "migrations_dir": "migrations" }
   ],

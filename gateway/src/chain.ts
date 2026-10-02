@@ -1,4 +1,4 @@
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, http, parseAbi, parseEventLogs, type Address, type TransactionReceipt } from 'viem';
 import { NETWORKS, type NetworkName } from '../../protocol/networks';
 import type { Env } from './env';
 
@@ -18,3 +18,17 @@ export const publicClient = (env: Env, network: NetworkName) =>
     chain: NETWORKS[network].chain,
     transport: http(rpcUrl(env, network), { timeout: 15_000 }),
   });
+
+const transferEvent = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)']);
+
+/**
+ * Addresses that sent `token` in this receipt. Each user's Calibur batch is
+ * all-or-nothing and always moves AUSD from the user, so "their address sent
+ * AUSD here" means "their transfer landed".
+ */
+export const tokenSenders = (receipt: TransactionReceipt, token: Address) =>
+  new Set(
+    parseEventLogs({ abi: transferEvent, logs: receipt.logs.filter((l) => l.address.toLowerCase() === token.toLowerCase()) }).map((l) =>
+      l.args.from.toLowerCase(),
+    ),
+  );

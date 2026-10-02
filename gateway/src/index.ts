@@ -1,15 +1,14 @@
 import { isAddress, isHex, type Hex, type SignedAuthorization } from 'viem';
 import { isPhone } from '../../protocol/sms';
 import { isNetwork } from './chain';
-import { account, delegate, GatewayError, quote, sign } from './core';
+import { createWallet, startAuth, verifyAuth, TOKEN_TTL_SECONDS } from './auth';
+import { account, delegate, GatewayError, quote, reconcile, sign, txStatus } from './core';
 import type { Env } from './env';
 import { signJwt, verifyJwt } from './jwt';
 import { handleInbound } from './sms';
 
 export { Relay } from './relay';
 export { Sponsor } from './sponsor';
-
-const TOKEN_TTL_SECONDS = 30 * 24 * 3600;
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -39,9 +38,33 @@ const route = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
 
+  // Per-IP limit on everything a stranger can hammer: OTP sends and transfers.
+  if (/^\/(auth|tx|wallet)\//.test(url.pathname)) {
+    const ip = request.headers.get('cf-connecting-ip') ?? 'local';
+    if (!(await env.IP_LIMITER.limit({ key: ip })).success) throw new GatewayError('rate-limited', 429);
+  }
+
+  const txId = /^\/tx\/([23456789A-Za-z]{4})$/.exec(url.pathname)?.[1];
+  if (request.method === 'GET' && txId) return json(await txStatus(env, await phoneFrom(env, request), txId.toUpperCase()));
+
   switch (key) {
     case 'GET /health':
       return json({ ok: true });
+
+    case 'POST /auth/start': {
+      const req = await body<{ phone?: string }>(request);
+      return json(await startAuth(env, req.phone));
+    }
+
+    case 'POST /auth/verify': {
+      const req = await body<{ phone?: string; code?: string }>(request);
+      return json(await verifyAuth(env, req.phone, req.code));
+    }
+
+    case 'POST /wallet/create': {
+      const phone = await phoneFrom(env, request);
+      return json(await createWallet(env, phone, await body(request)));
+    }
 
     case 'GET /account': {
       const network = url.searchParams.get('network') ?? undefined;
@@ -116,5 +139,8 @@ export default {
       console.error('unhandled', error instanceof Error ? error.stack : error);
       return json({ error: 'internal' }, 500);
     }
+  },
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(reconcile(env).catch((e) => console.error('cron: reconcile failed', e instanceof Error ? e.message : e)));
   },
 } satisfies ExportedHandler<Env>;

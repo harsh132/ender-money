@@ -11,7 +11,10 @@
     "play": "bun --env-file=.env scripts/play.ts",
     "burst": "bun --env-file=.env scripts/burst.ts",
     "fake-relay": "bun scripts/fake-relay.ts",
-    "relay:build": "cd relay && gradlew.bat assembleDebug"
+    "relay:build": "cd relay && gradlew.bat assembleDebug",
+    "signup": "bun --env-file=.env scripts/signup.ts",
+    "gateway:migrate:remote": "wrangler d1 migrations apply ender-money --remote -c gateway/wrangler.jsonc",
+    "gateway:deploy": "wrangler deploy -c gateway/wrangler.jsonc"
   },
   "dependencies": {
     "viem": "^2.57.2"

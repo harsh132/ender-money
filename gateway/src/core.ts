@@ -8,7 +8,7 @@ import { recoverAuthorizationAddress } from 'viem/utils';
 import { caliburAbi, encodeExecute, erc20Abi, isDelegatedToCalibur, signedBatchTypedData, transferWithFee, type Call } from '../../protocol/calibur';
 import { AUSD_DECIMALS, CALIBUR, FEE_RECIPIENT, MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
 import { isPhone, SESSION_ID_ALPHABET, type Deliver } from '../../protocol/sms';
-import { publicClient } from './chain';
+import { publicClient, tokenSenders } from './chain';
 import { inrPerUsd } from './fx';
 import type { Env } from './env';
 
@@ -288,4 +288,52 @@ export const delegate = async (env: Env, network: NetworkName, address: Address,
   const result = await sponsor.submit(network, { kind: 'delegation', account: address, authorization });
   if (!result.ok) throw new GatewayError(`delegation-${result.error}`, 502);
   return { network, delegated: true as const, txHash: result.txHash };
+};
+
+// ---------------------------------------------------------------- status and housekeeping
+
+export const txStatus = async (env: Env, phone: string, id: string) => {
+  const s = await env.DB.prepare(
+    'SELECT id, network, state, tx_hash, error, amount, to_address, expires_at FROM sessions WHERE id = ? AND phone = ?',
+  )
+    .bind(id, phone)
+    .first<Pick<SessionRow, 'id' | 'network' | 'state' | 'tx_hash' | 'error' | 'amount' | 'to_address' | 'expires_at'> & { state: string }>();
+  if (!s) throw new GatewayError('unknown-session', 404);
+  return {
+    id: s.id,
+    network: s.network,
+    status: s.state === 'open' && s.expires_at <= now() ? 'expired' : s.state,
+    txHash: s.tx_hash,
+    error: s.error,
+    amount: formatUnits(BigInt(s.amount), AUSD_DECIMALS),
+    to: s.to_address,
+  };
+};
+
+/**
+ * Every minute: settle sessions stuck in `sending` and drop stale rows.
+ * A session past its signed deadline can never execute (Calibur reverts), so
+ * one without a landed transaction by then has failed for good.
+ */
+export const reconcile = async (env: Env) => {
+  const t = now();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM otps WHERE expires_at < ? AND window_start < ?').bind(t, t - 3600),
+    env.DB.prepare(`DELETE FROM sessions WHERE expires_at < ? AND state != 'sending'`).bind(t - 86_400),
+  ]);
+  const { results } = await env.DB.prepare(
+    `SELECT id, network, from_address, tx_hash, deadline FROM sessions WHERE state = 'sending' LIMIT 50`,
+  ).all<Pick<SessionRow, 'id' | 'network' | 'from_address' | 'tx_hash' | 'deadline'>>();
+  for (const s of results) {
+    let state: 'sent' | 'failed' | undefined;
+    let error: string | null = null;
+    if (s.tx_hash) {
+      const receipt = await publicClient(env, s.network)
+        .getTransactionReceipt({ hash: s.tx_hash })
+        .catch(() => undefined);
+      if (receipt) [state, error] = tokenSenders(receipt, NETWORKS[s.network].ausd).has(s.from_address) ? ['sent', null] : ['failed', 'failed'];
+      else if (t > s.deadline + 120) [state, error] = ['failed', 'dropped'];
+    } else if (t > s.deadline + 60) [state, error] = ['failed', 'send-failed'];
+    if (state) await env.DB.prepare('UPDATE sessions SET state = ?, error = ? WHERE id = ?').bind(state, error, s.id).run();
+  }
 };

@@ -3,7 +3,6 @@ import {
   decodeFunctionResult,
   encodeFunctionData,
   parseAbi,
-  parseEventLogs,
   type Address,
   type Hex,
   type SignedAuthorization,
@@ -11,7 +10,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 import { isDelegatedToCalibur } from '../../protocol/calibur';
 import { MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
-import { publicClient } from './chain';
+import { publicClient, tokenSenders } from './chain';
 import type { Env } from './env';
 
 /** A user's signed Calibur `execute` call, or a signup's 7702 authorization. */
@@ -36,7 +35,6 @@ const multicall3Abi = parseAbi([
   'struct Result { bool success; bytes returnData; }',
   'function aggregate3(Call3[] calls) payable returns (Result[] returnData)',
 ]);
-const transferEvent = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)']);
 
 const aggregate3 = (calls: Pending[]) =>
   encodeFunctionData({
@@ -138,11 +136,7 @@ export class Sponsor extends DurableObject<Env> {
 
     // Per-user outcome: Multicall3's per-call results aren't in the receipt, but every
     // successful transfer emits an AUSD Transfer from the user's own address.
-    const senders = new Set(
-      parseEventLogs({ abi: transferEvent, logs: receipt.logs.filter((l) => l.address.toLowerCase() === net.ausd.toLowerCase()) }).map(
-        (l) => l.args.from.toLowerCase(),
-      ),
-    );
+    const senders = tokenSenders(receipt, net.ausd);
     for (const p of calls) {
       p.resolve(senders.has(p.item.account.toLowerCase()) ? { ok: true, txHash } : { ok: false, error: 'failed', txHash });
     }
