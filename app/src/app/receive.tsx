@@ -5,7 +5,7 @@ import { phoneDisplay } from '../lib/format';
 import { useStore } from '../lib/store';
 import { c, f } from '../lib/theme';
 import { Copy, Share as ShareIcon } from '../ui/icons';
-import { Button, Chip, T } from '../ui/kit';
+import { Button, T, TestnetPill } from '../ui/kit';
 import { QR } from '../ui/QR';
 
 /** Sheet: QR of the plain address (any wallet can read it), plus copy and share. */
@@ -26,7 +26,7 @@ export default function Receive() {
       <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: c.surface2, marginBottom: 16 }} />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
         <T v="title" style={{ flex: 1 }}>Receive</T>
-        {network === 'testnet' ? <Chip label="Test mode" tone="warning" /> : null}
+        {network === 'testnet' ? <TestnetPill /> : null}
       </View>
       <T v="meta" style={{ marginTop: 6 }}>Your AUSD address on Monad{network === 'testnet' ? ' testnet' : ''}</T>
       <View style={{ alignSelf: 'center', marginTop: 28, marginBottom: 20, padding: 22, borderRadius: 28, backgroundColor: c.fg }}>

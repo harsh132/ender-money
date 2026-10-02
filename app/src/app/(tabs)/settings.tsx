@@ -12,7 +12,7 @@ import { c } from '../../lib/theme';
 import { online } from '../../lib/transport';
 import { errorText, refresh, syncByText } from '../../lib/wallet';
 import { Chevron } from '../../ui/icons';
-import { Banner, Chip, T } from '../../ui/kit';
+import { Banner, T, TestnetPill } from '../../ui/kit';
 
 const GATEWAYS = ['auto', 'india', 'international'] as const;
 const GATEWAY_LABEL = { auto: 'Auto', india: 'India', international: 'International' } as const;
@@ -94,7 +94,7 @@ export default function Settings() {
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 140 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', height: 64, gap: 12 }}>
           <T v="title" style={{ flex: 1 }}>Settings</T>
-          {network === 'testnet' ? <Chip label="Test mode" tone="warning" /> : null}
+          {network === 'testnet' ? <TestnetPill /> : null}
         </View>
 
         <Label>Account</Label>

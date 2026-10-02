@@ -10,7 +10,7 @@ import { c, f } from '../../lib/theme';
 import { useOnline } from '../../lib/transport';
 import { refresh } from '../../lib/wallet';
 import { ArrowDown, ArrowUp, Bolt, Scan, Signal } from '../../ui/icons';
-import { Banner, Chip, IconButton, T } from '../../ui/kit';
+import { Banner, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
 import { Sigil } from '../../ui/Sigil';
 import { TxRow } from '../../ui/TxRow';
 import { useQuickSend } from '../../ui/useQuickSend';
@@ -71,7 +71,7 @@ export default function Home() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, height: 64 }}>
           <Sigil address={wallet.address} fallback="E" size={44} fill={28 / 44} />
           <T v="title" style={{ flex: 1 }}>Home</T>
-          {network === 'testnet' ? <Chip label="Testnet" tone="warning" onPress={() => router.push('/settings')} /> : null}
+          {network === 'testnet' ? <TestnetPill onPress={() => router.push('/settings')} /> : null}
           <IconButton label="Scan a code" onPress={() => router.push('/scan')}>
             <Scan size={24} />
           </IconButton>

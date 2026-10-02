@@ -6,7 +6,7 @@ import { dayLabel } from '../../lib/format';
 import { useStore, type Tx } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { refresh } from '../../lib/wallet';
-import { Chip, T } from '../../ui/kit';
+import { T, TestnetPill } from '../../ui/kit';
 import { TxRow } from '../../ui/TxRow';
 
 /** Every transfer on the current network, grouped by day. */
@@ -49,7 +49,7 @@ export default function Activity() {
         ListHeaderComponent={
           <View style={{ flexDirection: 'row', alignItems: 'center', height: 64, gap: 12 }}>
             <T v="title" style={{ flex: 1 }}>Activity</T>
-            {network === 'testnet' ? <Chip label="Test mode" tone="warning" /> : null}
+            {network === 'testnet' ? <TestnetPill /> : null}
           </View>
         }
         renderSectionHeader={({ section }) => (

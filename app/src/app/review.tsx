@@ -15,7 +15,7 @@ import { c, f } from '../lib/theme';
 import { acceptReply, NoSmsError, onReply, online, textGateway, type Pipe } from '../lib/transport';
 import { checkQuote, errorText, signQuote, TransferError, type Draft, type Quote } from '../lib/wallet';
 import { Bolt, Check, Globe, Message } from '../ui/icons';
-import { BackHeader, Banner, Button, Card, Chip, KV, Spinner, T } from '../ui/kit';
+import { BackHeader, Banner, Button, Card, Chip, KV, Spinner, T, TestnetPill } from '../ui/kit';
 
 type Step = 'request' | 'quote' | 'approve' | 'sent';
 const ORDER: Step[] = ['request', 'quote', 'approve', 'sent'];
@@ -270,7 +270,7 @@ export default function Review() {
           title={phase.k === 'done' ? 'Sent' : 'Review'}
           right={
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              {network === 'testnet' ? <Chip label="Test" tone="warning" /> : null}
+              {network === 'testnet' ? <TestnetPill /> : null}
               <Chip label={pipe === 'internet' ? 'Internet' : 'Text'} icon={pipe === 'internet' ? <Globe size={14} color={c.positive} /> : <Message size={14} color={c.warning} />} />
             </View>
           }

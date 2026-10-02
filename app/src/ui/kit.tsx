@@ -133,15 +133,34 @@ export const Field = (props: TextInputProps & { left?: ReactNode; right?: ReactN
   );
 };
 
-export const Chip = ({ label, tone = 'plain', onPress, icon }: { label: string; tone?: 'plain' | 'warning' | 'positive'; onPress?: () => void; icon?: ReactNode }) => {
+export const Chip = ({
+  label,
+  tone = 'plain',
+  onPress,
+  icon,
+  small,
+}: {
+  label: string;
+  tone?: 'plain' | 'warning' | 'positive';
+  onPress?: () => void;
+  icon?: ReactNode;
+  small?: boolean;
+}) => {
   const color = tone === 'warning' ? c.warning : tone === 'positive' ? c.positive : c.fg2;
   return (
-    <Pressable onPress={onPress} disabled={!onPress} style={[s.chip, tone === 'warning' && { borderColor: 'rgba(232,182,92,0.35)' }]}>
-      {icon ?? <View style={[s.dot, { backgroundColor: color }]} />}
-      <Text style={{ fontFamily: f.uiMedium, fontSize: 14, lineHeight: 20, color, flexShrink: 1 }}>{label}</Text>
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      style={[s.chip, small && { minHeight: 30, paddingVertical: 4, paddingHorizontal: 11, gap: 6 }, tone === 'warning' && { borderColor: 'rgba(232,182,92,0.35)' }]}
+    >
+      {icon ?? <View style={[s.dot, { backgroundColor: color }, small && { width: 6, height: 6, borderRadius: 3 }]} />}
+      <Text style={{ fontFamily: f.uiMedium, fontSize: small ? 13 : 14, lineHeight: small ? 18 : 20, color, flexShrink: 1 }}>{label}</Text>
     </Pressable>
   );
 };
+
+/** Shown wherever testnet balances appear, so test money is never mistaken for real money. */
+export const TestnetPill = ({ onPress }: { onPress?: () => void }) => <Chip label="Testnet" tone="warning" small onPress={onPress} />;
 
 export const Card = ({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) => <View style={[s.card, style]}>{children}</View>;
 

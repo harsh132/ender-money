@@ -13,7 +13,7 @@ import { c, f } from '../lib/theme';
 import { Back, Bolt, Person, Scan } from '../ui/icons';
 import { Sigil } from '../ui/Sigil';
 import { useQuickSend } from '../ui/useQuickSend';
-import { Avatar, BackHeader, Banner, Button, Chip, Field, Screen, T } from '../ui/kit';
+import { Avatar, BackHeader, Banner, Button, Chip, Field, Screen, T, TestnetPill } from '../ui/kit';
 
 export type To = { to: string; toAddress?: Address; phone?: string; label?: string };
 
@@ -55,7 +55,7 @@ export default function Send() {
     network === 'testnet' || quickMin ? (
       <View style={{ flexDirection: 'row', gap: 8 }}>
         {quickMin ? <Chip label={`Quick send · ${quickMin} min`} icon={<Bolt size={14} color={c.accent} />} onPress={quickSend.end} /> : null}
-        {network === 'testnet' ? <Chip label="Test" tone="warning" /> : null}
+        {network === 'testnet' ? <TestnetPill /> : null}
       </View>
     ) : undefined;
 
