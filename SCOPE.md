@@ -13,7 +13,7 @@ there isn't.
 | Area | What ships |
 | --- | --- |
 | Account | No contract of our own. The user's EOA delegates by EIP-7702 to **Calibur v1.1.0** (Uniswap's audited 7702 account), already deployed on Monad mainnet and testnet. |
-| Gateway | Cloudflare Worker + one Durable Object per phone number. Normalised inbound SMS event, `SYNC` / `DLG` / `SEND` / `SIG` handling, verify, `eth_call` simulate, broadcast, reply. Alchemy webhook for incoming alerts. |
+| Gateway | Cloudflare Worker at `api.ender.money` (see [docs/gateway.md](docs/gateway.md)). HTTPS API plus `SYNC` / `SEND` / `SIG` over SMS through one session core; verify, `eth_call` simulate, broadcast, reply. Alchemy webhook for incoming alerts. |
 | Transports | Android relay app (Kotlin, ~200 lines, WebSocket to the DO) for Indian SIMs. Twilio number for everyone else. Picked automatically from SIM country. |
 | App | Expo dev build, Bun. mera + react-native-passkeys for keys. `expo-sms` composer for sending. Screens below. |
 | Token | AUSD only. Static token table shared by app and gateway. |
@@ -74,16 +74,16 @@ both networks.
 
 - The network table (chain ID, RPC, Calibur, AUSD, pair) lives in
   `protocol/` and is shared by app and gateway. One table, two rows.
-- The gateway keeps the network per phone number in its Durable Object.
+- The gateway keeps the network per phone number (`links.network`).
   The app tells it with `SYNC`: `SYNC 0x<addr>` is mainnet, `SYNC 0x<addr> T`
   is testnet. Flipping the switch sends that `SYNC`, which the app needs
-  anyway for the new network's balance and nonce. `SEND` / `SIG` / `DLG`
+  anyway for the new network's balance and nonce. `SEND` / `SIG`
   are unchanged and run on the phone's current network.
 - Every signature binds the chain ID (Calibur's EIP-712 domain, the 7702
   authorization), so a message that reaches the gateway on the wrong
   network fails verification instead of moving money.
-- First switch to testnet: the app also sends `DLG` for testnet
-  (delegation is per chain).
+- No on-chain step when switching: the account is delegated on both
+  networks at signup.
 - In Test mode the app shows a persistent **Test mode** chip on Home and
   Send, in the warning colour, so test balances are never mistaken for
   real money. Mainnet shows nothing extra.
@@ -98,7 +98,7 @@ asked of `SmsWallet` is already in Calibur's
 | EIP-712 signature by the account itself | root key (`keyHash = 0`) signs `SignedBatchedCall`; domain is `Calibur` / `1.0.0` (v1.1.0 keeps the 1.0.0 domain version) / chain ID / the user's address / salt = Calibur address |
 | Own nonce, separate from the account nonce | 2D nonce manager, `getSeq(0)` |
 | Deadline enforced on-chain | `deadline` field in the signed struct |
-| Transfer + fee to gateway | one batch of two calls: `AUSD.transfer(to, amount)`, `AUSD.transfer(gateway, fee)`, `revertOnFailure = true` so the fee is only paid if the transfer lands |
+| Transfer + fee to gateway | one batch of two calls: `AUSD.transfer(to, amount)`, `AUSD.transfer(treasury, fee)`, `revertOnFailure = true` so the fee is only paid if the transfer lands |
 | Gateway submits and pays gas | anyone may submit when `executor = 0`; the signature decides if it runs |
 
 What that buys: no contract to write, test, audit or deploy (saves ~1.5
@@ -115,16 +115,19 @@ rebuilds the identical batch from the session.
 
 **Protocol changes from the doc**
 
-- `DLG` is an authorization to Calibur's fixed address; the gateway rejects
-  any other delegate (an authorization to other code would hand the
-  address over, with us paying gas).
+- No `DLG` over SMS. Delegation happens once, online, at signup, on both
+  networks: the app signs two 7702 authorizations to Calibur's fixed
+  address and `/wallet/create` sends them. The gateway rejects any other
+  delegate (an authorization to other code would hand the address over,
+  with us paying gas).
 - `SYNC` reply `n=` is Calibur's `getSeq(0)`. `SYNC` takes an optional
   ` T` suffix for testnet.
-- Quote `fee=` becomes the second call in the batch.
+- Quote `fee=` becomes the second call in the batch. Fee: flat 0.001 AUSD
+  for now, paid to a treasury address (`FEE_RECIPIENT`).
 - Linking a number to a wallet is **not** an SMS command. It happens
   online during onboarding or a number change in Settings, with an OTP
-  (see Onboarding). SMS stays for transacting: `SYNC`, `SEND`,
-  `SIG`, and `DLG` for the first switch to Test mode while offline.
+  (see Onboarding). SMS stays for transacting: `SYNC`, `SEND`
+  and `SIG`.
 - `SEND` accepts a phone number as recipient (`SEND +919876543210, 10
   AUSD`); the quote then carries the resolved `to=0x<40 hex>` (~100
   characters, still one segment).
@@ -160,12 +163,13 @@ paths for the user to choose between.
   on the phone, without UI (`preferImmediatelyAvailableCredentials`). That
   catches someone who changed numbers: if one exists, the app offers "Use
   your existing wallet" instead, which moves the new number to it. If none,
-  it creates a passkey named `Ender` (mera + react-native-passkeys) and
+  it creates a passkey named `Ender` for `ender.money` (mera + react-native-passkeys) and
   derives the address. To verify on day 3: that react-native-passkeys
   exposes the silent check; fallback is a small native call.
-- **N2 Setting up** — `POST /wallet/create` with the signed 7702
-  authorization to Calibur. The gateway links the number, submits the
-  sponsored delegation and waits for it (about a second on Monad).
+- **N2 Setting up** — `POST /wallet/create` with two signed 7702
+  authorizations to Calibur, one per network (one passkey prompt signs
+  both). The gateway sends both sponsored delegations, waits for them
+  (about a second each on Monad), then links the number.
 - **N3 Ready** — number, $0.00, "Now try it with mobile data off." Alerts
   are on by default and live in Settings; no toggle during onboarding.
 
@@ -249,7 +253,7 @@ transfers that fit inside it are signed with no prompt.
 | --- | --- |
 | a transfer of ≤ $20 | anything over $20, or one that would take the session past $50 total |
 | to a recipient already in Recent | a new recipient |
-| within 10 minutes of opening | `DLG` (delegation), Test mode switch, phone number change |
+| within 10 minutes of opening | Test mode switch, phone number change |
 
 The session ends, with `end()`, at whichever comes first: 10 minutes, the
 $50 total, the app going to the background, or the user tapping "End".
@@ -326,7 +330,7 @@ ender-money/
   protocol/    TS. SMS message parse/format, token table, Calibur batch
                + EIP-712 types. Imported by gateway and app so the two
                can't drift.
-  gateway/     Cloudflare Worker + Durable Object (wrangler, Bun)
+  gateway/     Cloudflare Worker + Durable Objects (wrangler, Bun); see docs/gateway.md
   relay/       Android relay app (Kotlin). Never shipped to users.
   app/         Expo app (Bun, dev build)
 ```
