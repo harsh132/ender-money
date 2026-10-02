@@ -102,8 +102,8 @@ export default function Home() {
         ) : null}
 
         <View style={{ flexDirection: 'row', gap: 14 }}>
-          <Tile label="Send" onPress={() => router.push('/send')} icon={<ArrowUp size={30} color={c.accent} />} />
-          <Tile label="Receive" onPress={() => router.push('/receive')} icon={<ArrowDown size={30} color={c.accent} />} />
+          <Tile label="Send" onPress={() => router.push('/send')} icon={<ArrowUp size={24} color={c.accent} />} />
+          <Tile label="Receive" onPress={() => router.push('/receive')} icon={<ArrowDown size={24} color={c.accent} />} />
         </View>
 
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 32, marginBottom: 8 }}>
@@ -132,14 +132,15 @@ const Tile = ({ label, icon, onPress }: { label: string; icon: React.ReactNode; 
     onPress={onPress}
     style={({ pressed }) => ({
       flex: 1,
-      height: 120,
+      height: 72,
       borderRadius: 24,
       backgroundColor: pressed ? c.surface2 : c.surface,
       borderWidth: 1,
       borderColor: c.line,
+      flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 12,
+      gap: 10,
     })}
   >
     {icon}
