@@ -48,6 +48,20 @@ bunx expo run:android                 # debug build + Metro
 cd android && ./gradlew assembleRelease   # standalone APK in android/app/build/outputs/apk/release
 ```
 
+On Windows the native build can hit the 260-character path limit
+(react-native-gesture-handler's codegen objects). Build from a short drive
+alias instead:
+
+```bash
+subst X: C:\workspace\ender-money
+cd /x/app/android && ./gradlew.bat assembleRelease
+```
+
+Emulator note: if another project's Metro already owns port 8081, start this
+one with `bunx expo start --port 8082` and point the debug app at it
+(dev menu → Settings → Debug server host → `localhost:8082`, plus
+`adb reverse tcp:8082 tcp:8082`).
+
 Environment (build time):
 
 | Variable | Default | Use |
