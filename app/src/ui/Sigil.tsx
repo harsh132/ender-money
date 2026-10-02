@@ -27,10 +27,11 @@ const pointFor = (address: string): string | null => {
   }
 };
 
-export const Sigil = ({ address, fallback, size = 48 }: { address: string | undefined; fallback: string; size?: number }) => {
+/** `fill`: share of the disc the glyphs take; 0.64 is the most that clears the rim. */
+export const Sigil = ({ address, fallback, size = 48, fill = 0.64 }: { address: string | undefined; fallback: string; size?: number; fill?: number }) => {
   // Gold: a sigil is an identity mark, one of the small marks the palette allows the accent on.
-  // Drawn edge to edge (space: none) at 64% of the disc: a square that size clears the circle's rim.
-  const inner = Math.round(size * 0.64);
+  // Drawn edge to edge (space: none), then centred in the disc.
+  const inner = Math.round(size * fill);
   const xml = useMemo(() => {
     const point = address ? pointFor(address) : null;
     if (!point) return null;
