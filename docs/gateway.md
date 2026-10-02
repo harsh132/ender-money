@@ -88,7 +88,7 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 | `POST /auth/start {phone}` | normalises to E.164, rate-limits, sends a 6-digit OTP (10 min, 5 tries, 3 sends/number/hour, plus per-IP) |
 | `POST /auth/verify {phone, code}` | returns `{token, status: "new"}` or `{token, status: "existing", address, balance}` |
 | `POST /wallet/create {address, authorizations: {mainnet, testnet}, relink?}` | checks both 7702 authorizations (delegate = Calibur, chain matches, nonce = account nonce, signer = address), queues each delegation with that network's `Sponsor` DO, where it rides in the next batch alongside transfers (gateway pays, the user is never charged), waits for them, then writes `links`. Refuses a linked number unless `relink` |
-| `GET /account?network=` | balance, Calibur nonce (`getSeq(0)`), delegated yes/no, and an INR rate for the `≈ ₹` line |
+| `GET /account?network=` | balance, Calibur nonce (`getSeq(0)`), delegated yes/no, and the INR rate for the `≈ ₹` line (Frankfurter / ECB daily rate, cached an hour; omitted if unavailable) |
 | `POST /tx/quote {network, to, amount, deliver?}` | `to` is an address or phone number. Returns `{id, to, amount, fee, out?, nonce, deadline, calls}`; the app rebuilds and checks `calls` before signing |
 | `POST /tx/sign {id, signature}` | runs the checks below, sends, returns `{txHash}` |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
@@ -171,8 +171,9 @@ The queue lives in the network's `Sponsor` DO, the single sender:
   queue. If no batch is in flight, the DO sends at once: a batch of one,
   so a quiet system is instant. Transfers that arrive while a batch is
   confirming wait and go together as the next batch the moment it lands
-  (about a second on Monad). At most 50 calls per batch; a DO alarm
-  flushes as a backstop if anything stalls. No fixed timer, so nobody
+  (about a second on Monad). At most 50 calls per batch. A receipt not
+  seen within 30 s answers the waiting callers with the tx hash marked
+  pending, so a stuck batch never blocks the queue. No fixed timer, so nobody
   waits a few seconds for nothing.
 - **One batch in flight.** The nonce simply goes up by one per batch. No
   pipelining, no gaps to repair; after an RPC error the DO rereads the

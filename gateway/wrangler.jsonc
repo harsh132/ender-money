@@ -1,0 +1,23 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ender-money-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "vars": {
+    "FEE_AUSD": "0.001",
+    // Treasury that collects fees; defaults to the gateway key until a separate one exists.
+    "FEE_RECIPIENT": "0x458E8F51EC2B833209b5C71372376eeb1e40af08"
+  },
+
+  "d1_databases": [
+    { "binding": "DB", "database_name": "ender-money", "database_id": "local-only", "migrations_dir": "migrations" }
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "name": "SPONSOR", "class_name": "Sponsor" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sponsor"] }]
+}

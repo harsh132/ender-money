@@ -468,6 +468,9 @@ Today is 2 Oct. Bounty deadline 14 Oct 09:29 IST; we aim to submit 13 Oct.
 
 ## Decided
 
-- Currency: `$` primary, `≈ ₹` line from the rate in the last `SYNC` reply.
+- Currency: `$` primary, `≈ ₹` line. The app ships with 96 INR per USD and
+  replaces it with the latest rate it sees: `/account` online, `inr=` in the
+  `SYNC` reply offline. The gateway gets it from Frankfurter (ECB daily
+  rates, no key) and caches it for an hour.
 - Dock: kept (Home / Activity / Settings).
 - Recipients: phone numbers as well as addresses (above).

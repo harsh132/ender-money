@@ -29,10 +29,10 @@ export const erc20Abi = parseAbi([
 export const isDelegatedToCalibur = (code: Hex | undefined) =>
   (code ?? '0x').toLowerCase() === `0xef0100${CALIBUR.slice(2).toLowerCase()}`;
 
-/** The recipient transfer, then the gateway's fee, in one all-or-nothing batch. */
-export const transferWithFee = (token: Address, to: Address, amount: bigint, gateway: Address, fee: bigint): Call[] => [
+/** The recipient transfer, then the fee to the treasury, in one all-or-nothing batch. */
+export const transferWithFee = (token: Address, to: Address, amount: bigint, feeRecipient: Address, fee: bigint): Call[] => [
   { to: token, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, amount] }) },
-  { to: token, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [gateway, fee] }) },
+  { to: token, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [feeRecipient, fee] }) },
 ];
 
 /**

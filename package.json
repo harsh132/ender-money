@@ -3,9 +3,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "onchain:check": "bun --env-file=.env scripts/onchain-check.ts"
+    "onchain:check": "bun --env-file=.env scripts/onchain-check.ts",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json",
+    "gateway:dev": "wrangler dev -c gateway/wrangler.jsonc",
+    "gateway:migrate:local": "wrangler d1 migrations apply ender-money --local -c gateway/wrangler.jsonc",
+    "play": "bun --env-file=.env scripts/play.ts",
+    "burst": "bun --env-file=.env scripts/burst.ts"
   },
   "dependencies": {
     "viem": "^2.57.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261002.1",
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.146.0"
   }
 }

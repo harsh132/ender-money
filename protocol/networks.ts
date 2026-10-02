@@ -17,6 +17,9 @@ export type Network = {
 /** Calibur v1.1.0, Uniswap's EIP-7702 account. Same address on both networks. */
 export const CALIBUR: Address = '0x000000005c84F8Fd50b21CAC312528A64437030e';
 
+/** Multicall3, standard address, deployed on both networks. */
+export const MULTICALL3: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
+
 /** AUSD has 6 decimals on both networks. */
 export const AUSD_DECIMALS = 6;
 

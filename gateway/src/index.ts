@@ -1,0 +1,96 @@
+import { isAddress, isHex, type Hex, type SignedAuthorization } from 'viem';
+import { isPhone } from '../../protocol/sms';
+import { isNetwork } from './chain';
+import { account, delegate, GatewayError, quote, sign } from './core';
+import type { Env } from './env';
+import { signJwt, verifyJwt } from './jwt';
+
+export { Sponsor } from './sponsor';
+
+const TOKEN_TTL_SECONDS = 30 * 24 * 3600;
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+const body = async <T>(request: Request): Promise<T> => {
+  try {
+    return (await request.json()) as T;
+  } catch {
+    throw new GatewayError('bad-json');
+  }
+};
+
+const phoneFrom = async (env: Env, request: Request) => {
+  const token = request.headers.get('authorization')?.replace(/^Bearer /, '');
+  const claims = token ? await verifyJwt(env.JWT_SECRET, token) : null;
+  if (!claims) throw new GatewayError('unauthorized', 401);
+  return claims.phone;
+};
+
+const route = async (request: Request, env: Env): Promise<Response> => {
+  const url = new URL(request.url);
+  const key = `${request.method} ${url.pathname}`;
+
+  switch (key) {
+    case 'GET /health':
+      return json({ ok: true });
+
+    case 'GET /account': {
+      const network = url.searchParams.get('network') ?? undefined;
+      if (network !== undefined && !isNetwork(network)) throw new GatewayError('bad-network');
+      return json(await account(env, await phoneFrom(env, request), network));
+    }
+
+    case 'POST /tx/quote': {
+      const phone = await phoneFrom(env, request);
+      const req = await body<{ network?: string; to?: string; amount?: string; deliver?: string }>(request);
+      if (req.network !== undefined && !isNetwork(req.network)) throw new GatewayError('bad-network');
+      if (typeof req.to !== 'string' || typeof req.amount !== 'string') throw new GatewayError('bad-request');
+      if (req.deliver !== undefined && req.deliver !== 'AUSD' && req.deliver !== 'CTK') throw new GatewayError('bad-request');
+      return json(await quote(env, phone, { network: req.network, to: req.to, amount: req.amount, deliver: req.deliver }));
+    }
+
+    case 'POST /tx/sign': {
+      const phone = await phoneFrom(env, request);
+      const req = await body<{ id?: string; signature?: string }>(request);
+      if (typeof req.id !== 'string' || !isHex(req.signature) || req.signature.length !== 132) throw new GatewayError('bad-request');
+      return json(await sign(env, phone, req.id.toUpperCase(), req.signature as Hex));
+    }
+
+    // Dev only: link a phone to an address without OTP and hand back a token. Replaced by /auth/* on 5 Oct.
+    case 'POST /dev/link': {
+      if (env.DEV !== '1') break;
+      const req = await body<{ phone?: string; address?: string; network?: string }>(request);
+      if (!req.phone || !isPhone(req.phone) || !req.address || !isAddress(req.address)) throw new GatewayError('bad-request');
+      const network = isNetwork(req.network) ? req.network : 'mainnet';
+      await env.DB.prepare(
+        `INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (phone) DO UPDATE SET address = excluded.address, network = excluded.network`,
+      )
+        .bind(req.phone, req.address.toLowerCase(), network, Math.floor(Date.now() / 1000))
+        .run();
+      return json({ token: await signJwt(env.JWT_SECRET, { phone: req.phone, address: req.address.toLowerCase() }, TOKEN_TTL_SECONDS) });
+    }
+
+    // Dev only: queue a delegation without signup. /wallet/create (5 Oct) wraps the same core call.
+    case 'POST /dev/delegate': {
+      if (env.DEV !== '1') break;
+      const req = await body<{ network?: string; address?: string; authorization?: SignedAuthorization }>(request);
+      if (!isNetwork(req.network) || !req.address || !isAddress(req.address) || !req.authorization) throw new GatewayError('bad-request');
+      return json(await delegate(env, req.network, req.address, req.authorization));
+    }
+  }
+  return json({ error: 'not-found' }, 404);
+};
+
+export default {
+  async fetch(request, env): Promise<Response> {
+    try {
+      return await route(request, env);
+    } catch (error) {
+      if (error instanceof GatewayError) return json({ error: error.code }, error.status);
+      console.error('unhandled', error instanceof Error ? error.stack : error);
+      return json({ error: 'internal' }, 500);
+    }
+  },
+} satisfies ExportedHandler<Env>;
