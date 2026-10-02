@@ -134,7 +134,7 @@ export const Chip = ({ label, tone = 'plain', onPress, icon }: { label: string; 
   return (
     <Pressable onPress={onPress} disabled={!onPress} style={[s.chip, tone === 'warning' && { borderColor: 'rgba(232,182,92,0.35)' }]}>
       {icon ?? <View style={[s.dot, { backgroundColor: color }]} />}
-      <Text style={{ fontFamily: f.uiMedium, fontSize: 14, color }}>{label}</Text>
+      <Text style={{ fontFamily: f.uiMedium, fontSize: 14, lineHeight: 20, color, flexShrink: 1 }}>{label}</Text>
     </Pressable>
   );
 };
@@ -187,7 +187,7 @@ export const s = StyleSheet.create({
   iconBtn: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line, alignItems: 'center', justifyContent: 'center' },
   back: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 64 },
   field: { height: 64, borderRadius: 20, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, gap: 12 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 36, paddingHorizontal: 14, borderRadius: 999, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line, alignSelf: 'center' },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36, paddingVertical: 7, paddingHorizontal: 14, borderRadius: 999, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line, alignSelf: 'center' },
   dot: { width: 8, height: 8, borderRadius: 4 },
   card: { borderRadius: 24, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line, paddingVertical: 6, paddingHorizontal: 20 },
   kv: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', minHeight: 60, gap: 16, borderBottomWidth: 1, borderBottomColor: c.line },
