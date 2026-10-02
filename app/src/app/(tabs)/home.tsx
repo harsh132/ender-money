@@ -71,15 +71,15 @@ export default function Home() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, height: 64 }}>
           <Sigil address={wallet.address} fallback="E" size={44} fill={28 / 44} />
           <T v="title" style={{ flex: 1 }}>Home</T>
+          {network === 'testnet' ? <Chip label="Testnet" tone="warning" onPress={() => router.push('/settings')} /> : null}
           <IconButton label="Scan a code" onPress={() => router.push('/scan')}>
             <Scan size={24} />
           </IconButton>
         </View>
 
-        {network === 'testnet' || quickMin ? (
+        {quickMin ? (
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-            {network === 'testnet' ? <Chip label="Test mode" tone="warning" onPress={() => router.push('/settings')} /> : null}
-            {quickMin ? <Chip label={`Quick send · ${quickMin} min left`} icon={<Bolt size={14} color={c.accent} />} onPress={quickSend.end} /> : null}
+            <Chip label={`Quick send · ${quickMin} min left`} icon={<Bolt size={14} color={c.accent} />} onPress={quickSend.end} />
           </View>
         ) : null}
 
