@@ -1,0 +1,44 @@
+// Deep imports, so only the weights in use are bundled.
+import { Geist_400Regular } from '@expo-google-fonts/geist/400Regular';
+import { Geist_500Medium } from '@expo-google-fonts/geist/500Medium';
+import { Geist_600SemiBold } from '@expo-google-fonts/geist/600SemiBold';
+import { Geist_700Bold } from '@expo-google-fonts/geist/700Bold';
+import { GeistMono_400Regular } from '@expo-google-fonts/geist-mono/400Regular';
+import { Newsreader_500Medium } from '@expo-google-fonts/newsreader/500Medium';
+import { useFonts } from 'expo-font';
+import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
+import { c } from '../lib/theme';
+import { hydrate, useStore } from '../lib/store';
+import { onReply } from '../lib/transport';
+import { applyOkReply } from '../lib/wallet';
+
+void SplashScreen.preventAutoHideAsync();
+void hydrate();
+
+export default function Root() {
+  const [fonts] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold, GeistMono_400Regular, Newsreader_500Medium });
+  const hydrated = useStore((s) => s.hydrated);
+  const ready = fonts && hydrated;
+
+  useEffect(() => {
+    if (ready) void SplashScreen.hideAsync();
+  }, [ready]);
+
+  // A SYNC reply copied from Messages updates the balance wherever the user is.
+  useEffect(() => onReply((r) => r.kind === 'ok' && applyOkReply(r)), []);
+
+  if (!ready) return null;
+  return (
+    <>
+      <StatusBar style="light" />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.bg }, animation: 'slide_from_right' }}>
+        <Stack.Screen name="receive" options={{ presentation: 'formSheet', sheetAllowedDetents: [0.86], sheetCornerRadius: 28, contentStyle: { backgroundColor: c.bg } }} />
+        <Stack.Screen name="tx/[id]" options={{ presentation: 'formSheet', sheetAllowedDetents: [0.7], sheetCornerRadius: 28, contentStyle: { backgroundColor: c.bg } }} />
+        <Stack.Screen name="scan" options={{ animation: 'fade' }} />
+      </Stack>
+    </>
+  );
+}

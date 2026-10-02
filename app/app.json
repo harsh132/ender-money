@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Ender",
+    "slug": "ender-money",
+    "version": "0.1.0",
+    "scheme": "ender",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#141411",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "money.ender.app",
+      "associatedDomains": ["webcredentials:ender.money"]
+    },
+    "android": {
+      "package": "money.ender.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#141411",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": ["android.permission.CAMERA", "android.permission.READ_CONTACTS"],
+      "blockedPermissions": ["android.permission.RECORD_AUDIO"]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        { "backgroundColor": "#141411", "image": "./assets/splash-icon.png", "imageWidth": 120 }
+      ],
+      ["expo-camera", { "cameraPermission": "Ender uses the camera to scan payment QR codes.", "recordAudioAndroid": false }],
+      ["expo-contacts", { "contactsPermission": "Ender lets you pick a contact to pay." }],
+      "./plugins/with-android-build"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

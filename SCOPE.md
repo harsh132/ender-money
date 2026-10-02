@@ -15,7 +15,7 @@ there isn't.
 | Account | No contract of our own. The user's EOA delegates by EIP-7702 to **Calibur v1.1.0** (Uniswap's audited 7702 account), already deployed on Monad mainnet and testnet. |
 | Gateway | Cloudflare Worker at `api.ender.money` (see [docs/gateway.md](docs/gateway.md)). HTTPS API plus `SYNC` / `SEND` / `SIG` over SMS through one session core; verify, `eth_call` simulate, broadcast, reply. Alchemy webhook for incoming alerts. |
 | Transports | Android relay app (Kotlin, ~200 lines, WebSocket to the DO) for Indian SIMs. Twilio number for everyone else. Picked automatically from SIM country. |
-| App | Expo dev build, Bun. mera + react-native-passkeys for keys. `expo-sms` composer for sending. Screens below. |
+| App | Expo SDK 57 dev build, Bun ([app/README.md](app/README.md)). Mera (`@category-labs/mera`) + `react-native-passkey` (the binding Mera's React Native client is written for) for keys. `expo-sms` composer for sending. Screens below. |
 | Token | AUSD only. Static token table shared by app and gateway. |
 
 ## Transport: internet first, SMS fallback
@@ -163,9 +163,11 @@ paths for the user to choose between.
   on the phone, without UI (`preferImmediatelyAvailableCredentials`). That
   catches someone who changed numbers: if one exists, the app offers "Use
   your existing wallet" instead, which moves the new number to it. If none,
-  it creates a passkey named `Ender` for `ender.money` (mera + react-native-passkeys) and
-  derives the address. To verify on day 3: that react-native-passkeys
-  exposes the silent check; fallback is a small native call.
+  it creates a passkey named `Ender` for `ender.money` (Mera +
+  `react-native-passkey`) and derives the address (PRF → BIP-39 entropy →
+  `m/44'/60'/0'/0/0`, Mera's recipe). Built: `react-native-passkey` has no
+  silent check, so N1 offers "I already have an Ender passkey" instead,
+  which opens the system picker and moves the number to that wallet.
 - **N2 Setting up** — `POST /wallet/create` with two signed 7702
   authorizations to Calibur, one per network (one passkey prompt signs
   both). The gateway sends both sponsored delegations, waits for them

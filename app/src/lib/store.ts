@@ -1,0 +1,149 @@
+/**
+ * App state: one object, persisted to AsyncStorage (the JWT goes to
+ * SecureStore). Nothing secret lives here: the wallet key is re-derived from
+ * the passkey whenever it is needed.
+ */
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import { useSyncExternalStore } from 'react';
+import type { Address } from 'viem';
+import type { NetworkName } from '../../../protocol/networks';
+import { DEFAULT_INR_PER_USD, DEFAULT_NETWORK } from './config';
+
+export type TxStatus = 'sending' | 'sent' | 'failed' | 'expired';
+
+export type Tx = {
+  /** Gateway session id for our own transfers, tx hash + log index for incoming ones. */
+  id: string;
+  network: NetworkName;
+  direction: 'in' | 'out';
+  amount: string;
+  fee?: string;
+  counterparty: Address;
+  /** Contact name or phone number, when we know one. */
+  label?: string;
+  status: TxStatus;
+  txHash?: string;
+  error?: string;
+  at: number;
+  deadline?: number;
+};
+
+export type Recipient = { address: Address; phone?: string; name?: string; lastUsed: number };
+
+export type Wallet = {
+  phone: string;
+  address: Address;
+  credentialId: string;
+  transports?: string[];
+};
+
+export type AccountSnapshot = { balance: string; nonce: string; delegated: boolean; syncedAt: number };
+
+export type State = {
+  hydrated: boolean;
+  wallet?: Wallet;
+  token?: string;
+  network: NetworkName;
+  account: Partial<Record<NetworkName, AccountSnapshot>>;
+  inr: number;
+  activity: Tx[];
+  recents: Recipient[];
+  /** phone -> address seen on the first transfer; a different answer later is flagged. */
+  pins: Record<string, Address>;
+  alerts: boolean;
+  gateway: 'auto' | 'india' | 'international';
+};
+
+const initial: State = {
+  hydrated: false,
+  network: DEFAULT_NETWORK,
+  account: {},
+  inr: DEFAULT_INR_PER_USD,
+  activity: [],
+  recents: [],
+  pins: {},
+  alerts: true,
+  gateway: 'auto',
+};
+
+const STATE_KEY = 'ender:state:v1';
+const TOKEN_KEY = 'ender.token';
+
+let state = initial;
+const listeners = new Set<() => void>();
+
+export const getState = () => state;
+
+export const setState = (patch: Partial<State> | ((s: State) => Partial<State>)) => {
+  const next = typeof patch === 'function' ? patch(state) : patch;
+  const tokenChanged = 'token' in next && next.token !== state.token;
+  state = { ...state, ...next };
+  listeners.forEach((l) => l());
+  if (!state.hydrated) return;
+  const { hydrated: _h, token, ...persisted } = state;
+  void AsyncStorage.setItem(STATE_KEY, JSON.stringify(persisted));
+  if (tokenChanged) void (token ? SecureStore.setItemAsync(TOKEN_KEY, token) : SecureStore.deleteItemAsync(TOKEN_KEY));
+};
+
+export const useStore = <T,>(select: (s: State) => T): T =>
+  useSyncExternalStore(
+    (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+    () => select(state),
+  );
+
+export const hydrate = async () => {
+  try {
+    const [raw, token] = await Promise.all([AsyncStorage.getItem(STATE_KEY), SecureStore.getItemAsync(TOKEN_KEY)]);
+    let saved = raw ? (JSON.parse(raw) as Partial<State>) : {};
+    let seededToken: string | undefined;
+    // Dev builds only (dropped from release bundles): start logged in as a test wallet, for emulators
+    // without a passkey. Public data and a local-gateway token only; never a key.
+    if (__DEV__ && !saved.wallet && process.env.EXPO_PUBLIC_DEV_SEED) {
+      const seed = JSON.parse(process.env.EXPO_PUBLIC_DEV_SEED) as Partial<State>;
+      seededToken = seed.token;
+      saved = { ...saved, ...seed };
+    }
+    state = { ...initial, ...saved, token: token ?? seededToken, hydrated: true };
+  } catch {
+    state = { ...initial, hydrated: true };
+  }
+  listeners.forEach((l) => l());
+};
+
+/** Fresh device semantics: forget everything local. The wallet comes back from the passkey. */
+export const signOut = async () => {
+  await Promise.all([AsyncStorage.removeItem(STATE_KEY), SecureStore.deleteItemAsync(TOKEN_KEY)]);
+  state = { ...initial, hydrated: true };
+  listeners.forEach((l) => l());
+};
+
+// ---------------------------------------------------------------- helpers
+
+export const upsertTx = (tx: Partial<Tx> & Pick<Tx, 'id'>) =>
+  setState((s) => {
+    const i = s.activity.findIndex((t) => t.id === tx.id);
+    if (i < 0) return { activity: [tx as Tx, ...s.activity].slice(0, 200) };
+    const activity = [...s.activity];
+    activity[i] = { ...activity[i]!, ...tx };
+    return { activity };
+  });
+
+export const rememberRecipient = (r: Omit<Recipient, 'lastUsed'>) =>
+  setState((s) => {
+    const address = r.address.toLowerCase() as Address;
+    const prev = s.recents.find((x) => x.address === address);
+    const merged: Recipient = { ...prev, ...r, address, lastUsed: Date.now() };
+    return {
+      recents: [merged, ...s.recents.filter((x) => x.address !== address)].slice(0, 20),
+      pins: r.phone && !s.pins[r.phone] ? { ...s.pins, [r.phone]: address } : s.pins,
+    };
+  });
+
+export const labelFor = (address: string, s: State = state) => {
+  const r = s.recents.find((x) => x.address === address.toLowerCase());
+  return r?.name ?? r?.phone;
+};
