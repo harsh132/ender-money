@@ -7,10 +7,11 @@ import { AUSD_DECIMALS } from '../../../protocol/networks';
 import { normalizePhone } from '../../../protocol/sms';
 import { MAX_FEE } from '../lib/config';
 import { phoneDisplay, short, usd } from '../lib/format';
-import { whileOwnScreen } from '../lib/keys';
+import { quickSend, whileOwnScreen } from '../lib/keys';
 import { useStore, type Recipient } from '../lib/store';
 import { c, f } from '../lib/theme';
-import { Back, Person, Scan } from '../ui/icons';
+import { Back, Bolt, Person, Scan } from '../ui/icons';
+import { useQuickSend } from '../ui/useQuickSend';
 import { Avatar, BackHeader, Banner, Button, Chip, Field, Screen, T } from '../ui/kit';
 
 export type To = { to: string; toAddress?: Address; phone?: string; label?: string };
@@ -47,6 +48,15 @@ export default function Send() {
     if (params.amount) setAmount(params.amount);
   }
 
+  const quickMin = useQuickSend();
+  const chips =
+    network === 'testnet' || quickMin ? (
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        {quickMin ? <Chip label={`Quick send · ${quickMin} min`} icon={<Bolt size={14} color={c.accent} />} onPress={quickSend.end} /> : null}
+        {network === 'testnet' ? <Chip label="Test" tone="warning" /> : null}
+      </View>
+    ) : undefined;
+
   const typed = useMemo(() => parseRecipient(text), [text]);
   const labelled = (t: To): To => {
     const known = recents.find((r) => (t.phone ? r.phone === t.phone : r.address === t.toAddress));
@@ -82,7 +92,7 @@ export default function Send() {
     const name = to.label ?? (to.phone ? phoneDisplay(to.phone) : short(to.to));
     return (
       <Screen>
-        <BackHeader title="Send" right={network === 'testnet' ? <Chip label="Test mode" tone="warning" /> : undefined} />
+        <BackHeader title="Send" right={chips} />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, paddingHorizontal: 16, borderRadius: 20, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line }}>
           <Avatar label={name} size={44} />
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -151,7 +161,7 @@ export default function Send() {
   // ------------------------------------------------------------ recipient step
   return (
     <Screen>
-      <BackHeader title="Send" right={network === 'testnet' ? <Chip label="Test mode" tone="warning" /> : undefined} />
+      <BackHeader title="Send" right={chips} />
       <Field
         autoFocus
         value={text}
