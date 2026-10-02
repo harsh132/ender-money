@@ -151,10 +151,10 @@ export const Chip = ({
     <Pressable
       onPress={onPress}
       disabled={!onPress}
-      style={[s.chip, small && { minHeight: 30, paddingVertical: 4, paddingHorizontal: 11, gap: 6 }, tone === 'warning' && { borderColor: 'rgba(232,182,92,0.35)' }]}
+      style={[s.chip, small && { minHeight: 26, paddingVertical: 3, paddingHorizontal: 10, gap: 5 }, tone === 'warning' && { borderColor: 'rgba(232,182,92,0.35)' }]}
     >
-      {icon ?? <View style={[s.dot, { backgroundColor: color }, small && { width: 6, height: 6, borderRadius: 3 }]} />}
-      <Text style={{ fontFamily: f.uiMedium, fontSize: small ? 13 : 14, lineHeight: small ? 18 : 20, color, flexShrink: 1 }}>{label}</Text>
+      {icon ?? <View style={[s.dot, { backgroundColor: color }, small && { width: 5, height: 5, borderRadius: 2.5 }]} />}
+      <Text style={{ fontFamily: f.uiMedium, fontSize: small ? 12 : 14, lineHeight: small ? 16 : 20, color, flexShrink: 1 }}>{label}</Text>
     </Pressable>
   );
 };

@@ -111,7 +111,7 @@ export default function Settings() {
         <Label>Network</Label>
         <Group>
           <Row
-            title="Test mode"
+            title="Testnet mode"
             sub={network === 'testnet' ? 'Monad testnet. Test money only.' : 'Off: real money on Monad.'}
             right={
               <Switch
