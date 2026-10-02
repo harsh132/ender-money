@@ -6,6 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
+  "routes": [{ "pattern": "api.ender.money", "custom_domain": true }],
+
   "vars": {
     "FEE_AUSD": "0.001"
   },
@@ -15,7 +17,7 @@
   "triggers": { "crons": ["* * * * *"] },
 
   "d1_databases": [
-    { "binding": "DB", "database_name": "ender-money", "database_id": "local-only", "migrations_dir": "migrations" }
+    { "binding": "DB", "database_name": "ender-money", "database_id": "a708e05c-85c9-4fd4-ac91-01c36414f59f", "migrations_dir": "migrations" }
   ],
 
   "durable_objects": {

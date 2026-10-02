@@ -4,7 +4,7 @@
  *
  *   bun run fake-relay "<from>" "<text>" [--gateway ws://127.0.0.1:8787]
  *
- * Reads RELAY_TOKEN from gateway/.dev.vars.
+ * Uses $RELAY_TOKEN, else RELAY_TOKEN from gateway/.dev.vars.
  */
 import { readFileSync } from 'node:fs';
 
@@ -12,7 +12,7 @@ const args = process.argv.slice(2);
 const gi = args.indexOf('--gateway');
 const base = gi >= 0 ? args.splice(gi, 2)[1]! : 'ws://127.0.0.1:8787';
 const [from = '+919800000001', body = 'SYNC T'] = args;
-const token = /^RELAY_TOKEN=(.+)$/m.exec(readFileSync('gateway/.dev.vars', 'utf8'))?.[1]?.trim();
+const token = process.env.RELAY_TOKEN ?? /^RELAY_TOKEN=(.+)$/m.exec(readFileSync('gateway/.dev.vars', 'utf8'))?.[1]?.trim();
 if (!token) throw new Error('RELAY_TOKEN missing from gateway/.dev.vars');
 
 const id = crypto.randomUUID();
