@@ -69,7 +69,7 @@ export default function Home() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={pull} tintColor={c.accent} colors={[c.accent]} progressBackgroundColor={c.surface} />}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, height: 64 }}>
-          <Sigil address={wallet.address} fallback="E" size={44} fill={0.7} />
+          <Sigil address={wallet.address} fallback="E" size={44} fill={28 / 44} />
           <T v="title" style={{ flex: 1 }}>Home</T>
           <IconButton label="Scan a code" onPress={() => router.push('/scan')}>
             <Scan size={24} />
