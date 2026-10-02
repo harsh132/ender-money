@@ -239,6 +239,9 @@ on first use), an address, or a QR scan.
   user's own phone with a short invite text. No money moves. Holding funds
   for unregistered numbers (escrow and claim) is out of scope.
 - Numbers are normalised to E.164 on both sides before lookup.
+- **Privacy (planned):** a number resolves to a per-payer stealth address
+  instead of the recipient's main wallet, so looking numbers up reveals
+  nothing on-chain. Scoped in [docs/stealth.md](docs/stealth.md).
 
 ## Signing sessions (Mera)
 
