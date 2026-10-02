@@ -1,0 +1,13 @@
+{
+  "name": "anoma-spike",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@anomaorg/anoma-app-sdk": "1.2.0",
+    "viem": "2.53.1",
+    "zod": "4.1.13"
+  },
+  "overrides": {
+    "@anomaorg/arm-bindings": "0.3.1"
+  }
+}

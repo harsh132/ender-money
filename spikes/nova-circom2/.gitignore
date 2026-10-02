@@ -1,0 +1,11 @@
+node_modules/
+bin/
+lib/
+build/
+out/
+cache/
+contracts/generated/
+*.zkey
+*.ptau
+*.r1cs
+*.wtns

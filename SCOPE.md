@@ -327,6 +327,9 @@ feature phones, voice/MMS transport, multiple gateways per country,
 production scale, light theme, Calibur's extra features (P256/WebAuthn
 keys, hooks, 4337), on-chain session keys (Quick send scope is enforced in
 the app), Aurora deposits (deferred, see Bounties).
+Private balances (shielded pool): researched and spiked, not built; see
+[docs/shielded-pool.md](docs/shielded-pool.md) for the options and the
+target design.
 
 ## Repo layout
 

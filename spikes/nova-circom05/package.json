@@ -1,0 +1,20 @@
+{
+  "name": "nova-circom05-spike",
+  "private": true,
+  "license": "ISC",
+  "dependencies": {
+    "circom": "0.5.45",
+    "circomlib": "git+https://github.com/tornadocash/circomlib.git#d20d53411d1bef61f38c99a8b36d5d0cc4836aa1",
+    "snarkjs": "git+https://github.com/tornadocash/snarkjs.git#f37f146948f3b28086493e71512006b030588fc2",
+    "ffjavascript": "0.2.38",
+    "fixed-merkle-tree": "0.5.1",
+    "eth-sig-util": "3.0.1",
+    "ethers": "5.7.2"
+  },
+  "scripts": {
+    "circuits": "circom -v -r build/transaction2.r1cs -w build/transaction2.wasm -s build/transaction2.sym circuits/transaction2.circom && circom -v -r build/transaction16.r1cs -w build/transaction16.wasm -s build/transaction16.sym circuits/transaction16.circom",
+    "setup": "node scripts/setup.js 17",
+    "contracts": "cd contracts && forge build && forge test",
+    "e2e": "node scripts/e2e.js"
+  }
+}

@@ -140,6 +140,23 @@ write-up.
 4. Scan + alerts on stealth addresses; delegate-on-next-approval.
 5. SMS: `src=` in the quote, `SIG` per source.
 
+## Relation to the shielded pool
+
+Stealth addresses are the hackathon answer to number lookups. Two later designs
+in [shielded-pool.md](shielded-pool.md) overlap with them:
+
+- **Shielded pool:** a number would resolve to a shielded address, an off-chain
+  identifier that never appears on-chain, so Ender-to-Ender payments online
+  need no stealth addresses at all. With the split-key design, private payments
+  also work offline in one SMS; otherwise stealth addresses stay as the offline
+  path.
+- **Burn addresses (Option C):** replace stealth addresses for receiving.
+  Received money is claimed into one place, so spending never needs several
+  sources or several `SIG` texts.
+
+Remaining stealth leaks (addresses spent together in one batch; a payer and
+payee comparing notes) are what the pool closes.
+
 ## Decided
 
 - Per-pair addresses (one per payer), not one per payment: fewer sources means

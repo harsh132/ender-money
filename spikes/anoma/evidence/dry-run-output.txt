@@ -1,0 +1,576 @@
+
+=== Monad config (backend)
+{
+  "enabled": true,
+  "testnet": false,
+  "protocolAdapter": "0x2D2Fa19aFdbb20DC73737ca5f075cfAE00Cd90C2",
+  "forwarder": "0x23dc44e1a1c3d5432eec8a1c027e22ccdc0a8f54",
+  "baseFee": 390000,
+  "resourceFee": 78000,
+  "percentageFee": 0,
+  "tokens": [
+    "USDC",
+    "WETH",
+    "USDT0",
+    "WMON"
+  ],
+  "ausdListed": false
+}
+
+=== Alice (sender) pay address
+3VbAvGCx2J9Qo1VvdyaH1ovVt9mGMXeUcNCkAM7PFY8V72E29NZmCUGgsPm9bcpDjTsPzY4esMEbgmGDVLesE6ju3Vj8PLk3eCEvLb8feF2pCmxmQX9Je5QMkvTvikMY29voAB4z1KpZk81qHTqGtH6i1xtuvixoENFu538wqWkZakWHo3tuDgVY
+(length 184 chars)
+
+=== Alice public keys (hex)
+{
+  "authorityPublicKey": "0x0282dbb08555c5a50f7af2f7fba37f4fed79e07098f48785751e8bbbcdb2e83dbd",
+  "discoveryPublicKey": "0x03a660d4f2cc4fdbc22d0b705153f4fcb1485d98850c3a3637fe1df8c990c07ae4",
+  "encryptionPublicKey": "0x0224717f9c7872da19ed92af323f0c65064377375600880b184e17c82e10f18d82",
+  "nullifierKeyCommitment": "0x278b3308a901699dbcbb65e8b341ace1f65a63ada7b41cbd033e0cdbac9389c5"
+}
+
+=== Bob (recipient) pay address
+4hELvZR7nPPSS8S6nQAwYrmaERdbQw26VTnMqDn7ikhzJCokocNqWR5QMcV5RxUcujVzQYDJWWj1HCa9uJBgEp51d3PhhzUCbDkH2Up7QovAguSXbtbjFr48Js8Q9acu9yUTobgAChpc5kadMUchZXB7AMrmicbS7Bp9biMzTk3VZB62tkxbF4Rw
+
+=== Throwaway EVM wallet
+0xe77359631b24876cA07634d3e1801f29e12f7cCB
+
+
+##################### AUSD (0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a) #####################
+
+=== WRAP 0.01 AUSD: what the EVM wallet signs (EIP-712 Permit2 PermitWitnessTransferFrom)
+{
+  "domain": {
+    "name": "Permit2",
+    "chainId": 143,
+    "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+  },
+  "types": {
+    "PermitWitnessTransferFrom": [
+      {
+        "name": "permitted",
+        "type": "TokenPermissions"
+      },
+      {
+        "name": "spender",
+        "type": "address"
+      },
+      {
+        "name": "nonce",
+        "type": "uint256"
+      },
+      {
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
+        "name": "witness",
+        "type": "Witness"
+      }
+    ],
+    "TokenPermissions": [
+      {
+        "name": "token",
+        "type": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "Witness": [
+      {
+        "name": "actionTreeRoot",
+        "type": "bytes32"
+      }
+    ]
+  },
+  "primaryType": "PermitWitnessTransferFrom",
+  "message": {
+    "permitted": {
+      "token": "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a",
+      "amount": "10000"
+    },
+    "spender": "0x23dc44e1a1c3d5432eec8a1c027e22ccdc0a8f54",
+    "nonce": "73161991336017216442787670482805811829903431061920504782259538695528101515107",
+    "deadline": "1790977742",
+    "witness": {
+      "actionTreeRoot": "0xb14aac24866d47abc35076ee16483b99f3fda2b8af35eca5cfba3a0554f91caf"
+    }
+  }
+}
+
+=== WRAP: EIP-712 digest / signature
+{
+  "digest": "0x69addba1703f026d1533b953012b5115f32c4927258fcfd48af5d5d2467baef7",
+  "signatureBytes": 65,
+  "actionTreeRoot": "0xb14aac24866d47abc35076ee16483b99f3fda2b8af35eca5cfba3a0554f91caf"
+}
+
+=== WRAP: body that WOULD be POSTed to https://pay.prod.heliax.app/api/v1/transactions/monad (NOT sent)
+{
+  "consumedResources": [
+    {
+      "nullifierKey": "wj57q+vk1nKBygBPKKWFhgDFO9/H5C+YSeRSNSvFaDc=",
+      "witnessData": {
+        "TokenTransferEphemeralWrap": {
+          "permit2Data": {
+            "deadline": 1790977742,
+            "nonce": "ocA4OpnXygmdy/HRmXWRYKbHRscAf876ihheOOmBD2M=",
+            "signature": "ZCXa/nG9F8+DYZ1mUMNV4XkpA24gDQGSrufM9yAK…(88 chars)"
+          },
+          "senderWalletAddress": "0xe77359631b24876cA07634d3e1801f29e12f7cCB",
+          "tokenContractAddress": "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a"
+        }
+      },
+      "resource": {
+        "is_ephemeral": true,
+        "quantity": "10000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "/RBfANY18EjZbeqIDONz9l2bdtnlq8QLn77KQOgJlqU=",
+        "value_ref": "53NZYxskh2ygdjTT4YAfKeEvfMsAAAAAAAAAAAAAAAA=",
+        "nonce": "lTOY9kI+MGIALtxh/WX18zqT0eVXAcmMUubf6hhfcgc=",
+        "rand_seed": "7x0YQIVIHdfNWEp4vSDX5LpjcaEEfsL5c1PqhnnG+6Y=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    }
+  ],
+  "createdResources": [
+    {
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "receiverDiscoveryPublicKey": "IjAzQTY2MEQ0RjJDQzRGREJDMjJEMEI3MDUxNTNG…(92 chars)",
+          "receiverEncryptionPublicKey": "IjAyMjQ3MTdGOUM3ODcyREExOUVEOTJBRjMyM0Yw…(92 chars)",
+          "receiverAuthorizationVerifyingKey": "IjAyODJEQkIwODU1NUM1QTUwRjdBRjJGN0ZCQTM3…(92 chars)",
+          "tokenContractAddress": "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "10000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "/RBfANY18EjZbeqIDONz9l2bdtnlq8QLn77KQOgJlqU=",
+        "value_ref": "q1Tc2LRWpLGlTr+pqgR/ONp21zhKJQ/IidmGtpebj3E=",
+        "nonce": "TF3Kb6zjdTX7XOyF/5qHwgywl0U+nTImpvknsyQNHUs=",
+        "rand_seed": "i6nlpr4gwOPkehLPj2xH6JvEr4afOtpQfPWLiuqIlZ8=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    }
+  ]
+}
+
+=== PRIVATE TRANSFER 0.005 AUSD Alice -> Bob: actions Alice's authority key signs (nullifier, commitment pairs)
+[
+  "efc2ed8d45d53e9085c21867bad08eb1291e2160ab1a04929097bfb07623d1d8",
+  "b710c96d36d143a0e6630bcf413ff86838a09e3cb02c94cf841304c4031a47f5",
+  "7395c9959e9df0b802260c4cc1028940c7c662f383e9a312e88358b042ee3354",
+  "6bc663de48c2b89d07a10b2889fc619b8ed0a2204aad97d4bf70a4096e55b6bc"
+]
+
+=== TRANSFER: authority signature
+{
+  "domain": "TokenTransferAuthorization",
+  "scheme": "secp256k1 over MerkleTree(actions) root (arm-bindings AuthoritySigningKey.authorize)",
+  "signatureBytes": 64,
+  "consumed": 2,
+  "created": 2,
+  "bodyBytes": 3237
+}
+
+=== TRANSFER: body that WOULD be POSTed (NOT sent) — note consumedResources[].nullifierKey is Alice's nk in cleartext
+{
+  "consumedResources": [
+    {
+      "nullifierKey": "wj57q+vk1nKBygBPKKWFhgDFO9/H5C+YSeRSNSvFaDc=",
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "senderAuthorizationSignature": "/hiEBgpyKdEKL3LZ5dyQgBk/I3wYxfmlYJ5f+MDu…(88 chars)",
+          "senderAuthorizationVerifyingKey": "IjAyODJEQkIwODU1NUM1QTUwRjdBRjJGN0ZCQTM3…(92 chars)",
+          "senderEncryptionPublicKey": "IjAyMjQ3MTdGOUM3ODcyREExOUVEOTJBRjMyM0Yw…(92 chars)"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "10000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "/RBfANY18EjZbeqIDONz9l2bdtnlq8QLn77KQOgJlqU=",
+        "value_ref": "q1Tc2LRWpLGlTr+pqgR/ONp21zhKJQ/IidmGtpebj3E=",
+        "nonce": "TF3Kb6zjdTX7XOyF/5qHwgywl0U+nTImpvknsyQNHUs=",
+        "rand_seed": "i6nlpr4gwOPkehLPj2xH6JvEr4afOtpQfPWLiuqIlZ8=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    },
+    {
+      "nullifierKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "witnessData": {
+        "TrivialEphemeral": {}
+      },
+      "resource": {
+        "is_ephemeral": true,
+        "quantity": "0",
+        "logic_ref": "IfzC/CwH+XU0BdMHDySIxnOJ99eXtvbiCp8lKf5KC/8=",
+        "label_ref": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "value_ref": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "nonce": "8IobSJ65c+R74qpERq6HZXFmrqMsGxYYy8B14sV6VrM=",
+        "rand_seed": "pJ6ON6Iuv2Xzei4xFalOfMvebK9s1NCFT0fCGmqxD/I=",
+        "nk_commitment": "Zmh6rfhivXdsj8GLjp+OIAiXFIVu4jOzkCpZHQ1fKSU="
+      }
+    }
+  ],
+  "createdResources": [
+    {
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "receiverDiscoveryPublicKey": "IjAyRDI1MzE4Mzg3Mjc4ODIxOTlFQUJCN0JEMjkx…(92 chars)",
+          "receiverEncryptionPublicKey": "IjAzQUMxQUMxQ0NDQjI3NjkwM0UwNkM4NTQ0M0ZB…(92 chars)",
+          "receiverAuthorizationVerifyingKey": "IjAzQjg3RDFFNUNCMTBEMDhBRDdCOTRGQTVBMEND…(92 chars)",
+          "tokenContractAddress": "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "5000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "/RBfANY18EjZbeqIDONz9l2bdtnlq8QLn77KQOgJlqU=",
+        "value_ref": "2Km7l7FMamZnMqg6/EPtdp2/5OoPg+W1rZTW+b6ZrGw=",
+        "nonce": "78LtjUXVPpCFwhhnutCOsSkeIWCrGgSSkJe/sHYj0dg=",
+        "rand_seed": "7RXyM3iKerijlCnimWKpst7FibfH3Hr2tk/gpVvSHIU=",
+        "nk_commitment": "wnV83q+WYXiO6dCAVKTQHTUyFP7vAUQzbA3tAhD4d1E="
+      }
+    },
+    {
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "receiverDiscoveryPublicKey": "IjAzQTY2MEQ0RjJDQzRGREJDMjJEMEI3MDUxNTNG…(92 chars)",
+          "receiverEncryptionPublicKey": "IjAyMjQ3MTdGOUM3ODcyREExOUVEOTJBRjMyM0Yw…(92 chars)",
+          "receiverAuthorizationVerifyingKey": "IjAyODJEQkIwODU1NUM1QTUwRjdBRjJGN0ZCQTM3…(92 chars)",
+          "tokenContractAddress": "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "5000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "/RBfANY18EjZbeqIDONz9l2bdtnlq8QLn77KQOgJlqU=",
+        "value_ref": "q1Tc2LRWpLGlTr+pqgR/ONp21zhKJQ/IidmGtpebj3E=",
+        "nonce": "c5XJlZ6d8LgCJgxMwQKJQMfGYvOD6aMS6INYsELuM1Q=",
+        "rand_seed": "xcDGrKcLvKz2yEibt+cayDKMrz43Xx3oBFz9dLA9QNg=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    }
+  ]
+}
+
+=== UNWRAP 0.005 AUSD -> 0xe77359631b24876cA07634d3e1801f29e12f7cCB
+{
+  "actions": 4,
+  "signatureBytes": 64,
+  "createdWitness": [
+    "TokenTransferEphemeralUnwrap",
+    "TokenTransferPersistent"
+  ],
+  "bodyBytes": 2930
+}
+
+=== estimate-fee (read-only quote) feeToken=AUSD, tx=transfer
+{
+  "status": 400,
+  "body": "{\"error\":\"Fee estimation failed\",\"status\":400}"
+}
+
+=== estimate-fee (read-only quote) feeToken=AUSD, tx=unwrap
+{
+  "status": 400,
+  "body": "{\"error\":\"Fee estimation failed\",\"status\":400}"
+}
+
+=== estimate-fee (read-only quote) feeToken=AUSD, tx=wrap
+{
+  "status": 400,
+  "body": "{\"error\":\"Fee estimation failed\",\"status\":400}"
+}
+
+
+##################### USDC (0x754704bc059f8c67012fed69bc8a327a5aafb603) #####################
+
+=== WRAP 0.01 USDC: what the EVM wallet signs (EIP-712 Permit2 PermitWitnessTransferFrom)
+{
+  "domain": {
+    "name": "Permit2",
+    "chainId": 143,
+    "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+  },
+  "types": {
+    "PermitWitnessTransferFrom": [
+      {
+        "name": "permitted",
+        "type": "TokenPermissions"
+      },
+      {
+        "name": "spender",
+        "type": "address"
+      },
+      {
+        "name": "nonce",
+        "type": "uint256"
+      },
+      {
+        "name": "deadline",
+        "type": "uint256"
+      },
+      {
+        "name": "witness",
+        "type": "Witness"
+      }
+    ],
+    "TokenPermissions": [
+      {
+        "name": "token",
+        "type": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "Witness": [
+      {
+        "name": "actionTreeRoot",
+        "type": "bytes32"
+      }
+    ]
+  },
+  "primaryType": "PermitWitnessTransferFrom",
+  "message": {
+    "permitted": {
+      "token": "0x754704bc059f8c67012fed69bc8a327a5aafb603",
+      "amount": "10000"
+    },
+    "spender": "0x23dc44e1a1c3d5432eec8a1c027e22ccdc0a8f54",
+    "nonce": "20808516555555612563440853019579027493168438043650101793244585684542496087085",
+    "deadline": "1790977744",
+    "witness": {
+      "actionTreeRoot": "0x8f778585d43effd6ec3c5b5f0da3b11d4a88b80c0ea70fe83f96120ede910fdb"
+    }
+  }
+}
+
+=== WRAP: EIP-712 digest / signature
+{
+  "digest": "0xa02bd7fa839c2705b28b6cef6ab8e716b189510e9e3d6ebb87da5c8f6a99a976",
+  "signatureBytes": 65,
+  "actionTreeRoot": "0x8f778585d43effd6ec3c5b5f0da3b11d4a88b80c0ea70fe83f96120ede910fdb"
+}
+
+=== WRAP: body that WOULD be POSTed to https://pay.prod.heliax.app/api/v1/transactions/monad (NOT sent)
+{
+  "consumedResources": [
+    {
+      "nullifierKey": "wj57q+vk1nKBygBPKKWFhgDFO9/H5C+YSeRSNSvFaDc=",
+      "witnessData": {
+        "TokenTransferEphemeralWrap": {
+          "permit2Data": {
+            "deadline": 1790977744,
+            "nonce": "LgEz9/IK68R8AkAdmVNtTh9aW59dpWlIs2pDAX/anC0=",
+            "signature": "Uzsj01iOmC9Iw3JKsT99feDC+Cp897bUmA9ZeX9k…(88 chars)"
+          },
+          "senderWalletAddress": "0xe77359631b24876cA07634d3e1801f29e12f7cCB",
+          "tokenContractAddress": "0x754704bc059f8c67012fed69bc8a327a5aafb603"
+        }
+      },
+      "resource": {
+        "is_ephemeral": true,
+        "quantity": "10000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "cbLyjImRO7tnJxliX9Y65Fko2jlymo8rMPo2/ZNQ2S8=",
+        "value_ref": "53NZYxskh2ygdjTT4YAfKeEvfMsAAAAAAAAAAAAAAAA=",
+        "nonce": "B1uY6uIfgi/2pRri6e9vZiqDfnSZ6wBFNPCpjPc+ask=",
+        "rand_seed": "390Ihp9RbI3sruTJhWo8EXROqUexu1nuE/THFND42KE=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    }
+  ],
+  "createdResources": [
+    {
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "receiverDiscoveryPublicKey": "IjAzQTY2MEQ0RjJDQzRGREJDMjJEMEI3MDUxNTNG…(92 chars)",
+          "receiverEncryptionPublicKey": "IjAyMjQ3MTdGOUM3ODcyREExOUVEOTJBRjMyM0Yw…(92 chars)",
+          "receiverAuthorizationVerifyingKey": "IjAyODJEQkIwODU1NUM1QTUwRjdBRjJGN0ZCQTM3…(92 chars)",
+          "tokenContractAddress": "0x754704bc059f8c67012fed69bc8a327a5aafb603"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "10000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "cbLyjImRO7tnJxliX9Y65Fko2jlymo8rMPo2/ZNQ2S8=",
+        "value_ref": "q1Tc2LRWpLGlTr+pqgR/ONp21zhKJQ/IidmGtpebj3E=",
+        "nonce": "eagmfu4+VdT//+ZkTXxU9Pc55TXPmcOrHcy2qNQGbq4=",
+        "rand_seed": "Ve+3ibhu/qLp5Tu9GzS/EJq4ninjk+LgvRILebS3eHI=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    }
+  ]
+}
+
+=== PRIVATE TRANSFER 0.005 USDC Alice -> Bob: actions Alice's authority key signs (nullifier, commitment pairs)
+[
+  "34708d072dbacc9a95a268fd2d2458a4bde41fdb646c85cf83af4d393fb57ea3",
+  "9ef2360491d1a4e834f9a19d7349bb91a60f3ae16e925cc7381f8ecc68067001",
+  "fa3797a419f342971dc2f77b6bac727a508602b41cbeba4b551a9efb217fa940",
+  "649e460130919311b4c943abd23411113363cd5d9b78a29a0c9acb87fd134ffc"
+]
+
+=== TRANSFER: authority signature
+{
+  "domain": "TokenTransferAuthorization",
+  "scheme": "secp256k1 over MerkleTree(actions) root (arm-bindings AuthoritySigningKey.authorize)",
+  "signatureBytes": 64,
+  "consumed": 2,
+  "created": 2,
+  "bodyBytes": 3237
+}
+
+=== TRANSFER: body that WOULD be POSTed (NOT sent) — note consumedResources[].nullifierKey is Alice's nk in cleartext
+{
+  "consumedResources": [
+    {
+      "nullifierKey": "wj57q+vk1nKBygBPKKWFhgDFO9/H5C+YSeRSNSvFaDc=",
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "senderAuthorizationSignature": "XD1plEDApebA+GHJ6DTeUZphGmqrN7ZBGcM8ZL3c…(88 chars)",
+          "senderAuthorizationVerifyingKey": "IjAyODJEQkIwODU1NUM1QTUwRjdBRjJGN0ZCQTM3…(92 chars)",
+          "senderEncryptionPublicKey": "IjAyMjQ3MTdGOUM3ODcyREExOUVEOTJBRjMyM0Yw…(92 chars)"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "10000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "cbLyjImRO7tnJxliX9Y65Fko2jlymo8rMPo2/ZNQ2S8=",
+        "value_ref": "q1Tc2LRWpLGlTr+pqgR/ONp21zhKJQ/IidmGtpebj3E=",
+        "nonce": "eagmfu4+VdT//+ZkTXxU9Pc55TXPmcOrHcy2qNQGbq4=",
+        "rand_seed": "Ve+3ibhu/qLp5Tu9GzS/EJq4ninjk+LgvRILebS3eHI=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    },
+    {
+      "nullifierKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "witnessData": {
+        "TrivialEphemeral": {}
+      },
+      "resource": {
+        "is_ephemeral": true,
+        "quantity": "0",
+        "logic_ref": "IfzC/CwH+XU0BdMHDySIxnOJ99eXtvbiCp8lKf5KC/8=",
+        "label_ref": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "value_ref": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "nonce": "So7HZAMciNrWjwge38JP0K5IRYOMHsBFsQES0XVAdBE=",
+        "rand_seed": "EBicbyZPpT7ar6mneDSHknhEFYugbZHyrBMhbqr5uAE=",
+        "nk_commitment": "Zmh6rfhivXdsj8GLjp+OIAiXFIVu4jOzkCpZHQ1fKSU="
+      }
+    }
+  ],
+  "createdResources": [
+    {
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "receiverDiscoveryPublicKey": "IjAyRDI1MzE4Mzg3Mjc4ODIxOTlFQUJCN0JEMjkx…(92 chars)",
+          "receiverEncryptionPublicKey": "IjAzQUMxQUMxQ0NDQjI3NjkwM0UwNkM4NTQ0M0ZB…(92 chars)",
+          "receiverAuthorizationVerifyingKey": "IjAzQjg3RDFFNUNCMTBEMDhBRDdCOTRGQTVBMEND…(92 chars)",
+          "tokenContractAddress": "0x754704bc059f8c67012fed69bc8a327a5aafb603"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "5000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "cbLyjImRO7tnJxliX9Y65Fko2jlymo8rMPo2/ZNQ2S8=",
+        "value_ref": "2Km7l7FMamZnMqg6/EPtdp2/5OoPg+W1rZTW+b6ZrGw=",
+        "nonce": "NHCNBy26zJqVomj9LSRYpL3kH9tkbIXPg69NOT+1fqM=",
+        "rand_seed": "ObWBdIQWtDA1Vyh4H7T/ksbmm1nKoQNfBe8jGLgMRNo=",
+        "nk_commitment": "wnV83q+WYXiO6dCAVKTQHTUyFP7vAUQzbA3tAhD4d1E="
+      }
+    },
+    {
+      "witnessData": {
+        "TokenTransferPersistent": {
+          "receiverDiscoveryPublicKey": "IjAzQTY2MEQ0RjJDQzRGREJDMjJEMEI3MDUxNTNG…(92 chars)",
+          "receiverEncryptionPublicKey": "IjAyMjQ3MTdGOUM3ODcyREExOUVEOTJBRjMyM0Yw…(92 chars)",
+          "receiverAuthorizationVerifyingKey": "IjAyODJEQkIwODU1NUM1QTUwRjdBRjJGN0ZCQTM3…(92 chars)",
+          "tokenContractAddress": "0x754704bc059f8c67012fed69bc8a327a5aafb603"
+        }
+      },
+      "resource": {
+        "is_ephemeral": false,
+        "quantity": "5000",
+        "logic_ref": "vBIyNmjDfD04HKeY8REW81+xY50SI5sp2ngQ3zmF560=",
+        "label_ref": "cbLyjImRO7tnJxliX9Y65Fko2jlymo8rMPo2/ZNQ2S8=",
+        "value_ref": "q1Tc2LRWpLGlTr+pqgR/ONp21zhKJQ/IidmGtpebj3E=",
+        "nonce": "+jeXpBnzQpcdwvd7a6xyelCGArQcvrpLVRqe+yF/qUA=",
+        "rand_seed": "I0384nzio7nUfmmtfiWujK6plI+s+G+iVHTjhZIszVU=",
+        "nk_commitment": "J4szCKkBaZ28u2Xos0Gs4fZaY62ntBy9Az4M26yTicU="
+      }
+    }
+  ]
+}
+
+=== UNWRAP 0.005 USDC -> 0xe77359631b24876cA07634d3e1801f29e12f7cCB
+{
+  "actions": 4,
+  "signatureBytes": 64,
+  "createdWitness": [
+    "TokenTransferEphemeralUnwrap",
+    "TokenTransferPersistent"
+  ],
+  "bodyBytes": 2930
+}
+
+=== estimate-fee (read-only quote) feeToken=USDC, tx=transfer
+{
+  "status": 200,
+  "body": "{\"percentageFee\":\"0\",\"baseFee\":\"2297\",\"token\":{\"name\":\"USD Coin\",\"symbol\":\"USDC\",\"decimals\":6}}"
+}
+
+=== estimate-fee (read-only quote) feeToken=USDC, tx=unwrap
+{
+  "status": 200,
+  "body": "{\"percentageFee\":\"0\",\"baseFee\":\"2297\",\"token\":{\"name\":\"USD Coin\",\"symbol\":\"USDC\",\"decimals\":6}}"
+}
+
+=== estimate-fee (read-only quote) feeToken=USDC, tx=wrap
+{
+  "status": 200,
+  "body": "{\"percentageFee\":\"0\",\"baseFee\":\"0\",\"token\":{\"name\":\"USD Coin\",\"symbol\":\"USDC\",\"decimals\":6}}"
+}
+
+=== TRANSFER incl. fee 2297 (USDC base units)
+{
+  "consumed": 3,
+  "created": 3,
+  "tags": 6,
+  "bodyBytes": 4641,
+  "requote": {
+    "status": 200,
+    "body": "{\"percentageFee\":\"0\",\"baseFee\":\"2808\",\"token\":{\"name\":\"USD Coin\",\"symbol\":\"USDC\",\"decimals\":6}}"
+  }
+}
+
+=== UNWRAP incl. fee 2297
+{
+  "tags": 6,
+  "requote": {
+    "status": 200,
+    "body": "{\"percentageFee\":\"0\",\"baseFee\":\"2808\",\"token\":{\"name\":\"USD Coin\",\"symbol\":\"USDC\",\"decimals\":6}}"
+  }
+}
+
+=== Indexer GET /tags/<throwaway discovery sk>
+{
+  "status": 404,
+  "body": "{\"errors\":{\"detail\":\"Not Found\"}}",
+  "next": "STOP: example would POST /add_key {public_key, secret_key} — not called"
+}
+
+Done. Nothing was broadcast or submitted.

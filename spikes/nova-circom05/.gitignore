@@ -1,0 +1,12 @@
+node_modules/
+upstream/
+build/
+*.zkey
+*.ptau
+*.r1cs
+*.wasm
+*.sym
+*.wtns
+out/
+cache/
+contracts/lib/
