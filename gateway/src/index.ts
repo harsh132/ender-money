@@ -1,6 +1,7 @@
 import { isAddress, isHex, type Hex, type SignedAuthorization } from 'viem';
 import { isPhone } from '../../protocol/sms';
 import { isNetwork } from './chain';
+import { activity, scan, setAlerts } from './activity';
 import { createWallet, startAuth, verifyAuth, TOKEN_TTL_SECONDS } from './auth';
 import { account, delegate, GatewayError, quote, reconcile, sign, txStatus } from './core';
 import type { Env } from './env';
@@ -34,9 +35,26 @@ const sameSecret = (a: string, b: string) => {
   return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
 };
 
+/**
+ * Android hands passkeys for ender.money only to apps whose signing key is
+ * listed here. SHA-256 of the app's key (app/credentials/, never committed).
+ */
+const ASSET_LINKS = [
+  {
+    relation: ['delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds'],
+    target: {
+      namespace: 'android_app',
+      package_name: 'money.ender.app',
+      sha256_cert_fingerprints: ['9A:6B:FE:68:54:2E:86:CE:08:FC:DE:C9:B6:C7:7E:57:35:A0:26:78:28:40:5E:D6:BA:AD:D1:42:D5:14:E6:DE'],
+    },
+  },
+];
+
 const route = async (request: Request, env: Env): Promise<Response> => {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
+
+  if (url.pathname === '/.well-known/assetlinks.json') return json(ASSET_LINKS);
 
   // Per-IP limit on everything a stranger can hammer: OTP sends and transfers.
   if (/^\/(auth|tx|wallet)\//.test(url.pathname)) {
@@ -70,6 +88,18 @@ const route = async (request: Request, env: Env): Promise<Response> => {
       const network = url.searchParams.get('network') ?? undefined;
       if (network !== undefined && !isNetwork(network)) throw new GatewayError('bad-network');
       return json(await account(env, await phoneFrom(env, request), network));
+    }
+
+    case 'GET /activity': {
+      const phone = await phoneFrom(env, request);
+      const network = url.searchParams.get('network') ?? undefined;
+      if (network !== undefined && !isNetwork(network)) throw new GatewayError('bad-network');
+      return json(await activity(env, phone, network));
+    }
+
+    case 'POST /account/alerts': {
+      const phone = await phoneFrom(env, request);
+      return json(await setAlerts(env, phone, (await body<{ on?: unknown }>(request)).on));
     }
 
     case 'POST /tx/quote': {
@@ -141,6 +171,9 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(reconcile(env).catch((e) => console.error('cron: reconcile failed', e instanceof Error ? e.message : e)));
+    const log = (what: string) => (e: unknown) => console.error(`cron: ${what} failed`, e instanceof Error ? e.message : e);
+    ctx.waitUntil(
+      Promise.all([reconcile(env).catch(log('reconcile')), scan(env, 'mainnet').catch(log('scan mainnet')), scan(env, 'testnet').catch(log('scan testnet'))]),
+    );
   },
 } satisfies ExportedHandler<Env>;

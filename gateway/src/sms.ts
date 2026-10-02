@@ -33,7 +33,7 @@ export const handleInbound = async (env: Env, { from: rawFrom, body }: Inbound):
       }
       case 'send': {
         const q = await quote(env, from, { to: command.to, amount: command.amount, deliver: command.deliver });
-        return reply(env, from, { kind: 'quote', id: q.id, nonce: BigInt(q.nonce), expires: q.deadline, fee: q.fee, to: q.to });
+        return reply(env, from, { kind: 'quote', id: q.id, nonce: BigInt(q.nonce), expires: q.deadline, fee: q.fee, to: q.to, out: q.out });
       }
       case 'sig': {
         const r = await sign(env, from, command.id, command.signature);

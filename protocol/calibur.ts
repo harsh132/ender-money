@@ -22,6 +22,7 @@ export const caliburAbi = parseAbi([
 
 export const erc20Abi = parseAbi([
   'function transfer(address to, uint256 amount) returns (bool)',
+  'function approve(address spender, uint256 amount) returns (bool)',
   'function balanceOf(address owner) view returns (uint256)',
 ]);
 
@@ -32,6 +33,35 @@ export const isDelegatedToCalibur = (code: Hex | undefined) =>
 /** The recipient transfer, then the fee to the treasury, in one all-or-nothing batch. */
 export const transferWithFee = (token: Address, to: Address, amount: bigint, feeRecipient: Address, fee: bigint): Call[] => [
   { to: token, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to, amount] }) },
+  { to: token, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [feeRecipient, fee] }) },
+];
+
+/** Agora Instant Settlement pair (Uniswap-v2-style router surface) and its testnet whitelister. */
+export const pairAbi = parseAbi([
+  'function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)',
+  'function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) returns (uint256[] amounts)',
+  'function hasRole(string role, address account) view returns (bool)',
+]);
+export const whitelisterAbi = parseAbi(['function setApprovedSwapper(address swapper)']);
+
+/**
+ * Local-currency delivery: swap the amount to `out` on the pair, paid straight
+ * to the recipient, then the fee. `minOut` is the quoted output, so the
+ * recipient gets at least what the sender saw, or nothing moves.
+ */
+export const swapWithFee = (
+  token: Address,
+  pair: Address,
+  out: Address,
+  to: Address,
+  amount: bigint,
+  minOut: bigint,
+  deadline: bigint,
+  feeRecipient: Address,
+  fee: bigint,
+): Call[] => [
+  { to: token, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [pair, amount] }) },
+  { to: pair, value: 0n, data: encodeFunctionData({ abi: pairAbi, functionName: 'swapExactTokensForTokens', args: [amount, minOut, [token, out], to, deadline] }) },
   { to: token, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [feeRecipient, fee] }) },
 ];
 

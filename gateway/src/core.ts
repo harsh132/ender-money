@@ -3,10 +3,21 @@
  * Callers pass the phone number they've authenticated (JWT claim or SMS
  * sender); everything else is checked here.
  */
-import { formatUnits, isAddress, parseUnits, recoverTypedDataAddress, type Address, type Hex, type SignedAuthorization } from 'viem';
+import { encodeFunctionData, formatUnits, isAddress, parseUnits, recoverTypedDataAddress, type Address, type Hex, type SignedAuthorization } from 'viem';
 import { recoverAuthorizationAddress } from 'viem/utils';
-import { caliburAbi, encodeExecute, erc20Abi, isDelegatedToCalibur, signedBatchTypedData, transferWithFee, type Call } from '../../protocol/calibur';
-import { AUSD_DECIMALS, CALIBUR, FEE_RECIPIENT, MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
+import {
+  caliburAbi,
+  encodeExecute,
+  erc20Abi,
+  isDelegatedToCalibur,
+  pairAbi,
+  signedBatchTypedData,
+  swapWithFee,
+  transferWithFee,
+  whitelisterAbi,
+  type Call,
+} from '../../protocol/calibur';
+import { AUSD_DECIMALS, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
 import { isPhone, SESSION_ID_ALPHABET, type Deliver } from '../../protocol/sms';
 import { publicClient, tokenSenders } from './chain';
 import { inrPerUsd } from './fx';
@@ -34,6 +45,8 @@ type SessionRow = {
   amount: string;
   fee: string;
   deliver: Deliver;
+  /** CTK base units the recipient gets at least, for CTK delivery. */
+  min_out: string | null;
   nonce: string;
   deadline: number;
   state: 'open' | 'sending' | 'sent';
@@ -49,6 +62,8 @@ export type Quote = {
   to: Address;
   amount: string;
   fee: string;
+  /** CTK the recipient gets, for CTK delivery. */
+  out?: string;
   nonce: string;
   deadline: number;
   calls: Array<{ to: Address; value: string; data: Hex }>;
@@ -67,8 +82,12 @@ const useNetwork = async (env: Env, link: Link, network: NetworkName | undefined
   return network;
 };
 
-const callsFor = (env: Env, s: Pick<SessionRow, 'network' | 'to_address' | 'amount' | 'fee'>): Call[] =>
-  transferWithFee(NETWORKS[s.network].ausd, s.to_address, BigInt(s.amount), FEE_RECIPIENT, BigInt(s.fee));
+const callsFor = (env: Env, s: Pick<SessionRow, 'network' | 'to_address' | 'amount' | 'fee' | 'deliver' | 'min_out' | 'deadline'>): Call[] => {
+  const net = NETWORKS[s.network];
+  if (s.deliver === 'CTK')
+    return swapWithFee(net.ausd, net.pair!, net.ctk!, s.to_address, BigInt(s.amount), BigInt(s.min_out!), BigInt(s.deadline), FEE_RECIPIENT, BigInt(s.fee));
+  return transferWithFee(net.ausd, s.to_address, BigInt(s.amount), FEE_RECIPIENT, BigInt(s.fee));
+};
 
 const toQuote = (env: Env, s: SessionRow): Quote => ({
   id: s.id,
@@ -77,6 +96,7 @@ const toQuote = (env: Env, s: SessionRow): Quote => ({
   to: s.to_address,
   amount: formatUnits(BigInt(s.amount), AUSD_DECIMALS),
   fee: formatUnits(BigInt(s.fee), AUSD_DECIMALS),
+  ...(s.min_out ? { out: formatUnits(BigInt(s.min_out), CTK_DECIMALS) } : {}),
   nonce: s.nonce,
   deadline: s.deadline,
   calls: callsFor(env, s).map((c) => ({ to: c.to, value: c.value.toString(), data: c.data })),
@@ -138,8 +158,8 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
   const link = await linkFor(env, phone);
   const network = await useNetwork(env, link, req.network);
   const deliver = req.deliver ?? 'AUSD';
-  // ponytail: CTK delivery (Instant Settlement swap) lands on 10 Oct.
-  if (deliver !== 'AUSD') throw new GatewayError('unsupported');
+  // CTK delivery uses Agora's testnet pair; the mainnet pair needs Agora KYC.
+  if (deliver === 'CTK' && !NETWORKS[network].pair) throw new GatewayError('unsupported');
   if (!/^\d+(\.\d{1,6})?$/.test(req.amount)) throw new GatewayError('bad-amount');
   const amount = parseUnits(req.amount, AUSD_DECIMALS);
   if (amount <= 0n) throw new GatewayError('bad-amount');
@@ -167,6 +187,8 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
   if (!a.delegated) throw new GatewayError('not-delegated', 409);
   if (a.balance < amount + fee) throw new GatewayError('low-balance', 402);
 
+  const minOut = deliver === 'CTK' ? await ctkQuote(env, network, link.address, amount) : null;
+
   const deadline = now() + QUOTE_TTL_SECONDS;
   for (let attempt = 0; attempt < 5; attempt++) {
     const id = newSessionId();
@@ -179,6 +201,7 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
       amount: amount.toString(),
       fee: fee.toString(),
       deliver,
+      min_out: minOut?.toString() ?? null,
       nonce: a.nonce.toString(),
       deadline,
       state: 'open',
@@ -187,14 +210,37 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
       expires_at: deadline,
     };
     const inserted = await env.DB.prepare(
-      `INSERT OR IGNORE INTO sessions (id, phone, network, from_address, to_address, amount, fee, deliver, nonce, deadline, request_hash, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO sessions (id, phone, network, from_address, to_address, amount, fee, deliver, min_out, nonce, deadline, request_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(id, phone, network, row.from_address, to, row.amount, row.fee, deliver, row.nonce, deadline, requestHash, deadline)
+      .bind(id, phone, network, row.from_address, to, row.amount, row.fee, deliver, row.min_out, row.nonce, deadline, requestHash, deadline)
       .run();
     if (inserted.meta.changes === 1) return toQuote(env, row);
   }
   throw new GatewayError('busy', 503);
+};
+
+/**
+ * The pair's fixed-price output for `amount`, after making sure the sender may
+ * swap. The first CTK quote whitelists the sender through the testnet
+ * whitelister (permissionless, gateway pays), which takes one batch.
+ */
+const ctkQuote = async (env: Env, network: NetworkName, from: Address, amount: bigint) => {
+  const net = NETWORKS[network];
+  const pub = publicClient(env, network);
+  const allowed = () => pub.readContract({ address: net.pair!, abi: pairAbi, functionName: 'hasRole', args: ['APPROVED_SWAPPER', from] });
+  if (!(await allowed())) {
+    const result = await env.SPONSOR.get(env.SPONSOR.idFromName(network)).submit(network, {
+      kind: 'plain',
+      target: net.whitelister!,
+      data: encodeFunctionData({ abi: whitelisterAbi, functionName: 'setApprovedSwapper', args: [from] }),
+    });
+    if (!result.ok || !(await allowed())) throw new GatewayError('swap-unavailable', 503);
+  }
+  const amounts = await pub.readContract({ address: net.pair!, abi: pairAbi, functionName: 'getAmountsOut', args: [amount, [net.ausd, net.ctk!]] });
+  const out = amounts[amounts.length - 1]!;
+  if (out <= 0n) throw new GatewayError('swap-unavailable', 503);
+  return out;
 };
 
 // ---------------------------------------------------------------- sign

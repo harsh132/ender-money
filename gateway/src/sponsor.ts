@@ -16,6 +16,8 @@ import type { Env } from './env';
 /** A user's signed Calibur `execute` call, or a signup's 7702 authorization. */
 export type SponsorItem =
   | { kind: 'call'; account: Address; data: Hex }
+  /** A gateway-side call (e.g. the testnet swap whitelister); succeeds if the batch does. */
+  | { kind: 'plain'; target: Address; data: Hex }
   | { kind: 'delegation'; account: Address; authorization: SignedAuthorization };
 
 export type SponsorResult =
@@ -40,7 +42,12 @@ const aggregate3 = (calls: Pending[]) =>
   encodeFunctionData({
     abi: multicall3Abi,
     functionName: 'aggregate3',
-    args: [calls.map((p) => ({ target: p.item.account, allowFailure: true, callData: (p.item as { data: Hex }).data }))],
+    args: [
+      calls.map((p) => {
+        const item = p.item as Extract<SponsorItem, { kind: 'call' | 'plain' }>;
+        return { target: item.kind === 'plain' ? item.target : item.account, allowFailure: true, callData: item.data };
+      }),
+    ],
   });
 
 /**
@@ -95,7 +102,7 @@ export class Sponsor extends DurableObject<Env> {
     const delegations = batch.filter((p) => p.item.kind === 'delegation');
     const authorizationList = delegations.map((p) => (p.item as { authorization: SignedAuthorization }).authorization);
     const auth = authorizationList.length ? authorizationList : undefined;
-    let calls = batch.filter((p) => p.item.kind === 'call');
+    let calls = batch.filter((p) => p.item.kind !== 'delegation');
 
     // Simulate the whole batch and drop any call that would fail, so one user can't sink the rest.
     if (calls.length) {
@@ -137,12 +144,14 @@ export class Sponsor extends DurableObject<Env> {
     // Per-user outcome: Multicall3's per-call results aren't in the receipt, but every
     // successful transfer emits an AUSD Transfer from the user's own address.
     const senders = tokenSenders(receipt, net.ausd);
+    const landed = receipt.status === 'success';
     for (const p of calls) {
-      p.resolve(senders.has(p.item.account.toLowerCase()) ? { ok: true, txHash } : { ok: false, error: 'failed', txHash });
+      const ok = p.item.kind === 'plain' ? landed : senders.has(p.item.account.toLowerCase());
+      p.resolve(ok ? { ok: true, txHash } : { ok: false, error: 'failed', txHash });
     }
     // Delegations leave no log; the account's code says whether it took.
     for (const p of delegations) {
-      const code = await pub.getCode({ address: p.item.account });
+      const code = await pub.getCode({ address: (p.item as { account: Address }).account });
       p.resolve(isDelegatedToCalibur(code) ? { ok: true, txHash } : { ok: false, error: 'failed', txHash });
     }
   }

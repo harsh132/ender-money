@@ -10,6 +10,8 @@ export type Network = {
   /** Agora Instant Settlement AUSD/CTK pair; mainnet's AUSD/USDC pair needs Agora KYC, so it is unused. */
   pair?: Address;
   ctk?: Address;
+  /** Grants the pair's APPROVED_SWAPPER role; permissionless on testnet (`setApprovedSwapper(address)`). */
+  whitelister?: Address;
   /** Testnet-only AUSD faucet (`requestFunds(address)`). */
   ausdFaucet?: Address;
 };
@@ -29,6 +31,8 @@ export const FEE_RECIPIENT: Address = '0x458E8F51EC2B833209b5C71372376eeb1e40af0
 
 /** AUSD has 6 decimals on both networks. */
 export const AUSD_DECIMALS = 6;
+/** Agora's testnet CTK token, standing in for a local-currency stablecoin. */
+export const CTK_DECIMALS = 18;
 
 export const NETWORKS: Record<NetworkName, Network> = {
   mainnet: {
@@ -42,6 +46,7 @@ export const NETWORKS: Record<NetworkName, Network> = {
     ausd: '0xa9012a055bd4e0eDfF8Ce09f960291C09D5322dC',
     pair: '0x1Aa8958Aa34cEC8096EF4381cb335effe977b0ae',
     ctk: '0x7BEb5D9DB0d85cBEa543C04f0dE8c23c2176cd9D',
+    whitelister: '0x7c10F56d6f04a51376393a1C3670e966863F6BD5',
     ausdFaucet: '0xd236c18D274E54FAccC3dd9DDA4b27965a73ee6C',
   },
 };

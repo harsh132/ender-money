@@ -14,7 +14,8 @@
     "relay:build": "cd relay && gradlew.bat assembleDebug",
     "signup": "bun --env-file=.env scripts/signup.ts",
     "gateway:migrate:remote": "wrangler d1 migrations apply ender-money --remote -c gateway/wrangler.jsonc",
-    "gateway:deploy": "wrangler deploy -c gateway/wrangler.jsonc"
+    "gateway:deploy": "wrangler deploy -c gateway/wrangler.jsonc",
+    "ctk-check": "bun --env-file=.env scripts/ctk-check.ts"
   },
   "dependencies": {
     "viem": "^2.57.2"

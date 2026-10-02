@@ -45,7 +45,9 @@ single atomic SQL statement, so concurrent requests can't double-act.
 | D1 `links` | `phone (E.164) · address · network · alerts · created_at`, unique on phone and on address. The directory, queried both ways: phone → address to pay a number, address → phone for alerts |
 | D1 `otps` | `phone · code_hash · attempts · expires_at`. A try is `UPDATE … SET attempts = attempts + 1 WHERE phone = ? AND expires_at > ? AND attempts < 5 RETURNING *` |
 | D1 `sessions` | pending quotes, i.e. exactly what the user is asked to sign (below). Signing claims one with `UPDATE … SET state = 'sending' WHERE id = ? AND state = 'open' RETURNING *`; a racing duplicate gets nothing back and reads the tx hash instead |
-| D1 `alerts_sent` | `tx_hash · phone`, so a transfer we sent isn't alerted twice when Alchemy reports it too |
+| D1 `alerts_sent` | `tx_hash · phone`, so a re-scan (or a second source later) never alerts twice |
+| D1 `transfers` | AUSD `Transfer` logs touching a linked address (`network · tx_hash · log_index · from · to · amount · block · at`), written by the cron's log scan; serves `GET /activity` and alerts |
+| D1 `cursors` | last block the log scan covered, per network |
 | `Sponsor` DO, one per network | the gateway key's nonce and the transfer queue; sends one Multicall3 batch at a time (see "Sending many transfers") |
 | `Relay` DO, singleton | the Android relay's WebSocket (hibernation API), outbound queue, delivery reports |
 
@@ -92,7 +94,9 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 | `POST /tx/quote {network, to, amount, deliver?}` | `to` is an address or phone number. Returns `{id, to, amount, fee, out?, nonce, deadline, calls}`; the app rebuilds and checks `calls` before signing |
 | `POST /tx/sign {id, signature}` | runs the checks below, sends, returns `{txHash}` |
 | `GET /tx/:id` | the session's `network` (stored with it, so no parameter is needed), status (`open`, `sending`, `sent`, `failed`), tx hash and error. The app polls it while a transfer shows "Sending" (only needed when `/tx/sign` came back `pending`) |
-| `GET /activity?network=` | `network` defaults to the number's current one, as for `/account`. The number's recent incoming and outgoing AUSD transfers, read from `Transfer` logs to and from its address, so an online recipient sees money arrive without an SMS |
+| `GET /activity?network=` | `network` defaults to the number's current one, as for `/account`. The number's last 100 AUSD transfers in and out (fee legs left out), from the `transfers` table, so an online recipient sees money arrive without an SMS and a fresh device gets its history back |
+| `POST /account/alerts {on}` | the Settings switch "Text me when I get paid" (`links.alerts`) |
+| `GET ender.money/.well-known/assetlinks.json` | Android passkey association: package `money.ender.app` and the SHA-256 of the app's signing key (a Worker route on that one path) |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
 | `POST /webhooks/twilio` | inbound SMS; checks `X-Twilio-Signature` |
 | `POST /webhooks/alchemy` | address activity; checks `X-Alchemy-Signature` (port from `ender-backend`) |
@@ -247,14 +251,17 @@ number.
 
 ## Incoming-payment alerts
 
-- **Mainnet**: an Alchemy Address Activity webhook on AUSD transfers to
-  linked addresses. `/wallet/create` adds the address to the webhook before
-  returning, so no payment is missed.
-- **Testnet**: Alchemy's Monad testnet support is unconfirmed. Fallback: the
-  cron reads AUSD `Transfer` logs to linked addresses every minute
-  (`eth_getLogs` from the last seen block).
-- Alert text: `Received 10 AUSD from 0x12…cd. Balance 45.20 AUSD.` At most
-  one alert per number per 30 s; extras are folded into the next one.
+- **Both networks (built 2 Oct)**: every minute the cron reads AUSD
+  `Transfer` logs from the last block it saw (`cursors`), 100 blocks per
+  `eth_getLogs` call (Monad's public RPC limit; ~150 new blocks a minute, up
+  to 1,000 per run to catch up), keeps the ones touching a linked address in
+  `transfers`, and texts each recipient with alerts on. `alerts_sent` keeps
+  it to one text per transaction per number.
+- Alert text: `Received 10 AUSD from +9198…/0x12...cd. Balance 45.20 AUSD.`,
+  prefixed `[Test] ` on testnet. Folding several alerts into one (30 s) is
+  not built.
+- **Later**: an Alchemy Address Activity webhook on mainnet would cut the
+  delay from up to a minute to seconds; the cron stays as the backstop.
 
 ## Security
 
@@ -294,8 +301,8 @@ number.
    cron that finalises stuck sessions, `/wallet/create` with
    delegation on both networks, D1 `links`; deploy; first transfer from a fresh demo
    wallet over HTTPS and over SMS.
-4. **9 Oct** — Twilio transport, Alchemy webhook and testnet log polling,
-   alerts, `GET /activity`.
+4. **9 Oct** — Twilio transport, Alchemy webhook. (Log scan, alerts and
+   `GET /activity` landed early, on 2 Oct, for the app.)
 
 ## Not in the gateway
 

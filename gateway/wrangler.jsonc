@@ -6,7 +6,11 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
-  "routes": [{ "pattern": "api.ender.money", "custom_domain": true }],
+  "routes": [
+    { "pattern": "api.ender.money", "custom_domain": true },
+    // Passkey association for the app; the rest of ender.money is not ours to serve.
+    { "pattern": "ender.money/.well-known/assetlinks.json", "zone_name": "ender.money" }
+  ],
 
   "vars": {
     "FEE_AUSD": "0.001"
