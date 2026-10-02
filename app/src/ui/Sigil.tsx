@@ -28,23 +28,26 @@ const pointFor = (address: string): string | null => {
 };
 
 export const Sigil = ({ address, fallback, size = 48 }: { address: string | undefined; fallback: string; size?: number }) => {
+  // Gold: a sigil is an identity mark, one of the small marks the palette allows the accent on.
+  // Drawn edge to edge (space: none) at 64% of the disc: a square that size clears the circle's rim.
+  const inner = Math.round(size * 0.64);
   const xml = useMemo(() => {
     const point = address ? pointFor(address) : null;
     if (!point) return null;
     try {
-      return sigil({ point, size, background: c.surface2, foreground: c.fg, detail: size < 48 ? 'none' : 'default', space: 'large' })
+      return sigil({ point, size: inner, background: c.surface2, foreground: c.accent, detail: 'none', space: 'none' })
         // DOM markup: a CSS style string react-native-svg ignores, and a lowercase viewbox it doesn't parse.
         .replace(/\sstyle="[^"]*"/, '')
         .replace(/\sviewbox=/, ' viewBox=');
     } catch {
       return null;
     }
-  }, [address, size]);
+  }, [address, inner]);
 
   if (!xml) return <Avatar label={fallback} size={size} />;
   return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, overflow: 'hidden', backgroundColor: c.surface2, borderWidth: 1, borderColor: c.line }}>
-      <SvgXml xml={xml} width={size} height={size} />
+    <View style={{ width: size, height: size, borderRadius: size / 2, overflow: 'hidden', backgroundColor: c.surface2, borderWidth: 1, borderColor: c.line, alignItems: 'center', justifyContent: 'center' }}>
+      <SvgXml xml={xml} width={inner} height={inner} />
     </View>
   );
 };

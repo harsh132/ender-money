@@ -11,6 +11,7 @@ import { quickSend, whileOwnScreen } from '../lib/keys';
 import { useStore, type Recipient } from '../lib/store';
 import { c, f } from '../lib/theme';
 import { Back, Bolt, Person, Scan } from '../ui/icons';
+import { Sigil } from '../ui/Sigil';
 import { useQuickSend } from '../ui/useQuickSend';
 import { Avatar, BackHeader, Banner, Button, Chip, Field, Screen, T } from '../ui/kit';
 
@@ -31,6 +32,7 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'] as c
 export default function Send() {
   const params = useLocalSearchParams<{ to?: string; amount?: string }>();
   const recents = useStore((s) => s.recents);
+  const pins = useStore((s) => s.pins);
   const network = useStore((s) => s.network);
   const balance = useStore((s) => s.account[s.network]?.balance);
   const [text, setText] = useState('');
@@ -94,7 +96,7 @@ export default function Send() {
       <Screen>
         <BackHeader title="Send" right={chips} />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, paddingHorizontal: 16, borderRadius: 20, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line }}>
-          <Avatar label={name} size={44} />
+          <Sigil address={to.toAddress ?? (to.phone ? pins[to.phone] : undefined)} fallback={name} size={44} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <T v="body" numberOfLines={1}>{name}</T>
             <T v="meta" numberOfLines={1} style={{ fontSize: 15, fontFamily: to.toAddress ? f.mono : f.ui }}>
@@ -196,7 +198,7 @@ export default function Send() {
               const name = r.name ?? (r.phone ? phoneDisplay(r.phone) : short(r.address));
               return (
                 <Pressable key={r.address} onPress={() => setTo(fromRecent(r))} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, opacity: pressed ? 0.7 : 1 })}>
-                  <Avatar label={name} />
+                  <Sigil address={r.address} fallback={name} />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <T v="body" numberOfLines={1}>{name}</T>
                     <T v="meta" numberOfLines={1} style={{ fontFamily: f.mono, fontSize: 15 }}>{short(r.address)}</T>
