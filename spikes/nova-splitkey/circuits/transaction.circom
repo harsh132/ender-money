@@ -23,7 +23,7 @@ Authorization: one EdDSA-Poseidon signature by (Ax, Ay) over
   msg = Poseidon(inputNullifier[0..nIns), outputCommitment[0..nOuts), extDataHash, publicAmount)
 Every input (dummies included) is owned by the same (Ax, Ay, nk). Chain and pool binding lives in extDataHash
 (the pool hashes block.chainid and address(this) into it), so the signature and the proof are bound to one deployment.
-nIns + nOuts + 2 <= 16 (circomlib Poseidon width), so this template covers transaction2 only.
+nIns + nOuts + 2 <= 16 (circomlib Poseidon width): with 2 outputs, nIns is at most 12 (transaction2, 6 and 12 use it).
 */
 template Transaction(levels, nIns, nOuts) {
     signal input root;

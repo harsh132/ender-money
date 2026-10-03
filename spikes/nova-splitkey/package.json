@@ -13,6 +13,7 @@
   },
   "scripts": {
     "setup": "bash scripts/setup.sh",
+    "test:select": "node scripts/select-test.mjs",
     "test:circuits": "node scripts/circuit-test.mjs",
     "sim": "forge build && node scripts/sms-sim.mjs"
   }

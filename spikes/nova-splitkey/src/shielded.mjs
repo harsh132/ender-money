@@ -8,6 +8,7 @@ import nacl from 'tweetnacl'
 import { buildEddsa } from 'circomlibjs'
 import { groth16 } from 'snarkjs'
 import { keccak256, zeroAddress } from 'viem'
+import { CIRCUITS } from './select.mjs'
 import { poseidonHash, getExtDataHash, FIELD_SIZE, toBuffer, toFixedHex, randomBN } from './utils.mjs'
 
 const eddsa = await buildEddsa()
@@ -77,20 +78,22 @@ export function decryptNote(data, viewSk) {
 // ---------- the transaction both sides build
 
 /**
- * me: owner(...) of the spender. inputs: 0-2 notes {amount, blinding, pos}. outputs: exactly 2 {amount, to: {ownerKey, encPk}}.
+ * me: owner(...) of the spender. nIns: circuit size (2, 6 or 12). inputs: 0-nIns notes {amount, blinding, pos}.
+ * outputs: exactly 2 {amount, to: {ownerKey, encPk}}.
  * Dummy inputs (amount 0, root check skipped) use the owner's keys; their blinding derives from the first real
  * nullifier (random only when there is no real input, i.e. a deposit, which is built online).
  * Output blinding_i = Poseidon(nk, nullifier0, nullifier1, i).
+ * Signed message: Poseidon(nullifier[0..nIns), commitment0, commitment1, extDataHash, publicAmount), at most 16 inputs.
  */
-export function buildTx({ me, inputs, outputs, extAmount = 0n, fee = 0n, recipient = zeroAddress, relayer = zeroAddress, deadline, domain }) {
-  if (inputs.length > 2 || outputs.length !== 2) throw new Error('transaction2: 0-2 inputs, 2 outputs')
+export function buildTx({ me, nIns = 2, inputs, outputs, extAmount = 0n, fee = 0n, recipient = zeroAddress, relayer = zeroAddress, deadline, domain }) {
+  if (!CIRCUITS.includes(nIns) || inputs.length > nIns || outputs.length !== 2) throw new Error(`transaction${nIns}: 0-${nIns} inputs, 2 outputs`)
   const ins = [...inputs]
     .sort((a, b) => a.pos - b.pos)
     .map((n) => {
       const c = commitment(n.amount, me.ownerKey, n.blinding)
       return { amount: BigInt(n.amount), blinding: n.blinding, pos: n.pos, commitment: c, nullifier: nullifier(me.nk, c, n.pos) }
     })
-  while (ins.length < 2) {
+  while (ins.length < nIns) {
     const blinding = ins.length ? poseidonHash([me.nk, ins[0].nullifier, ins.length]) : randomBN()
     const c = commitment(0n, me.ownerKey, blinding)
     ins.push({ amount: 0n, blinding, pos: 0, commitment: c, nullifier: nullifier(me.nk, c, 0) })
@@ -110,7 +113,7 @@ export function buildTx({ me, inputs, outputs, extAmount = 0n, fee = 0n, recipie
   }
   const extDataHash = getExtDataHash(extData, domain)
   const publicAmount = (((extData.extAmount - extData.fee) % FIELD_SIZE) + FIELD_SIZE) % FIELD_SIZE
-  const msg = poseidonHash([ins[0].nullifier, ins[1].nullifier, outs[0].commitment, outs[1].commitment, extDataHash, publicAmount])
+  const msg = poseidonHash([...ins.map((x) => x.nullifier), outs[0].commitment, outs[1].commitment, extDataHash, publicAmount])
   return { ins, outs, extData, extDataHash, publicAmount, msg }
 }
 
@@ -166,11 +169,12 @@ export function witnessInput(tx, tree, keys, sig) {
 
 export const proveTimes = []
 
-/** Groth16 proof packed as the pool expects (Nova's limb order), plus the Proof struct for transact(). */
+/** Groth16 proof packed as the pool expects (Nova's limb order), plus the Proof struct for transact(). The circuit follows the input count. */
 export async function prove(input) {
   const t = performance.now()
-  const { proof } = await groth16.fullProve(input, `${BUILD}transaction2_js/transaction2.wasm`, `${BUILD}transaction2.zkey`)
-  proveTimes.push(Math.round(performance.now() - t))
+  const c = `transaction${input.inputNullifier.length}`
+  const { proof } = await groth16.fullProve(input, `${BUILD}${c}_js/${c}.wasm`, `${BUILD}${c}.zkey`)
+  proveTimes.push({ nIns: input.inputNullifier.length, ms: Math.round(performance.now() - t) })
   const packed =
     '0x' +
     [proof.pi_a[0], proof.pi_a[1], proof.pi_b[0][1], proof.pi_b[0][0], proof.pi_b[1][1], proof.pi_b[1][0], proof.pi_c[0], proof.pi_c[1]]

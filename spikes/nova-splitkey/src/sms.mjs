@@ -19,20 +19,30 @@ export function checkSms(text) {
   return text
 }
 
-// Q <id> exp=<unix> fee=<AUSD> in=<pos>[,<pos>] to=<64-byte shielded address, base64 | 0x EVM address>
-export const formatQuote = ({ id, exp, fee, ins, to }) =>
-  checkSms(`Q ${id} exp=${exp} fee=${fee} in=${ins.join(',')} to=${typeof to === 'string' ? to : b64(to)}`)
+// MERGE: a payment to self of 0 AUSD (T = fee alone) that turns many small notes into one. Spike-only command.
+export const MERGE = 'MERGE'
+
+// Q <id> exp=<unix> fee=<AUSD> to=<64-byte shielded address, base64 | 0x EVM address>  (the phone picks the notes)
+export const formatQuote = ({ id, exp, fee, to }) => checkSms(`Q ${id} exp=${exp} fee=${fee} to=${typeof to === 'string' ? to : b64(to)}`)
 export function parseQuote(text) {
-  const m = new RegExp(`^Q ${ID} exp=(\\d{1,12}) fee=${AMT} in=(\\d{1,8}(?:,\\d{1,8})?) to=(0x[0-9a-fA-F]{40}|[A-Za-z0-9+/]{86})$`).exec(text)
+  const m = new RegExp(`^Q ${ID} exp=(\\d{1,12}) fee=${AMT} to=(0x[0-9a-fA-F]{40}|[A-Za-z0-9+/]{86})$`).exec(text)
   if (!m) return null
-  return { id: m[1], exp: Number(m[2]), fee: m[3], ins: m[4].split(',').map(Number), to: m[5].startsWith('0x') ? m[5].toLowerCase() : unb64(m[5], 64) }
+  return { id: m[1], exp: Number(m[2]), fee: m[3], to: m[4].startsWith('0x') ? m[4].toLowerCase() : unb64(m[4], 64) }
 }
 
-// SIG <id> <64-byte EdDSA signature, base64>  (today's SIG carries a 65-byte secp256k1 signature; length tells them apart)
-export const formatSig = (id, sig) => checkSms(`SIG ${id} ${b64(sig)}`)
+// Note refs: 3 base64 characters per input = tree position mod 2^18 (262,144), concatenated. Positions past that can
+// collide; the gateway resolves that by trying the candidates against the signature.
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/' // RFC 4648, all GSM-7
+export const REF_MOD = 1 << 18
+export const encodeRefs = (positions) => positions.map((p) => [12, 6, 0].map((k) => B64[((p % REF_MOD) >> k) & 63]).join('')).join('')
+export const decodeRefs = (s) => s.match(/.{3}/g).map((t) => [...t].reduce((v, c) => v * 64 + B64.indexOf(c), 0))
+
+// SIG <id> <refs of the 1-12 real inputs, by tree position> <64-byte EdDSA signature, base64>
+// (today's SIG carries a 65-byte secp256k1 signature and no refs, so the shape tells them apart)
+export const formatSig = (id, sig, positions) => checkSms(`SIG ${id} ${encodeRefs(positions)} ${b64(sig)}`)
 export function parseSig(text) {
-  const m = new RegExp(`^SIG ${ID} ([A-Za-z0-9+/]{86})$`).exec(text)
-  return m ? { id: m[1], sig: unb64(m[2], 64) } : null
+  const m = new RegExp(`^SIG ${ID} ((?:[A-Za-z0-9+/]{3}){1,12}) ([A-Za-z0-9+/]{86})$`).exec(text)
+  return m ? { id: m[1], refs: decodeRefs(m[2]), sig: unb64(m[3], 64) } : null
 }
 
 // Sent <amt> AUSD to <who>. Tx <short hash> p=<tree position of output 0; change is p+1>

@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: MIT
 // Minimal port of tornado-nova contracts/TornadoPool.sol (Solidity 0.7) to 0.8.
 // Kept: Merkle tree with root history, nullifier set, transact(Proof, ExtData), extDataHash binding,
-// publicAmount = extAmount - fee, relayer fee in the token, Verifier2/Verifier16, deposit cap.
+// publicAmount = extAmount - fee, relayer fee in the token, one verifier per input count, deposit cap.
 // Removed: OmniBridge/ERC-677 (onTokenBridged/onTransact), L1Unwrapper/isL1Withdrawal/l1Fee,
 // CrossChainGuard + upgradeable proxy + initializer, multisig/governance (configureLimits, rescueTokens),
 // register()/Account public-key registry, lastBalance.
-// Split-key spike (vs ../nova-circom2): transaction2 only (no Verifier16); ExtData gains `deadline` (the SMS quote's
-// expiry, enforced here); extDataHash also hashes block.chainid and address(this), binding signature and proof to
-// one deployment.
+// Split-key spike (vs ../nova-circom2): Verifier2/6/12 instead of Verifier2/16, picked by the number of nullifiers;
+// ExtData gains `deadline` (the SMS quote's expiry, enforced here); extDataHash also hashes block.chainid and
+// address(this), binding signature and proof to one deployment.
 pragma solidity ^0.8.24;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import { IVerifier2 } from "./IVerifier.sol";
+import { IVerifier2, IVerifier6, IVerifier12 } from "./IVerifier.sol";
 import { MerkleTreeWithHistory } from "./MerkleTreeWithHistory.sol";
 
 contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
@@ -23,6 +23,8 @@ contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
   uint256 public constant MAX_FEE = 2**248;
 
   IVerifier2 public immutable verifier2;
+  IVerifier6 public immutable verifier6;
+  IVerifier12 public immutable verifier12;
   IERC20 public immutable token;
   uint256 public immutable maximumDepositAmount;
 
@@ -52,12 +54,16 @@ contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
 
   constructor(
     IVerifier2 _verifier2,
+    IVerifier6 _verifier6,
+    IVerifier12 _verifier12,
     uint32 _levels,
     address _hasher,
     IERC20 _token,
     uint256 _maximumDepositAmount
   ) MerkleTreeWithHistory(_levels, _hasher) {
     verifier2 = _verifier2;
+    verifier6 = _verifier6;
+    verifier12 = _verifier12;
     token = _token;
     maximumDepositAmount = _maximumDepositAmount;
   }
@@ -86,17 +92,28 @@ contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
   // Public input order = circuit declaration order: root, publicAmount, extDataHash, inputNullifier[n], outputCommitment[2]
   function verifyProof(Proof memory _args) public view returns (bool) {
     (uint256[2] memory a, uint256[2][2] memory b, uint256[2] memory c) = abi.decode(_args.proof, (uint256[2], uint256[2][2], uint256[2]));
-    require(_args.inputNullifiers.length == 2, "unsupported input count");
-    uint256[7] memory pub = [
-      uint256(_args.root),
-      _args.publicAmount,
-      uint256(_args.extDataHash),
-      uint256(_args.inputNullifiers[0]),
-      uint256(_args.inputNullifiers[1]),
-      uint256(_args.outputCommitments[0]),
-      uint256(_args.outputCommitments[1])
-    ];
-    return verifier2.verifyProof(a, b, c, pub);
+    uint256 n = _args.inputNullifiers.length;
+    require(n == 2 || n == 6 || n == 12, "unsupported input count");
+    uint256[] memory p = new uint256[](n + 5);
+    p[0] = uint256(_args.root);
+    p[1] = _args.publicAmount;
+    p[2] = uint256(_args.extDataHash);
+    for (uint256 i = 0; i < n; i++) p[3 + i] = uint256(_args.inputNullifiers[i]);
+    p[n + 3] = uint256(_args.outputCommitments[0]);
+    p[n + 4] = uint256(_args.outputCommitments[1]);
+    if (n == 2) {
+      uint256[7] memory pub;
+      for (uint256 i = 0; i < 7; i++) pub[i] = p[i];
+      return verifier2.verifyProof(a, b, c, pub);
+    } else if (n == 6) {
+      uint256[11] memory pub;
+      for (uint256 i = 0; i < 11; i++) pub[i] = p[i];
+      return verifier6.verifyProof(a, b, c, pub);
+    } else {
+      uint256[17] memory pub;
+      for (uint256 i = 0; i < 17; i++) pub[i] = p[i];
+      return verifier12.verifyProof(a, b, c, pub);
+    }
   }
 
   function _transact(Proof memory _args, ExtData memory _extData) internal nonReentrant {

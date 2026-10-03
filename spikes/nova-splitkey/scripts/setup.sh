@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile the split-key transaction2, Groth16 setup + one contribution, export the verifier. TESTNET ONLY (single party).
+# Compile the split-key transaction2/6/12, Groth16 setup + one contribution each, export the verifiers. TESTNET ONLY (single party).
 # Reuses the power-17 ptau from ../nova-circom2 (generating one takes ~25 min: see that spike's scripts/ptau.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -11,12 +11,15 @@ node scripts/gen-hasher.mjs
 # probe: the authorization block alone, to measure what EdDSA adds
 ./bin/circom.exe circuits/eddsaProbe.circom --O2 --r1cs -l node_modules -o build
 $SNARKJS r1cs info build/eddsaProbe.r1cs
-t ./bin/circom.exe circuits/transaction2.circom --O2 --r1cs --wasm --sym --inspect -l node_modules -o build
-t $SNARKJS groth16 setup build/transaction2.r1cs $PTAU build/transaction2_0.zkey
-t $SNARKJS zkey contribute build/transaction2_0.zkey build/transaction2.zkey --name="ender splitkey spike" -e="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
-rm build/transaction2_0.zkey
-t $SNARKJS zkey verify build/transaction2.r1cs $PTAU build/transaction2.zkey
-$SNARKJS zkey export verificationkey build/transaction2.zkey build/transaction2_vkey.json
-$SNARKJS zkey export solidityverifier build/transaction2.zkey contracts/generated/Verifier2.sol
-sed -i "s/contract Groth16Verifier/contract Verifier2/" contracts/generated/Verifier2.sol
-$SNARKJS r1cs info build/transaction2.r1cs
+for n in ${CIRCUITS:-2 6 12}; do
+  c=transaction$n
+  t ./bin/circom.exe circuits/$c.circom --O2 --r1cs --wasm --sym --inspect -l node_modules -o build
+  t $SNARKJS groth16 setup build/$c.r1cs $PTAU build/${c}_0.zkey
+  t $SNARKJS zkey contribute build/${c}_0.zkey build/$c.zkey --name="ender splitkey spike" -e="$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')"
+  rm build/${c}_0.zkey
+  t $SNARKJS zkey verify build/$c.r1cs $PTAU build/$c.zkey
+  $SNARKJS zkey export verificationkey build/$c.zkey build/${c}_vkey.json
+  $SNARKJS zkey export solidityverifier build/$c.zkey contracts/generated/Verifier$n.sol
+  sed -i "s/contract Groth16Verifier/contract Verifier$n/" contracts/generated/Verifier$n.sol
+  $SNARKJS r1cs info build/$c.r1cs
+done
