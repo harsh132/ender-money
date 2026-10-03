@@ -115,7 +115,7 @@ signing up needs the app online.
 | In | Out |
 | --- | --- |
 | `SYNC` / `SYNC T` | `OK n=3 dlg=1 AUSD=45.20 inr=83.9`; `T` also switches the phone to testnet |
-| `SEND <address or +number>, <amount> AUSD[ > CTK]` | `Q <id> n=4 exp=<unix> fee=0.001 to=0x<40>[ out=<ctk>]` |
+| `SEND <address or +number>, <amount> AUSD[ > CTK]` | `Q <id> n=4 exp=<unix> fee=0.01 to=0x<40>[ out=<ctk>]` |
 | `SIG <id> <sig>` | `Sent 10 AUSD to 0x12…cd. Tx 0xab…ef` |
 | anything else | `ERR <id?> bad-command` |
 
@@ -131,7 +131,7 @@ OTP text: `Ender code: 481926. Don't share it.` plus the Retriever hash.
 
 1. Resolve the recipient: an address as given, or a phone number through
    `links` (`not-on-ender` if absent).
-2. Fee: flat 0.001 AUSD for now, from a `FEE_AUSD` var, paid to
+2. Fee: flat 0.01 AUSD for now, from a `FEE_AUSD` var, paid to
    `FEE_RECIPIENT`, a treasury address in `protocol/networks.ts` (shared, not
    quoted: the SMS quote has no room for it and the app needs it to rebuild
    the calls it signs).
@@ -312,4 +312,4 @@ numbers not on Ender.
 
 ## Decided
 
-- Fee: flat 0.001 AUSD per transfer for now (`FEE_AUSD`), paid to `FEE_RECIPIENT`.
+- Fee: flat 0.01 AUSD per transfer for now (`FEE_AUSD`), paid to `FEE_RECIPIENT`.

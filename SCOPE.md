@@ -122,7 +122,7 @@ rebuilds the identical batch from the session.
   with us paying gas).
 - `SYNC` reply `n=` is Calibur's `getSeq(0)`. `SYNC` takes an optional
   ` T` suffix for testnet.
-- Quote `fee=` becomes the second call in the batch. Fee: flat 0.001 AUSD
+- Quote `fee=` becomes the second call in the batch. Fee: flat 0.01 AUSD
   for now, paid to a treasury address (`FEE_RECIPIENT`).
 - Linking a number to a wallet is **not** an SMS command. It happens
   online during onboarding or a number change in Settings, with an OTP

@@ -16,7 +16,7 @@ export const GATEWAY_SMS: Record<'india' | 'international', string | undefined> 
 /** Shipped rate; replaced by the latest the gateway reports (Frankfurter, USD). */
 export const DEFAULT_INR_PER_USD = 96;
 /** Fee the app is willing to sign; the gateway quotes it, the app checks it. */
-export const MAX_FEE = '0.001';
+export const MAX_FEE = '0.01';
 export const HTTP_TIMEOUT_MS = 5000;
 
 /** Quick send scope (SCOPE.md "Signing sessions"). Constants, not settings. */

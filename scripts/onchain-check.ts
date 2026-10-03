@@ -32,7 +32,7 @@ const user = privateKeyToAccount(env('DEMO_USER_PRIVATE_KEY'));
 const recipient = (process.env.RECIPIENT as Address | undefined) ?? gateway.address;
 
 const AMOUNT = parseUnits('0.10', AUSD_DECIMALS);
-const FEE = parseUnits('0.001', AUSD_DECIMALS);
+const FEE = parseUnits('0.01', AUSD_DECIMALS);
 const DEADLINE_SECONDS = 300n;
 // ponytail: flat 20% headroom on estimates; Monad bills the gas limit, so tune once real numbers exist.
 const withHeadroom = (gas: bigint) => (gas * 12n) / 10n;
