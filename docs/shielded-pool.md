@@ -8,14 +8,14 @@ private notes, transfers that reveal nothing, and deposits and withdrawals that
 don't line up with payments.
 
 This doc collects the options, the research behind them and the target design.
-Spike reports: [nova-spike.md](nova-spike.md), [anoma-spike.md](anoma-spike.md),
-[unlink-spike.md](unlink-spike.md).
+Spike reports: [nova-spike.md](nova-spike.md), [splitkey-spike.md](splitkey-spike.md),
+[anoma-spike.md](anoma-spike.md), [unlink-spike.md](unlink-spike.md).
 
 ## Where we landed
 
 | Option | Status | Verdict |
 | --- | --- | --- |
-| **Nova-style pool with split keys** (our own) | Nova spike passes on both toolchains | **target design**: fast Groth16, server proves but can't spend, one-SMS offline payments; needs a circuit change and an audit |
+| **Nova-style pool with split keys** (our own) | Nova spike passes on both toolchains; split-key spike passes, offline over SMS included | **target design**: fast Groth16, server proves but can't spend, one-SMS offline payments; needs a ceremony and an audit |
 | **Anoma** (live on Monad) | contracts usable by anyone; Heliax backend rejects AUSD, no testnet, backend closed | strongest off-the-shelf option; ask Heliax to list AUSD, or self-host (weeks) |
 | zAUSD wormhole | design only | better deniability, but every transfer pays to update the tree; later |
 | Burn addresses + claim | design only | same machinery as zAUSD; replaces stealth addresses for receiving |
@@ -151,6 +151,12 @@ proves in about 1 s (Groth16, no GPU) and submits. Cost: roughly +10k
 constraints per transaction, deterministic note construction both sides agree
 on, and our own circuit changes in the audit scope. No prover on the phone.
 
+**Spiked** ([splitkey-spike.md](splitkey-spike.md)): works end to end on anvil
+with today's four messages (`SEND`, `Q`, `SIG`, `Sent`) plus a `Got` alert to
+the recipient, every message one GSM-7 segment (worst case 145 characters).
+18,738 constraints (+32%), about 965 ms proving on the gateway, about 2.1M gas
+on Monad. All tampering attempts by the gateway fail.
+
 | | Phone proves | Split keys |
 | --- | --- | --- |
 | Circuit | Nova unchanged | Nova + in-circuit signature |
@@ -163,7 +169,8 @@ on, and our own circuit changes in the audit scope. No prover on the phone.
 
 1. Gateway relay and indexer on Monad testnet, with Node-side proving in a
    script (2–3 days): the whole loop on a real chain.
-2. Split-key circuit change, with the spike's witness tests extended (days).
+2. Split-key circuit change: done in the spike; harden it (16-input variant,
+   alert MACs, SMS payload encryption).
 3. App: keys from the passkey, note sync via the viewing key, signing, Private
    and Public balances (3–4 days); offline signing over SMS.
 4. Mainnet: multi-party ceremony, the spike's two fixes (range-check input

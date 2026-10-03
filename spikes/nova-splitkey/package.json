@@ -1,0 +1,19 @@
+{
+  "name": "nova-splitkey-spike",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.6.1",
+    "circomlib": "^2.0.5",
+    "circomlibjs": "^0.1.7",
+    "fixed-merkle-tree": "^0.7.3",
+    "snarkjs": "^0.7.6",
+    "tweetnacl": "^1.0.3",
+    "viem": "^2.57.2"
+  },
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "test:circuits": "node scripts/circuit-test.mjs",
+    "sim": "forge build && node scripts/sms-sim.mjs"
+  }
+}
