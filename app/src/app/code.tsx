@@ -6,6 +6,7 @@ import { phoneDisplay } from '../lib/format';
 import { onboarding } from '../lib/onboarding';
 import { c, f } from '../lib/theme';
 import { errorText } from '../lib/wallet';
+import { listenForCode } from '../../modules/sms-retriever';
 import { BackHeader, Banner, Button, Screen, Steps, T } from '../ui/kit';
 
 const RESEND_AFTER = 45;
@@ -41,6 +42,19 @@ export default function CodeScreen() {
       setBusy(false);
     }
   };
+
+  // Android hands over the code SMS (it ends with the app's hash), for five minutes from here, which covers a resend.
+  // ponytail: starts on mount; the relay's SMS takes seconds, so it lands after this. Start it before startAuth if a
+  // code ever arrives first.
+  useEffect(
+    () =>
+      listenForCode((v) => {
+        setCode(v);
+        void verify(v);
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   const resend = async () => {
     setError(undefined);

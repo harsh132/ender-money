@@ -13,7 +13,8 @@
   ],
 
   "vars": {
-    "FEE_AUSD": "0.01"
+    "FEE_AUSD": "0.01",
+    "SMS_RETRIEVER_HASH": "IaTP8lLJOvM"
   },
 
   "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } }],
