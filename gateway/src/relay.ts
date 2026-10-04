@@ -48,6 +48,8 @@ export class Relay extends DurableObject<Env> {
       return;
     }
     if (msg.type === 'inbound') {
+      // Paused: leave it unacked, so the relay keeps it and resends it on the next connection after unpausing.
+      if (this.env.PAUSED === '1') return;
       const out = await handleInbound(this.env, { from: msg.from, body: msg.body });
       if (out) ws.send(JSON.stringify({ type: 'send', id: crypto.randomUUID(), to: out.to, body: out.body }));
       ws.send(JSON.stringify({ type: 'ack', id: msg.id }));

@@ -104,6 +104,8 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 
 ## SMS commands
 
+Full reference of every text, with exact lengths and error codes: [SMS.md](SMS.md).
+
 Parsed and formatted by `protocol/sms.ts`, shared with the app. Identity is
 the sender's number as the carrier delivered it, normalised to E.164
 (bare Indian numbers get +91). The relay SIM also receives carrier promos,
@@ -332,9 +334,10 @@ There is no spending cap on Workers Paid. If the gateway runs away:
    `bunx wrangler rollback -c gateway/wrangler.jsonc`.
 2. **Pause**: set the `PAUSED` var to `"1"` (dashboard → Settings → Variables;
    saving deploys a new version at once). Every request gets
-   `503 {"error":"paused"}` and the cron does nothing. Durable Objects and the
-   prover only get work through the Worker, so they go quiet too. Set it back to
-   `"0"` to resume.
+   `503 {"error":"paused"}` and the cron does nothing. The prover only gets
+   work through the Worker. Inbound SMS reach the `Relay` DO over its open
+   WebSocket, so it checks `PAUSED` too: it leaves texts unacked and the relay
+   resends them after you set it back to `"0"`.
 3. **Cut a trigger**: delete the cron (Settings → Trigger events) or remove the
    `api.ender.money` route.
 4. Deleting the Worker is the last resort: it wipes the Durable Objects' storage.

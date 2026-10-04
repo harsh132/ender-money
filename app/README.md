@@ -1,7 +1,8 @@
 # Ender app
 
 Expo (SDK 57) dev build for Android. Screens and flows are specified in
-[../SCOPE.md](../SCOPE.md); the gateway API in [../docs/gateway.md](../docs/gateway.md).
+[../SCOPE.md](../SCOPE.md); the gateway API in [../docs/gateway.md](../docs/gateway.md);
+every SMS the app and gateway exchange in [../docs/SMS.md](../docs/SMS.md).
 
 ## Layout
 
