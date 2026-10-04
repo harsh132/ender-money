@@ -97,23 +97,18 @@ sha256-pinned. rapidsnark is pinned by tag.
   - circuit 3, broken JSON, no input, `nk: "abc"` and a negative path index → 400;
   - a tampered nullifier, a 6-in input sent as 2-in, and a missing `nk` → 422.
 
-## Cloudflare wiring (files only, nothing deployed)
+## Cloudflare wiring
 
-[`cloudflare/prover.ts`](cloudflare/prover.ts):
+Lives in the gateway: [`gateway/src/prover.ts`](../gateway/src/prover.ts) and
+[`gateway/wrangler.jsonc`](../gateway/wrangler.jsonc).
 
-- `ProverContainer extends Container` (`@cloudflare/containers`, checked against 0.3.7), with `defaultPort = 8080`,
+- `ProverContainer extends Container` (`@cloudflare/containers` 0.3.7), with `defaultPort = 8080`,
   `sleepAfter = "60s"`, `enableInternet = false` and `pingEndpoint = "localhost/health"`.
-- `prove(env, circuit, input)` returns `{ proof, publicSignals }`. On a non-2xx answer it throws a
-  `ProverError` that carries the status.
-- `warm(env, circuit = 2)`.
-
-[`cloudflare/wrangler.snippet.jsonc`](cloudflare/wrangler.snippet.jsonc) adds:
-
-- the `containers` entry, with the custom instance `{ vcpu: 1, memory_mib: 3072, disk_mb: 2000 }`, `image:
-  ../prover/Dockerfile` and `max_instances: 1`;
-- the `PROVER` Durable Object binding;
-- migration `v3` with `new_sqlite_classes: ["ProverContainer"]`. Today's docs use `exports`, but the gateway already
-  uses `migrations` and the two can't be combined.
+- `prove(env, circuit, witnessJson)` returns `{ proof, publicSignals }`; a non-2xx answer throws a `ProverError`
+  carrying the status. `warm(env, circuit)` preloads that circuit's key.
+- wrangler: the `containers` entry (custom instance `{ vcpu: 1, memory_mib: 3072, disk_mb: 2000 }`, image
+  `../prover/Dockerfile`, `max_instances: 1`), the `PROVER` Durable Object binding and migration `v3`
+  (`new_sqlite_classes: ["ProverContainer"]`; the gateway uses `migrations`, which can't be combined with `exports`).
 
 What the gateway needs to know:
 
@@ -141,7 +136,6 @@ What the gateway needs to know:
 | `Dockerfile` | multi-stage: Debian build (rapidsnark, circom → C++ witness, server), distroless/static runtime |
 | `sync.sh` | copies the spike's circuits, circomlib, `.r1cs` and zkeys into `assets/` (gitignored) |
 | `test.mjs` | correctness, on-chain check, bad inputs, timings |
-| `cloudflare/` | `prover.ts` (container class + `prove`/`warm`), `wrangler.snippet.jsonc` |
 
 **Found on the way:** rapidsnark v0.0.8's `groth16_prover_create_zkey_file` unmaps the file when it returns, and
 leaves the prover pointing into freed memory. The first proof segfaults. The server reads the key into a buffer it

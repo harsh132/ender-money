@@ -1,6 +1,6 @@
 /**
- * Gateway side of the Groth16 prover container (prover/Dockerfile; copied from
- * prover/cloudflare/prover.ts). One named instance proves everything.
+ * Gateway side of the Groth16 prover container (prover/Dockerfile).
+ * One named instance proves everything.
  */
 import { Container, getContainer } from '@cloudflare/containers';
 
