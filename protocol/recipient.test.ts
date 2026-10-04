@@ -3,7 +3,7 @@ import type { Address } from 'viem';
 import { expect, test } from 'bun:test';
 import { decodePrivateAddress, encodePrivateAddress, parseRecipient } from './recipient';
 import { owner, packAddress, provingKeys, shieldedKeysFromSeed } from './shielded';
-import { fitsOneSegment, formatShieldedCommand, parseShieldedCommand } from './sms';
+import { fitsOneSegment, formatShieldedCommand, parseShieldedCommand, septets } from './sms';
 
 const BYTES = Uint8Array.from({ length: 64 }, (_, i) => i);
 const VECTOR = 'ender1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0jqgfzyvjz2f389q5j52ev95hz7vp3xgengdfkxuurjw3m8s7nu0cpgc7e7';
@@ -76,10 +76,14 @@ test('parseRecipient: addresses, URIs, numbers, private addresses', () => {
 });
 
 test('PAY to a private address fits one segment and round-trips', () => {
-  const pay = formatShieldedCommand({ kind: 'pay', to: MINE, amount: '999999.999999' });
-  expect(pay.length).toBe(139);
-  expect(fitsOneSegment(pay)).toBe(true);
+  const pay = formatShieldedCommand({ kind: 'pay', to: MINE, amount: '999999.999999' }, 'mainnet');
+  expect(septets(pay)).toBe(139);
   expect(parseShieldedCommand(pay)).toEqual({ kind: 'pay', to: MINE, amount: '999999.999999' });
+  // The worst phone text: with `[Test] ` (9 septets), 148.
+  const test = formatShieldedCommand({ kind: 'pay', to: MINE, amount: '999999.999999' }, 'testnet');
+  expect(septets(test)).toBe(148);
+  expect(fitsOneSegment(test)).toBe(true);
+  expect(parseShieldedCommand(test)).toEqual({ kind: 'pay', to: MINE, amount: '999999.999999', network: 'testnet' });
   expect(parseShieldedCommand(`pay ${MINE.toUpperCase()},10 ausd`)).toEqual({ kind: 'pay', to: MINE, amount: '10' });
   expect(parseShieldedCommand(`PAY ${MINE.slice(0, -1)}q, 10 AUSD`)).toBeNull();
 });

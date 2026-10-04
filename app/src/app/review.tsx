@@ -59,7 +59,8 @@ const paint = () => new Promise((r) => setTimeout(r, 32));
 /** Review, then the same screen tracks progress: Request sent -> Quote received -> Approve -> Sent. */
 export default function Review() {
   const p = useLocalSearchParams<{ to: string; toAddress?: string; phone?: string; label?: string; amount: string; deliver?: string; shield?: string; merge?: string }>();
-  const network = useStore((s) => s.network);
+  // The payment's own network, fixed when Review opens: every text it sends names it, whatever mode is shown later.
+  const [network] = useState(() => getState().network);
   const wallet = useStore((s) => s.wallet)!;
   const recents = useStore((s) => s.recents);
   /** Make private: public balance -> private balance (shield). */
@@ -145,7 +146,7 @@ export default function Review() {
     }
     setPipe('text');
     try {
-      await textGateway({ kind: 'send', to: draft.to, amount: draft.amount, deliver });
+      await textGateway({ kind: 'send', to: draft.to, amount: draft.amount, deliver }, network);
       setPhase({ k: 'wait-quote' });
     } catch (e) {
       fail('request', e);
@@ -235,7 +236,7 @@ export default function Review() {
     setPipe('text');
     try {
       const sms = { kind: 'sig', id: q.id, signature } as const;
-      await textGateway(sms);
+      await textGateway(sms, network);
       setPhase({ k: 'wait-sent', id: q.id, sms });
     } catch (e) {
       setPhase({ k: 'failed', step: 'sent', message: e instanceof NoSmsError ? e.message : errorText(e), quote: q });
@@ -286,7 +287,7 @@ export default function Review() {
     }
     setPipe('text');
     try {
-      await textGateway(merge ? { kind: 'merge' } : shield ? { kind: 'shield', amount: draft.amount } : { kind: 'pay', to: draft.to, amount: draft.amount });
+      await textGateway(merge ? { kind: 'merge' } : shield ? { kind: 'shield', amount: draft.amount } : { kind: 'pay', to: draft.to, amount: draft.amount }, network);
       setPhase({ k: 'wait-quote' });
     } catch (e) {
       fail('request', e);
@@ -372,7 +373,7 @@ export default function Review() {
     }
     setPipe('text');
     try {
-      await textGateway(sms);
+      await textGateway(sms, network);
       setPhase({ k: 'wait-sent', id, sms });
     } catch (e) {
       // Nothing left the phone: free the notes.
@@ -576,7 +577,7 @@ export default function Review() {
               title="Text again"
               kind="text"
               onPress={() =>
-                phase.k === 'wait-quote' ? begin() : void textGateway(phase.sms).catch((e) => fail('sent', e))
+                phase.k === 'wait-quote' ? begin() : void textGateway(phase.sms, network).catch((e) => fail('sent', e))
               }
             />
           </>

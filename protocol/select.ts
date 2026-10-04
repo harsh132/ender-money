@@ -68,3 +68,14 @@ export const selectNotes = <N extends SelectableNote>(
   while (ins.length < plan.circuit && rest.length) ins.push(rest.splice(rng(rest.length), 1)[0]!);
   return { circuit: plan.circuit, ins: ins.sort((a, b) => a.pos - b.pos) };
 };
+
+/**
+ * A merge: the 12 largest eligible notes (ties: lower tree position first), in
+ * the smallest circuit that holds them; T is the fee. The gateway accepts any
+ * 1-12 distinct notes, so this is the phone's rule alone.
+ */
+export const selectMerge = <N extends SelectableNote>(notes: N[], T: bigint): { circuit: number; ins: N[]; err?: undefined } | { err: 'FUNDS' } => {
+  const ins = largestFirst(notes).slice(0, CIRCUITS[CIRCUITS.length - 1]);
+  if (!ins.length || sum(ins) < T) return { err: 'FUNDS' };
+  return { circuit: CIRCUITS.find((c) => c >= ins.length)!, ins: ins.sort((a, b) => a.pos - b.pos) };
+};

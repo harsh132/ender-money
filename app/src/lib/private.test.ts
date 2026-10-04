@@ -3,6 +3,7 @@ import { hkdfSync } from 'node:crypto';
 import { parseUnits } from 'viem';
 import { buildTx, newUser, owner, packAddress, provingKeys, shieldedKeysFromSeed, unpackAddress, verifySig } from '../../../protocol/shielded';
 import { encodePrivateAddress } from '../../../protocol/recipient';
+import { selectMerge } from '../../../protocol/select';
 import { b64, formatReply, parseReply, type Reply } from '../../../protocol/sms';
 import {
   applyReply,
@@ -13,6 +14,7 @@ import {
   privateBalance,
   resync,
   shieldedUser,
+  shouldAutoMerge,
   signPrivate,
   textNetwork,
   type Awaiting,
@@ -223,4 +225,53 @@ test('signPrivate: a merge is 12 notes in, 0 to ourselves and one note back, as 
     domain: { chainId: 10143, pool: '0xbe34bb676ba6d40098e8aaa36b4599400c9810ff' },
   });
   expect(verifySig(r.sig, tx.msg, provingKeys(user))).toBe(true);
+});
+
+test('selectMerge: the 12 largest notes, ties by tree position, in position order', () => {
+  // Amounts 0..14 at shuffled positions, plus a second 13 and a second 3.
+  const notes = [9, 3, 14, 0, 7, 12, 5, 1, 10, 2, 13, 6, 11, 4, 8].map((amount, pos) => ({ pos, amount: BigInt(amount) * 1_000_000n }));
+  const tied = [...notes, { pos: 15, amount: 13_000_000n }, { pos: 16, amount: 3_000_000n }];
+  const r = selectMerge(tied, 10_000n);
+  if (r.err) throw new Error(r.err);
+  expect(r.circuit).toBe(12);
+  // Largest first: 14, 13 (pos 10), 13 (pos 15), 12, 11, 10, 9, 8, 7, 6, 5, 4; the 3s, 2, 1 and 0 are left.
+  expect(r.ins.map((n) => Number(n.amount / 1_000_000n))).toEqual([9, 14, 7, 12, 5, 10, 13, 6, 11, 4, 8, 13]);
+  expect(r.ins.map((n) => n.pos)).toEqual([0, 2, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15]);
+  // Ties at the cut: the lower position wins.
+  const flat = Array.from({ length: 14 }, (_, i) => ({ pos: 20 - i, amount: 5_000_000n }));
+  expect((selectMerge(flat, 10_000n) as { ins: { pos: number }[] }).ins.map((n) => n.pos)).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+  // Fewer notes: all of them, smallest circuit that holds them; nothing to pay the fee with is FUNDS.
+  expect(selectMerge(notes.slice(0, 5), 10_000n)).toMatchObject({ circuit: 6 });
+  expect(selectMerge([], 10_000n)).toEqual({ err: 'FUNDS' });
+  expect(selectMerge([{ pos: 0, amount: 5_000n }], 10_000n)).toEqual({ err: 'FUNDS' });
+});
+
+test('signPrivate: a merge spends the 12 largest notes, not a random fill', () => {
+  const user = shieldedUser(PRF);
+  const notes = Array.from({ length: 20 }, (_, i) => note(i, String(i + 1)));
+  const q = { id: 'MG24', exp: Math.floor(Date.now() / 1000) + 600, fee: '0.01' };
+  for (const rng of [() => 0, (k: number) => k - 1]) {
+    const r = signPrivate(user, { notes, awaiting: [] }, { kind: 'merge', amount: '0' }, q, 'testnet', rng);
+    if ('err' in r) throw new Error(r.err);
+    expect(r.refs).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+    expect(r.awaiting.outs[0]!.amount).toBe(u(String(9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 17 + 18 + 19 + 20 - 0.01)));
+  }
+});
+
+test('auto-merge: only when on, online, unlocked, registered, nothing pending and more than 12 notes', () => {
+  const many = { notes: Array.from({ length: 13 }, (_, i) => note(i, '1')), awaiting: [] };
+  const go = { on: true, online: true, unlocked: true, registered: true, network: 'testnet' as const, cache: many };
+  expect(shouldAutoMerge(go)).toBe(true);
+  expect(shouldAutoMerge({ ...go, on: false })).toBe(false);
+  expect(shouldAutoMerge({ ...go, online: false })).toBe(false);
+  expect(shouldAutoMerge({ ...go, unlocked: false })).toBe(false);
+  expect(shouldAutoMerge({ ...go, registered: false })).toBe(false);
+  expect(shouldAutoMerge({ ...go, network: 'mainnet' })).toBe(false); // no pool
+  expect(shouldAutoMerge({ ...go, cache: { ...many, notes: many.notes.slice(0, 12) } })).toBe(false); // 12 fit one payment
+  // A merge (or any payment) still waiting: its notes are held, and another merge would race it.
+  const mergeWaiting: Awaiting = { id: 'MG23', kind: 'merge', amount: '0', ins: [], outs: [], exp: 2e9 };
+  expect(shouldAutoMerge({ ...go, cache: { ...many, awaiting: [mergeWaiting] } })).toBe(false);
+  expect(shouldAutoMerge({ ...go, cache: { notes: [...many.notes, note(20, '1')], awaiting: [{ ...awaitingPay, ins: [20] }] } })).toBe(false);
+  // Spent and dust notes don't count towards the 13.
+  expect(shouldAutoMerge({ ...go, cache: { ...many, notes: [...many.notes.slice(0, 12), note(12, '1', true), note(13, '0.0005')] } })).toBe(false);
 });

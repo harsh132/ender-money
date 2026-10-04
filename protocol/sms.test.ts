@@ -2,12 +2,15 @@ import { expect, test } from 'bun:test';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   fitsOneSegment,
+  b64,
   formatCommand,
   formatOtp,
+  formatShieldedCommand,
   formatReply,
   normalizePhone,
   parseCommand,
   parseReply,
+  parseShieldedCommand,
   septets,
   withRetrieverHash,
   type Command,
@@ -17,25 +20,33 @@ import {
 const key = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
 const address = privateKeyToAccount(key).address;
 
-test('commands round-trip and fit one segment', async () => {
+test('commands round-trip and fit one segment, on either network', async () => {
   const signature = await privateKeyToAccount(key).signMessage({ message: 'x' });
   const commands: Command[] = [
-    { kind: 'sync', network: 'mainnet' },
-    { kind: 'sync', network: 'testnet' },
+    { kind: 'sync' },
     { kind: 'send', to: address.toLowerCase(), amount: '10.5', deliver: 'AUSD' },
     { kind: 'send', to: '+919876543210', amount: '0.001', deliver: 'CTK' },
     { kind: 'sig', id: '7F3K', signature },
   ];
   for (const c of commands) {
-    const text = formatCommand(c);
-    expect(fitsOneSegment(text)).toBe(true);
-    expect(parseCommand(text)).toEqual(c);
+    const main = formatCommand(c, 'mainnet');
+    const test = formatCommand(c, 'testnet');
+    expect(test).toBe(`[Test] ${main}`);
+    expect(septets(test)).toBe(septets(main)! + 9);
+    expect(fitsOneSegment(test)).toBe(true);
+    // Unprefixed: mainnet for SYNC, the gateway's legacy rule for anything else (no network).
+    expect(parseCommand(main)).toEqual(c.kind === 'sync' ? { ...c, network: 'mainnet' } : c);
+    expect(parseCommand(test)).toEqual({ ...c, network: 'testnet' });
   }
 });
 
 test('commands are forgiving about case and spacing, strict about content', () => {
-  expect(parseCommand('  sync   t ')).toEqual({ kind: 'sync', network: 'testnet' });
+  expect(parseCommand('  sync   t ')).toEqual({ kind: 'sync', network: 'testnet' }); // the older SYNC T
+  expect(parseCommand(' [test]  sync')).toEqual({ kind: 'sync', network: 'testnet' });
+  expect(parseCommand(`[TEST] send ${address},10 ausd`)).toMatchObject({ kind: 'send', network: 'testnet', amount: '10' });
   expect(parseCommand(`send ${address},10 ausd`)).toMatchObject({ kind: 'send', to: address.toLowerCase(), amount: '10' });
+  expect(parseCommand(`send ${address},10 ausd`)).not.toHaveProperty('network');
+  expect(parseCommand('[Main] SYNC')).toBeNull();
   expect(parseCommand('SEND 12345, 10 AUSD')).toBeNull(); // not an address or E.164 number
   expect(parseCommand(`SEND ${address}, 0 AUSD`)).toBeNull();
   expect(parseCommand(`SEND ${address}, 1.1234567 AUSD`)).toBeNull(); // AUSD has 6 decimals
@@ -134,4 +145,24 @@ test('sender numbers normalise to E.164; non-personal senders are refused', () =
     expect(normalizePhone(raw)).toBe('+919876543210');
   expect(normalizePhone('+14155550123')).toBe('+14155550123');
   for (const raw of ['VM-AIRTEL', '56767', 'AD-HDFCBK', '+123']) expect(normalizePhone(raw)).toBeNull();
+});
+
+test('phone texts at their longest, with [Test]: all fit (no hash line on phone texts)', async () => {
+  const signature = await privateKeyToAccount(key).signMessage({ message: 'x' });
+  const ender1 = 'ender1rreg3epk4xpk3zmh7sujagu783a06av4andq2dq8x37ye6z6gfe7r3xyxafcr5ggzcaag53fumarcwpcvmy62nc4lc823ktn46kkq2g7q6dx9';
+  const refs = Array.from({ length: 12 }, (_, i) => 262_143 - i);
+  const lengths = {
+    sync: septets(formatCommand({ kind: 'sync' }, 'testnet')),
+    send: septets(formatCommand({ kind: 'send', to: address.toLowerCase(), amount: '999999.999999', deliver: 'CTK' }, 'testnet')),
+    sig: septets(formatCommand({ kind: 'sig', id: '7F3K', signature }, 'testnet')),
+    pay: septets(formatShieldedCommand({ kind: 'pay', to: ender1, amount: '999999.999999' }, 'testnet')),
+    shield: septets(formatShieldedCommand({ kind: 'shield', amount: '999999.999999' }, 'testnet')),
+    merge: septets(formatShieldedCommand({ kind: 'merge' }, 'testnet')),
+    privateSig: septets(formatShieldedCommand({ kind: 'shieldedSig', id: '7F3K', refs, signature: new Uint8Array(64).fill(255) }, 'testnet')),
+  };
+  expect(lengths).toEqual({ sync: 13, send: 82, sig: 106, pay: 148, shield: 34, merge: 14, privateSig: 141 });
+  const sig = formatShieldedCommand({ kind: 'shieldedSig', id: '7F3K', refs, signature: new Uint8Array(64).fill(255) }, 'testnet');
+  expect(parseShieldedCommand(sig)).toMatchObject({ kind: 'shieldedSig', refs, network: 'testnet', signature: new Uint8Array(64).fill(255) });
+  expect(parseCommand(sig)).toBeNull();
+  expect(b64(new Uint8Array(64).fill(255)).length).toBe(86);
 });

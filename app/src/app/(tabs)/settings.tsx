@@ -7,10 +7,11 @@ import type { NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
 import { ago, phoneMasked, short } from '../../lib/format';
 import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
+import { hasPool } from '../../lib/private';
 import { getState, setState, signOut, useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { online } from '../../lib/transport';
-import { ensureRegistered, errorText, refresh, syncByText } from '../../lib/wallet';
+import { autoMerge, ensureRegistered, errorText, refresh, syncByText } from '../../lib/wallet';
 import { Chevron } from '../../ui/icons';
 import { Banner, T, TestnetPill } from '../../ui/kit';
 
@@ -22,6 +23,7 @@ export default function Settings() {
   const network = useStore((s) => s.network);
   const alerts = useStore((s) => s.alerts);
   const gateway = useStore((s) => s.gateway);
+  const merge = useStore((s) => !!s.autoMerge);
   const snapshot = useStore((s) => s.account[s.network]);
   const [busy, setBusy] = useState<string>();
   const [note, setNote] = useState<{ text: string; tone: 'plain' | 'negative' }>();
@@ -60,6 +62,11 @@ export default function Settings() {
     } finally {
       setBusy(undefined);
     }
+  };
+
+  const toggleAutoMerge = (on: boolean) => {
+    setState({ autoMerge: on });
+    if (on) void autoMerge();
   };
 
   const syncNow = async () => {
@@ -131,6 +138,20 @@ export default function Settings() {
           />
           <Row title={busy === 'sync' ? 'Syncing…' : 'Sync now'} sub={snapshot ? `Last synced ${ago(snapshot.syncedAt)}` : 'Not synced yet'} onPress={syncNow} last />
         </Group>
+
+        {hasPool(network) ? (
+          <>
+            <Label>Private balance</Label>
+            <Group>
+              <Row
+                title="Auto-merge"
+                sub="Combines your 12 largest private notes when you have more than 12. $0.01 fee each time."
+                right={<Switch value={merge} onValueChange={toggleAutoMerge} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={merge ? '#fff' : c.fg3} />}
+                last
+              />
+            </Group>
+          </>
+        ) : null}
 
         {note ? <View style={{ marginTop: 16 }}><Banner tone={note.tone}>{note.text}</Banner></View> : null}
 

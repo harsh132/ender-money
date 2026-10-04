@@ -15,8 +15,8 @@ src/app/          routes (expo-router)
 src/lib/
   keys.ts       passkey -> PRF -> secp256k1 key (Mera), Quick send sessions
   wallet.ts     sync, signup (7702 authorizations), quote checks, signing
-  private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing
-  transport.ts  internet first; SMS composer when offline; replies by SMS, clipboard or paste
+  private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge rule
+  transport.ts  internet first; SMS composer when offline ([Test] prefix for testnet); replies by SMS, clipboard or paste
   inbox.ts      Received alerts by text -> Activity rows, deduped against the online history
 modules/sms-retriever/   Android: gateway texts by RECEIVE_SMS (queued while closed) or the SMS Retriever
   api.ts        gateway HTTPS client (5 s timeout, then SMS)
@@ -38,7 +38,9 @@ The app signs the Calibur batch it builds itself from the fields on screen
 The private balance's keys (testnet only) come from the same PRF output under
 HKDF label `ender/shielded/v1/seed` (`lib/private.ts`). The app registers the
 proving keys with the gateway (`/shielded/register`); the spending key never
-leaves the phone. Mainnet shows no private balance.
+leaves the phone. Mainnet shows no private balance. Settings' Auto-merge
+(off by default) folds the 12 largest notes into one while the app is online
+and a Quick send session holds the key; it never keeps a key for this.
 
 ## Texts from the gateway
 

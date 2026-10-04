@@ -393,9 +393,9 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
   throw new GatewayError('busy', 503);
 };
 
-/** The quote's kind, if `id` is this number's shielded quote: routes a public-shaped SMS SIG (a deposit's) by kind. */
-export const quoteKind = async (env: Env, phone: string, id: string) =>
-  (await env.DB.prepare('SELECT kind FROM shielded_quotes WHERE id = ? AND phone = ?').bind(id, phone).first<{ kind: ShieldedKind }>())?.kind;
+/** Kind and network, if `id` is this number's shielded quote: routes a public-shaped SMS SIG (a deposit's) by kind. */
+export const quoteOf = (env: Env, phone: string, id: string) =>
+  env.DB.prepare('SELECT kind, network FROM shielded_quotes WHERE id = ? AND phone = ?').bind(id, phone).first<{ kind: ShieldedKind; network: NetworkName }>();
 
 // ---------------------------------------------------------------- submit
 

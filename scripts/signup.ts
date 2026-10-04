@@ -89,11 +89,11 @@ const text = async (body: string) => {
   if (!parsed || parsed.kind === 'error') throw new Error(`gateway said: ${reply?.body}`);
   return parsed;
 };
-const sq = await text(formatCommand({ kind: 'send', to: recipient.toLowerCase(), amount: '0.03', deliver: 'AUSD' }));
+const sq = await text(formatCommand({ kind: 'send', to: recipient.toLowerCase(), amount: '0.03', deliver: 'AUSD' }, 'testnet'));
 if (sq.kind !== 'quote') throw new Error('expected a quote');
 const smsCalls = transferWithFee(net.ausd, recipient, parseUnits('0.03', AUSD_DECIMALS), FEE_RECIPIENT, parseUnits(sq.fee, AUSD_DECIMALS));
 const smsSig = await user.signTypedData(signedBatchTypedData(user.address, net.chain.id, smsCalls, sq.nonce, BigInt(sq.expires)));
-await text(formatCommand({ kind: 'sig', id: sq.id, signature: smsSig }));
+await text(formatCommand({ kind: 'sig', id: sq.id, signature: smsSig }, 'testnet'));
 
 // Logging in again finds the wallet.
 const again = await api<{ devCode?: string }>('POST', '/auth/start', { phone });

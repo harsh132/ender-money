@@ -1,6 +1,7 @@
 # SMS reference
 
-Every text Ender sends or receives, as the code does it after `29d0986`. The
+Every text Ender sends or receives, as the code does it after `f4e72e4` plus
+the phone-side `[Test] ` prefix and auto-merge. The
 grammar lives in `protocol/sms.ts` (with `protocol/recipient.ts` for
 recipients and `protocol/shielded.ts` for private payments); the gateway side
 is `gateway/src/sms.ts`, `auth.ts`, `activity.ts` and `shielded.ts`; the app
@@ -57,18 +58,39 @@ unset, nothing is appended.
 
 ### `[Test] ` and the network of a text
 
-Every gateway text about testnet starts with `[Test] `: `OK`, both `Q`s,
-`Sent`, `Shielded`, `ERR`, `Got` and `Received`. No prefix means mainnet. It
-costs 9 septets (7 characters, `[` and `]` two each); every worst case below
-includes it. Formatters take `test: true` (`formatReply` adds the prefix);
-`parseReply` strips it and sets `test: true`.
+Every text about testnet starts with `[Test] `, in both directions. It costs
+9 septets (7 characters, `[` and `]` two each); every worst case below
+includes it.
 
-How the gateway knows the network: `SYNC T` / `SYNC` name it; `SEND` uses the
-number's current network (`links.network`); a public `SIG` uses its session's
-network; every private command and a deposit `SIG` are testnet
-(`SHIELDED_NETWORK`). Texts with no network: OTP, `ERR bad-command`, and an
-`ERR` for a number or session that doesn't exist (`not-registered` after a
-plain `SEND`, `unknown-session`).
+- **Gateway → phone**: `OK`, both `Q`s, `Sent`, `Shielded`, `ERR`, `Got` and
+  `Received`. No prefix means mainnet. `formatReply` adds it for `test: true`;
+  `parseReply` strips it and sets `test: true`.
+- **Phone → gateway**: every command the app sends for testnet: `SYNC`,
+  `SEND`, `PAY`, `SHIELD`, `MERGE` and both `SIG` shapes.
+  `formatCommand(c, network)` / `formatShieldedCommand(c, network)` take the
+  network; the app always passes the payment's own (Review fixes it when it
+  opens), never just the mode on screen. Mainnet commands have no prefix.
+  `parseCommand` / `parseShieldedCommand` strip it (any case, one optional
+  space after `]`) and return `network: 'testnet'`.
+
+How the gateway picks the network of a command (`gateway/src/sms.ts`):
+
+| Command | `[Test] ` prefix | No prefix (mainnet, or an older app) |
+| --- | --- | --- |
+| `SYNC` | testnet | mainnet; the older `SYNC T` is still testnet |
+| `SEND` | testnet | mainnet |
+| public / deposit `SIG` | its session's or quote's network, which must be testnet, else `ERR <id> wrong-network` | its session's or quote's network |
+| `PAY`, `SHIELD`, `MERGE` | testnet | testnet (`SHIELDED_NETWORK`, the only pool) |
+| private `SIG` | its quote's network, which must be testnet, else `ERR <id> wrong-network` | its quote's network |
+
+`SYNC` and `[Test] SEND` also make that network the number's current one
+(`links.network`, as online calls do); a `SIG` and the private commands
+don't change it. A refused `wrong-network` `SIG` leaves its quote open.
+An unprefixed `SEND` is always mainnet, whatever the number used last.
+
+Texts with no network: OTP, `ERR bad-command`, and an `ERR` for a number or
+session that doesn't exist (`not-registered` after a plain `SEND`,
+`unknown-session`).
 
 **The app's mode is display only.** Every text is applied to the network it
 names, whatever mode the app shows: `OK` sets that network's balance and
@@ -88,7 +110,7 @@ payment ("That reply was for mainnet, not this payment. …"), code
 Commands (phone → gateway), `parseCommand` / `parseShieldedCommand`:
 
 - Leading and trailing whitespace is trimmed; runs of whitespace become one space.
-- The command word, `T`, `AUSD` and `> CTK` are case-insensitive. So is the session id in `SIG` (upper-cased).
+- The `[Test] ` prefix, the command word, `T`, `AUSD` and `> CTK` are case-insensitive. So is the session id in `SIG` (upper-cased).
 - After the recipient, a comma, then an optional single space: `SEND +919876543210,20 ausd` parses. A space before the comma does not.
 - 0x addresses: lower-case, or mixed case with a valid EIP-55 checksum (viem `isAddress`); stored lower-case. `ender1…` addresses are case-insensitive and lower-cased.
 - Base64 fields are case-sensitive.
@@ -145,8 +167,9 @@ texts when `online()` is false (NetInfo connected and internet not
 known-unreachable) or a call throws `OfflineError` (5 s timeout); Settings
 sends `SYNC` by text whenever the online refresh fails.
 
-Sending: `textGateway(command)` opens the system SMS composer to the gateway
-number with the command filled in; the user taps send. It also opens a
+Sending: `textGateway(command, network)` opens the system SMS composer to the
+gateway number with the command filled in (with `[Test] ` for testnet); the
+user taps send. It also opens a
 10-minute window in which the clipboard is read (`REPLY_WINDOW_MS`).
 
 Receiving, every path ends in `acceptReply(raw)`, whose listeners are the root
@@ -206,19 +229,19 @@ through RECEIVE_SMS or the Retriever; otherwise the user types it.
 
 ## Account
 
-### `SYNC` / `SYNC T` (phone → gateway)
+### `SYNC` (phone → gateway)
 
 Sent from Settings ("Sync now", or switching Test mode) when the online
-refresh fails (`syncByText`).
+refresh fails (`syncByText`), for the network the app shows.
 
 ```
 SYNC
-SYNC T
+[Test] SYNC
 ```
 
-`SYNC` is mainnet, `SYNC T` testnet. Either one also sets the number's
-current network (`links.network`), which every later `SEND` by text uses.
-4 and 6 septets.
+`SYNC` is mainnet, `[Test] SYNC` testnet; an older app's `SYNC T` is still
+testnet. Each also sets the number's current network (`links.network`).
+4 and 13 septets (`SYNC T`: 6).
 
 Gateway: `account(env, from, network)`. Errors: `ERR not-registered` (number
 not linked), `ERR rpc-unavailable`, `ERR internal`.
@@ -229,7 +252,7 @@ not linked), `ERR rpc-unavailable`, `ERR internal`.
 [Test] OK n=<nonce> dlg=<0|1> AUSD=<balance>[ inr=<rate>]
 ```
 
-`[Test] ` for `SYNC T` (and on every testnet text below; see Conventions).
+`[Test] ` for a testnet `SYNC` (and on every testnet text below; see Conventions).
 
 | Field | Meaning |
 | --- | --- |
@@ -258,7 +281,7 @@ Sent from Review when the route is public and the app is offline at the quote
 step (`start`). Also "Text again" while waiting for the quote.
 
 ```
-SEND <to>, <amount> AUSD[ > CTK]
+[Test] SEND <to>, <amount> AUSD[ > CTK]
 ```
 
 | Field | Format |
@@ -270,12 +293,15 @@ SEND <to>, <amount> AUSD[ > CTK]
 Examples:
 
 ```
-SEND +919876543210, 20 AUSD                                          27 septets
-SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 10.5 AUSD           58
-SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 999999.999999 AUSD > CTK   73 (worst with a 13-char amount)
+SEND +919876543210, 20 AUSD                                                 27 septets
+SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 10.5 AUSD                  58
+[Test] SEND +919876543210, 20 AUSD                                          36
+[Test] SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 10.5 AUSD           67
+[Test] SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 999999.999999 AUSD > CTK   82 (worst with a 13-char amount; CTK is testnet only)
 ```
 
-Gateway (`quote` in `core.ts`) uses the number's current network. In order:
+Gateway (`quote` in `core.ts`): testnet for `[Test] SEND`, mainnet without the
+prefix; it also becomes the number's current network. In order:
 `not-registered`, `unsupported` (CTK where the network has no pair, i.e.
 mainnet), `bad-amount`, `not-on-ender` (a number with no wallet),
 `self-transfer`, `not-delegated`, `low-balance` (balance < amount + fee),
@@ -308,8 +334,8 @@ Q 7F3K n=4 exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc
 ```
 
 Parse needs `id`, `n`, `exp`, `fee` and a valid `to`. A `Q` for the other
-network than the payment's fails it (`wrong-network`): an SMS `SEND` is quoted
-on the number's current network, which the last online call or `SYNC` set.
+network than the payment's fails it (`wrong-network`); with every `SEND`
+naming its network this only happens if a reply is mixed up.
 App (`checkQuote`), before any signing prompt:
 
 - `recipient-mismatch` if the user gave a 0x address and `to` differs.
@@ -328,7 +354,7 @@ Sent when the app is offline at the submit step (`submit`), whether the quote
 came by HTTPS or by text.
 
 ```
-SIG <id> <signature>
+[Test] SIG <id> <signature>
 ```
 
 | Field | Format |
@@ -336,17 +362,19 @@ SIG <id> <signature>
 | `id` | Session id from the `Q` |
 | `signature` | 65-byte secp256k1 signature, padded base64, 88 characters |
 
-Example, 97 septets (fixed length):
+Examples, 97 and 106 septets (fixed lengths):
 
 ```
 SIG 7F3K JWFtkOhiqEI6qtMqeJDLLv097MZuT+ZlXGH38t36bw8hWtT7wsWOhGAh3UxLF0vMXp6CaAUrwor+/jbX8p82Qxs=
+[Test] SIG 7F3K JWFtkOhiqEI6qtMqeJDLLv097MZuT+ZlXGH38t36bw8hWtT7wsWOhGAh3UxLF0vMXp6CaAUrwor+/jbX8p82Qxs=
 ```
 
 Two fields after `SIG` is the public shape. If `id` is this number's
-`SHIELD` quote, it is a deposit instead (below). Otherwise `sign` in
+`SHIELD` quote, it is a deposit instead (below). A `[Test] SIG` for a mainnet
+session answers `ERR <id> wrong-network` and leaves it open. Otherwise `sign` in
 `core.ts`: claims the session, rebuilds the typed data from the stored
 session, recovers the signer, re-reads the balance, queues the batch with the
-network's `Sponsor`. Errors, as `ERR <id> <code>`: `unknown-session`,
+network's `Sponsor`. Errors, as `ERR <id> <code>`: `wrong-network`, `unknown-session`,
 `in-progress`, `expired`, `bad-sig`, `low-balance`, `rpc-unavailable`,
 `reverted` (simulation dropped it), `failed` (landed without the transfer),
 `send-failed`, `internal`. Every refusal after the claim reopens the session,
@@ -382,8 +410,9 @@ hash. The recipient gets a `Received` alert from the Alchemy webhook.
 
 ## Private payments
 
-Testnet only: private commands carry no network and the gateway always uses
-`testnet` (`SHIELDED_NETWORK`), so every private reply starts with `[Test] `.
+Testnet only: the app sends every private command with `[Test] `; an older
+app's unprefixed ones also go to `testnet` (`SHIELDED_NETWORK`, the only
+pool). Every private reply starts with `[Test] `.
 The sender must have registered proving keys online (`/shielded/register`),
 else `NOUSER`.
 
@@ -393,7 +422,7 @@ Sent from Review when the route is private and the app is offline at the
 quote step (`startPrivate`).
 
 ```
-PAY <to>, <amount> AUSD
+[Test] PAY <to>, <amount> AUSD
 ```
 
 | `to` | Kind | Meaning |
@@ -405,12 +434,13 @@ PAY <to>, <amount> AUSD
 Examples:
 
 ```
-PAY +919876543210, 20 AUSD                                     26 septets
-PAY 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 5 AUSD         54
-PAY ender1rreg3epk4xpk3zmh7sujagu783a06av4andq2dq8x37ye6z6gfe7r3xyxafcr5ggzcaag53fumarcwpcvmy62nc4lc823ktn46kkq2g7q6dx9, 20 AUSD   128
+[Test] PAY +919876543210, 20 AUSD                                     35 septets
+[Test] PAY 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 5 AUSD         63
+[Test] PAY ender1rreg3epk4xpk3zmh7sujagu783a06av4andq2dq8x37ye6z6gfe7r3xyxafcr5ggzcaag53fumarcwpcvmy62nc4lc823ktn46kkq2g7q6dx9, 20 AUSD   137
 ```
 
-Worst case: `ender1…` with `999999.999999`, 139.
+Worst case, and the longest phone text: `ender1…` with `999999.999999`, 148
+(139 unprefixed, as an older app sends it). Phone texts carry no hash line.
 
 When the app takes this route: `decideRoute` says private when the network has
 a pool and the app is registered, delivery is AUSD, the recipient can take it
@@ -436,10 +466,11 @@ Moves AUSD from the number's own wallet into its private balance ("Make
 private"). Sent when offline at the quote step.
 
 ```
-SHIELD <amount> AUSD
+[Test] SHIELD <amount> AUSD
 ```
 
-`SHIELD 50 AUSD` (14), worst `SHIELD 999999.999999 AUSD` (25).
+`[Test] SHIELD 50 AUSD` (23), worst `[Test] SHIELD 999999.999999 AUSD` (34);
+unprefixed 14 and 25.
 
 Gateway errors: `NOUSER`, `bad-amount`, `NOEOA` (no linked wallet on record),
 `FUNDS` (wallet balance < amount + fee), `busy`, `internal` (for example an
@@ -448,21 +479,42 @@ RPC failure reading the balance).
 ### `MERGE` (phone → gateway)
 
 ```
-MERGE
+[Test] MERGE
 ```
 
-5 septets. Nothing after it. Folds notes into one: a transfer of 0 to self,
-the change being everything else minus the fee. Errors as `PAY`.
+14 septets (`MERGE` alone: 5). Nothing after it. Folds notes into one: a
+transfer of 0 to self, the change being everything else minus the fee.
+Errors as `PAY`.
 
 App: Home shows a **Merge** pill next to Make private on a network with a
 pool when more than 12 private notes are usable (`canMerge`: `eligible`, and
 not held by a waiting payment; 12 is the largest circuit). It opens Review in
 merge mode ("Merge", Private notes 12 into 1, Fee $0.01). Approving (passkey or
 Quick send) asks for the quote online (`POST /shielded/quote {kind:'merge'}`,
-no amount) or texts `MERGE`; the phone picks the notes with the protocol
-selection for T = fee (12 in) and builds 0 to itself plus the change, one note
-back at `p+1` (`signPrivate`, kind `merge`), then submits online or by the
-private `SIG`. The `Sent` with its id settles it.
+no amount) or texts `[Test] MERGE`; the phone picks the 12 largest usable
+notes, ties by lower tree position (`selectMerge` in `protocol/select.ts`;
+fewer if it has fewer, in the smallest circuit that holds them), and builds 0
+to itself plus the change, one note back at `p+1` (`signPrivate`, kind
+`merge`), then submits online or by the private `SIG`. The `Sent` with its id
+settles it. The gateway doesn't check which notes a merge uses: any 1-12
+distinct refs it can resolve, as for a payment.
+
+**Auto-merge** (Settings → Private balance, shown on a network with a pool;
+off by default, persisted as `autoMerge`): the app runs one merge by itself,
+online only (`/shielded/quote` + `/shielded/submit`, never by text), when all
+of these hold (`shouldAutoMerge` in `private.ts`, run by `autoMerge` in
+`wallet.ts`): the toggle is on, the app is online, the shielded spending key
+is in memory (an open Quick send session, which a passkey approval opens;
+nothing is stored for this, so a locked app waits for the next unlock), the
+network's private balance is registered, nothing is waiting to settle (no
+merge, nor a payment whose notes it could collide with), and more than 12
+notes are usable. Triggers: after a resync (`pullNotes`), after a private
+payment settles (online, or a `Sent` / `Shielded` text), when the app comes
+to the foreground, and when the toggle is turned on. It shows in Activity as
+"Merged private notes", like a manual merge. A merge that settles re-checks
+(more than 12 may still be left); one still pending waits for a resync. A
+failure only logs (`auto-merge: <code>`) and frees the notes; it is retried
+at the next trigger, not before.
 
 ### `Q`, private (gateway → phone)
 
@@ -502,8 +554,8 @@ came by text without `to=`, the typed address is used as `to`.
 | `recipient-mismatch` | Shield or merge with a `to`; withdrawal whose `to` isn't the requested 0x address; payment whose `to` isn't 64 bytes, or isn't the `ender1…` key the user gave |
 | `KEY CHANGED` | The number's pinned shielded address (`shieldedPins`) differs from `to`. Shown as "This contact's private address changed since you last paid them. Nothing was sent." App-only; never on the wire |
 
-Then the app picks the notes (`selectNotes`; it can still answer `FUNDS` /
-`MERGE` itself), builds the transaction the gateway will rebuild, signs it
+Then the app picks the notes (`selectNotes`, or `selectMerge` for a merge; it
+can still answer `FUNDS` / `MERGE` itself), builds the transaction the gateway will rebuild, signs it
 with the authority key, and holds the input notes (`holdNotes`). A shield
 instead builds the deposit (`buildDeposit`, seed `quoteSeed(id, exp)`) and
 signs AUSD's `ReceiveWithAuthorization` with the wallet key.
@@ -513,7 +565,7 @@ signs AUSD's `ReceiveWithAuthorization` with the wallet key.
 For `PAY` and `MERGE` quotes. Sent when offline at the submit step.
 
 ```
-SIG <id> <refs> <signature>
+[Test] SIG <id> <refs> <signature>
 ```
 
 | Field | Format |
@@ -525,15 +577,18 @@ SIG <id> <refs> <signature>
 Three fields after `SIG` is the private shape.
 
 ```
-SIG 7F3K AAC D76n2YDRR+PysiacoSqPvXl93ED9Amd3Rx8L0/11GyLXAFqDntlxNWMMjLUU05PAXzMMFTyUgU+kATrW+ZvwAg      99 septets
-SIG 7F3K AACAAD D76n2YDRR+PysiacoSqPvXl93ED9Amd3Rx8L0/11GyLXAFqDntlxNWMMjLUU05PAXzMMFTyUgU+kATrW+ZvwAg   102 (2 refs)
-SIG 7F3K AAAAABAACAADAAEAAFAAGAAHAAIAAJAAKJPg D76n2YDRR+PysiacoSqPvXl93ED9Amd3Rx8L0/11GyLXAFqDntlxNWMMjLUU05PAXzMMFTyUgU+kATrW+ZvwAg   132 (12 refs, worst)
+[Test] SIG 7F3K AAC D76n2YDRR+PysiacoSqPvXl93ED9Amd3Rx8L0/11GyLXAFqDntlxNWMMjLUU05PAXzMMFTyUgU+kATrW+ZvwAg      108 septets
+[Test] SIG 7F3K AACAAD D76n2YDRR+PysiacoSqPvXl93ED9Amd3Rx8L0/11GyLXAFqDntlxNWMMjLUU05PAXzMMFTyUgU+kATrW+ZvwAg   111 (2 refs)
+[Test] SIG 7F3K AAAAABAACAADAAEAAFAAGAAHAAIAAJAAK8// D76n2YDRR+PysiacoSqPvXl93ED9Amd3Rx8L0/11GyLXAFqDntlxNWMMjLUU05PAXzMMFTyUgU+kATrW+ZvwAg   141 (12 refs, worst)
 ```
+
+Unprefixed (an older app): 99, 102 and 132.
 
 Gateway (`shielded.submit`), as `ERR <id> <code>`:
 
 | Code | When |
 | --- | --- |
+| `wrong-network` | `[Test] SIG` for a quote on another network (the quote stays open) |
 | `UNKNOWN` | No such quote for this number |
 | `EXPIRED` | Past `exp`, never sent |
 | `in-progress` | Another submit of the same quote is still running after a 60 s wait |
@@ -553,9 +608,10 @@ apart) are tried exhaustively.
 
 ### `SIG`, deposit (phone → gateway)
 
-For a `SHIELD` quote. Same shape as the public `SIG`: `SIG <id> <88-char
-padded base64>`, 97 septets. The gateway routes it by the id
-(`shielded.quoteKind(...) === 'shield'`).
+For a `SHIELD` quote. Same shape as the public `SIG`: `[Test] SIG <id>
+<88-char padded base64>`, 106 septets (97 unprefixed). The gateway routes it
+by the id (`shielded.quoteOf(...)?.kind === 'shield'`); a prefix naming
+another network than the quote's is `ERR <id> wrong-network`.
 
 Gateway: rebuilds the deposit from its own record, recovers the EIP-3009
 signer, which must be the number's wallet (`BADSIG`), checks policy (`POLICY`),
@@ -705,19 +761,19 @@ recipient's `Received`.
 
 **Public send, offline**
 
-1. Phone → `SEND +919876543210, 20 AUSD`
+1. Phone → `SEND +919876543210, 20 AUSD` (`[Test] SEND …` on testnet)
 2. Gateway → `Q 7F3K n=4 exp=… fee=0.01 to=0x…` (or `ERR <code>`; both with `[Test] ` on testnet)
 3. App checks the quote, user approves (passkey or Quick send).
-4. Phone → `SIG 7F3K <88>`
+4. Phone → `SIG 7F3K <88>` (`[Test] SIG …` on testnet)
 5. Gateway → `Sent 7F3K 20 AUSD to=0x9965...dc tx=0xc6b9...fb` (or `ERR 7F3K <code>`)
 6. Gateway → recipient: `Received …` (webhook, alerts on).
 
 **Private `PAY` to a number** (offline; online: `/shielded/quote`, `/shielded/submit`)
 
-1. Phone → `PAY +919876543210, 20 AUSD`
+1. Phone → `[Test] PAY +919876543210, 20 AUSD`
 2. Gateway → `[Test] Q 7F3K exp=… fee=0.01 to=<86>`
 3. App checks (incl. `KEY CHANGED`), picks notes, signs.
-4. Phone → `SIG 7F3K <refs> <86>`
+4. Phone → `[Test] SIG 7F3K <refs> <86>`
 5. Gateway → `[Test] Sent 7F3K 20 AUSD to=+919876543210 tx=… p=2` (or `[Test] ERR 7F3K pending`, then repeat 4)
 6. Gateway → recipient: `[Test] Got 20 AUSD (private) p=2 b=<43>` (alerts on).
 
@@ -725,19 +781,20 @@ recipient's `Received`.
 `to=` (the app uses the typed key), `Sent` says `to=ender1rreg...6dx9`, and
 `Got` goes to the address's owner, whose number the payer never sees.
 
-**Private withdrawal to 0x**: `PAY 0x…, 5 AUSD` → `[Test] Q … to=0x…` (must
-equal the typed address) → `SIG <id> <refs> <86>` → `[Test] Sent <id> 5 AUSD
+**Private withdrawal to 0x**: `[Test] PAY 0x…, 5 AUSD` → `[Test] Q … to=0x…` (must
+equal the typed address) → `[Test] SIG <id> <refs> <86>` → `[Test] Sent <id> 5 AUSD
 to=0x9965...dc tx=…[ p=…]`. If the 0x address is a linked Ender wallet, its owner gets a
 `Received` from the pool address.
 
-**`SHIELD`**: `SHIELD 50 AUSD` → `[Test] Q 7F3K exp=… fee=0.01` → app signs
-the EIP-3009 authorization with the wallet key → `SIG 7F3K <88>` →
+**`SHIELD`**: `[Test] SHIELD 50 AUSD` → `[Test] Q 7F3K exp=… fee=0.01` → app signs
+the EIP-3009 authorization with the wallet key → `[Test] SIG 7F3K <88>` →
 `[Test] Shielded 7F3K 50 AUSD tx=… p=0` (or `[Test] ERR 7F3K pending`).
 
-**`MERGE`** (Home's Merge pill, more than 12 usable notes): `MERGE` →
-`[Test] Q <id> exp=… fee=0.01` → `SIG <id> <refs> <86>` (12 refs) →
-`[Test] Sent <id> 0 AUSD to=<own number> tx=… p=<n>`, merged note at `p+1`.
-Online: `/shielded/quote {kind:'merge'}`, `/shielded/submit`.
+**`MERGE`** (Home's Merge pill, more than 12 usable notes): `[Test] MERGE` →
+`[Test] Q <id> exp=… fee=0.01` → `[Test] SIG <id> <refs> <86>` (the 12
+largest notes) → `[Test] Sent <id> 0 AUSD to=<own number> tx=… p=<n>`, merged
+note at `p+1`. Online: `/shielded/quote {kind:'merge'}`, `/shielded/submit`;
+Auto-merge only ever takes this online path.
 
 **Incoming public payment**: transfer lands → Alchemy webhook → `transfers`
 row → `Received …` text (alerts on, ≤ 10 min old) → app adds the row; online,
@@ -772,6 +829,7 @@ waiting for `Sent`, any `ERR` with that id or no id) fails the step.
 | `low-balance` | `SEND`, `SIG` | Balance < amount + fee | "Not enough balance…" |
 | `swap-unavailable` | `SEND … > CTK` | Couldn't whitelist or price the swap | "Local-currency delivery is unavailable…" |
 | `busy` | `SEND`, `PAY`, `SHIELD`, `MERGE` | No free id after 5 tries | Gateway said |
+| `wrong-network` | `[Test] SIG` (any shape) | The session or quote is on another network; it stays open | "That approval was for the other network. Nothing was sent." |
 | `unknown-session` | `SIG` (public) | No such session for this number (also any `SIG` from an unlinked number) | Gateway said |
 | `in-progress` | `SIG` | Another submit is sending it | "Already sending." |
 | `expired` | `SIG` (public) | Session past its deadline | "That quote has expired. Try again." |
@@ -800,16 +858,12 @@ HTTPS-only codes (never in a text): `rate-limited`, `sms-unavailable`,
 
 App-only refusals (never on the wire): `expired`, `bad-quote`,
 `fee-too-high`, `recipient-mismatch`, `no-out`, `KEY CHANGED`,
-`wrong-passkey`, `wrong-network` (a reply for the other network than the
-payment's), and the public pin-change warning.
+`wrong-passkey`, and the public pin-change warning. `wrong-network` is both:
+the gateway's answer to a mismatched `[Test] SIG`, and the app's own refusal
+of a reply for the other network than the payment's.
 
 ## Open questions
 
-- **`SEND` by text and the current network.** An SMS `SEND` is quoted on the
-  number's current network (`links.network`), which only an online call or
-  `SYNC` sets. If that differs from the payment's, Review fails with
-  `wrong-network` instead of signing for the wrong chain; texting `SYNC T` /
-  `SYNC` first would avoid it.
 - **`Got` needs alerts on.** `gotAlert` skips numbers with `links.alerts` off,
   so they learn of a private payment only online.
 - **Public `SIG` while pending.** `sign` returns `pending` when no receipt came

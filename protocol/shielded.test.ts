@@ -257,7 +257,7 @@ test('SMS: every shielded message, formatted and parsed', () => {
     const positions = Array.from({ length: real }, () => rand(1 << 20));
     const sig = S.sign(users[0]!.authSk, 42n);
     const s = SM.formatSig(id, sig, positions);
-    strings.push([TM.formatShieldedCommand({ kind: 'shieldedSig', id, refs: positions, signature: Uint8Array.from(sig) }), s]);
+    strings.push([TM.formatShieldedCommand({ kind: 'shieldedSig', id, refs: positions, signature: Uint8Array.from(sig) }, 'mainnet'), s]);
     const p = TM.parseShieldedCommand(s) as Any;
     same({ id: p.id, refs: p.refs, sig: p.signature }, SM.parseSig(s));
     expect(TM.parseCommand(s)).toBeNull(); // the public parser never takes a private SIG
@@ -291,10 +291,11 @@ test('SMS: every shielded message, formatted and parsed', () => {
   same({ amount: shp.amount, tx: shp.tx, p: shp.p }, SM.parseShielded(sh));
   expect(TM.parseReply(shOurs)).toEqual({ ...shp, id });
 
-  strings.push([TM.formatShieldedCommand({ kind: 'shield', amount: '50' }), SM.formatShield('50')]);
+  strings.push([TM.formatShieldedCommand({ kind: 'shield', amount: '50' }, 'mainnet'), SM.formatShield('50')]);
   same((TM.parseShieldedCommand(SM.formatShield('50')) as Any).amount, SM.parseShield(SM.formatShield('50')).amount);
-  strings.push([TM.formatShieldedCommand({ kind: 'merge' }), SM.MERGE]);
+  strings.push([TM.formatShieldedCommand({ kind: 'merge' }, 'mainnet'), SM.MERGE]);
 
+  // Commands above are formatted unprefixed ('mainnet'), as the spike (an older app) sends them; testnet adds `[Test] `.
   for (const [t, s] of strings) {
     expect(t).toBe(s);
     expect(TM.fitsOneSegment(t)).toBe(true);
@@ -303,10 +304,10 @@ test('SMS: every shielded message, formatted and parsed', () => {
 
   // PAY is new (the spike sent SEND); it round-trips and never parses as a public SEND, nor SEND as PAY.
   for (const to of ['+919800000002', evm]) {
-    const pay = TM.formatShieldedCommand({ kind: 'pay', to, amount: '20' });
+    const pay = TM.formatShieldedCommand({ kind: 'pay', to, amount: '20' }, 'mainnet');
     expect(TM.parseShieldedCommand(pay)).toEqual({ kind: 'pay', to, amount: '20' });
     expect(TM.parseCommand(pay)).toBeNull();
-    expect(TM.parseShieldedCommand(TM.formatCommand({ kind: 'send', to, amount: '20', deliver: 'AUSD' }))).toBeNull();
+    expect(TM.parseShieldedCommand(TM.formatCommand({ kind: 'send', to, amount: '20', deliver: 'AUSD' }, 'testnet'))).toBeNull();
   }
   expect(TM.parseShieldedCommand('pay +919800000002,1.5 ausd')).toEqual({ kind: 'pay', to: '+919800000002', amount: '1.5' });
   expect(TM.parseShieldedCommand('PAY +919800000002, 0 AUSD')).toBeNull();

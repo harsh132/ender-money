@@ -62,14 +62,14 @@ if (viaSms) {
     if (!parsed || parsed.kind === 'error') throw new Error(`gateway said: ${reply?.body}`);
     return parsed;
   };
-  const ok = await text(formatCommand({ kind: 'sync', network }));
-  const q = await text(formatCommand({ kind: 'send', to: recipient.toLowerCase(), amount, deliver: 'AUSD' }));
+  const ok = await text(formatCommand({ kind: 'sync' }, network));
+  const q = await text(formatCommand({ kind: 'send', to: recipient.toLowerCase(), amount, deliver: 'AUSD' }, network));
   if (ok.kind !== 'ok' || q.kind !== 'quote') throw new Error('unexpected reply');
   if (q.to.toLowerCase() !== recipient.toLowerCase()) throw new Error('quote resolved a different recipient');
   const calls = transferWithFee(NETWORKS[network].ausd, recipient, parseUnits(amount, AUSD_DECIMALS), FEE_RECIPIENT, parseUnits(q.fee, AUSD_DECIMALS));
   const signature = await user.signTypedData(signedBatchTypedData(user.address, NETWORKS[network].chain.id, calls, q.nonce, BigInt(q.expires)));
-  await text(formatCommand({ kind: 'sig', id: q.id, signature }));
-  const after = await text(formatCommand({ kind: 'sync', network }));
+  await text(formatCommand({ kind: 'sig', id: q.id, signature }, network));
+  const after = await text(formatCommand({ kind: 'sync' }, network));
   if (after.kind === 'ok') console.log(`  balance ${ok.balance} -> ${after.balance} AUSD`);
   process.exit(0);
 }

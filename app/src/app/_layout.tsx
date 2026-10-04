@@ -16,7 +16,7 @@ import { GATEWAY_SMS } from '../lib/config';
 import { c } from '../lib/theme';
 import { hydrate, useStore } from '../lib/store';
 import { acceptReply, onReply } from '../lib/transport';
-import { applyOkReply, applyReceived, applyShieldedReply } from '../lib/wallet';
+import { applyOkReply, applyReceived, applyShieldedReply, autoMerge } from '../lib/wallet';
 
 void SplashScreen.preventAutoHideAsync();
 void hydrate();
@@ -36,12 +36,15 @@ export default function Root() {
 
   // Android: texts from the gateway's numbers (RECEIVE_SMS, queued while closed), or else the SMS Retriever, re-armed on
   // every foreground and after each text. Elsewhere a no-op; the clipboard and Paste reply still work everywhere.
+  // Back in the foreground with a Quick send session still open (after the SMS composer, say): Auto-merge may run.
   useEffect(() => {
     setSenders([GATEWAY_SMS.india, GATEWAY_SMS.international].filter((n): n is string => !!n));
     const off = onSms((body) => void acceptReply(body));
     void pump();
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') void pump();
+      if (s !== 'active') return;
+      void pump();
+      void autoMerge();
     });
     return () => {
       off();

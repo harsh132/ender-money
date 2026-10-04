@@ -117,15 +117,23 @@ signing up needs the app online.
 
 | In | Out |
 | --- | --- |
-| `SYNC` / `SYNC T` | `OK n=3 dlg=1 AUSD=45.20 inr=83.9`; `T` also switches the phone to testnet |
-| `SEND <address or +number>, <amount> AUSD[ > CTK]` | `Q <id> n=4 exp=<unix> fee=0.01 to=0x<40>[ out=<ctk>]` |
-| `SIG <id> <sig>` | `Sent <id> 10 AUSD to=0x12…cd tx=0xab…ef` |
+| `[Test] SYNC` / `SYNC` | `OK n=3 dlg=1 AUSD=45.20 inr=83.9`; also makes that network the number's current one (`SYNC T` still means testnet) |
+| `[Test] SEND <address or +number>, <amount> AUSD[ > CTK]` | `Q <id> n=4 exp=<unix> fee=0.01 to=0x<40>[ out=<ctk>]` |
+| `[Test] SIG <id> <sig>` | `Sent <id> 10 AUSD to=0x12…cd tx=0xab…ef` |
 | anything else | `ERR <id?> bad-command` |
 
-Every reply about testnet starts with `[Test] ` (`OK` for `SYNC T`, `Q`, `Sent`
-and `ERR` for a testnet number or session; every private reply, `Got` and
-testnet `Received`); no prefix means mainnet. The app applies each text to
-the network it names, whatever mode it shows. See [SMS.md](SMS.md).
+Every text about testnet starts with `[Test] `, both ways. The app prefixes
+every testnet command (with the payment's own network) and the gateway uses
+the network it names: `[Test] SEND` is quoted on testnet (and becomes the
+number's current network), a `[Test] SIG` whose session or quote is on
+another network is `ERR <id> wrong-network` (the quote stays open), private
+commands go to testnet. Unprefixed commands keep the older rule, so older
+app builds work: `SYNC` is mainnet, `SEND` uses the number's current
+network, a `SIG` its session's, private commands testnet. Every reply about
+testnet (`OK`, `Q`, `Sent`, `ERR`, every private reply, `Got`, testnet
+`Received`) starts with `[Test] `; no prefix means mainnet. The app applies
+each text to the network it names, whatever mode it shows. See
+[SMS.md](SMS.md).
 
 Errors: `expired`, `low-balance`, `bad-sig`, `not-on-ender`, `not-registered`,
 `rate-limited`. Duplicates are handled by the session rules above. Every outbound message is checked to fit one GSM-7
@@ -496,20 +504,24 @@ Errors are the usual `{error}` with the SMS codes: `NOUSER`, `FUNDS`,
 `MERGE`, `REF`, `BADSIG`, `UNKNOWN`, `EXPIRED`, `NOEOA`, `POLICY`, plus
 `unsupported`, `syncing`, `in-progress`, `reverted`, `failed`, `bad-*`.
 
-**SMS** (parsed and formatted by `protocol/sms.ts`; always testnet, so every reply starts with `[Test] `):
+**SMS** (parsed and formatted by `protocol/sms.ts`; the app sends each with `[Test] `, an older app's unprefixed ones are testnet too; every reply starts with `[Test] `):
 
 | In | Out |
 | --- | --- |
-| `PAY <+number>, <amount> AUSD` | `Q <id> exp=<unix> fee=0.01 to=<86-char shielded address>` |
-| `PAY <ender1… private address>, <amount> AUSD` (up to 139 characters) | `Q <id> exp=<unix> fee=0.01` (no `to=`: the phone already has the key) |
-| `PAY <0x address>, <amount> AUSD` (withdrawal) | `Q <id> exp=<unix> fee=0.01 to=0x<40>` |
-| `MERGE` | `Q <id> exp=<unix> fee=0.01` |
-| `SHIELD <amount> AUSD` | `Q <id> exp=<unix> fee=0.01` |
-| `SIG <id> <refs> <86-char signature>` | `Sent <id> 20 AUSD to=+91… tx=0xab…ef p=2` (`to=ender1abcd...wxyz` for a private address; no `p=` for a change-free withdrawal) |
-| `SIG <id> <88-char signature>` for a `SHIELD` quote | `Shielded <id> 50 AUSD tx=0xab…ef p=0` |
+| `[Test] PAY <+number>, <amount> AUSD` | `Q <id> exp=<unix> fee=0.01 to=<86-char shielded address>` |
+| `[Test] PAY <ender1… private address>, <amount> AUSD` (up to 148 septets, the longest phone text) | `Q <id> exp=<unix> fee=0.01` (no `to=`: the phone already has the key) |
+| `[Test] PAY <0x address>, <amount> AUSD` (withdrawal) | `Q <id> exp=<unix> fee=0.01 to=0x<40>` |
+| `[Test] MERGE` | `Q <id> exp=<unix> fee=0.01` |
+| `[Test] SHIELD <amount> AUSD` | `Q <id> exp=<unix> fee=0.01` |
+| `[Test] SIG <id> <refs> <86-char signature>` | `Sent <id> 20 AUSD to=+91… tx=0xab…ef p=2` (`to=ender1abcd...wxyz` for a private address; no `p=` for a change-free withdrawal) |
+| `[Test] SIG <id> <88-char signature>` for a `SHIELD` quote | `Shielded <id> 50 AUSD tx=0xab…ef p=0` |
 
 A public-shaped `SIG` is a deposit's if its id is the number's `SHIELD`
-quote, else today's public `SIG`. Errors are `ERR [<id>] <code>` with the
+quote, else today's public `SIG`. The gateway doesn't check which notes a
+`SIG` spends (any 1-12 distinct refs that resolve and verify): the app's
+rules choose them, the largest notes first for a payment and the 12 largest
+for a merge (`selectMerge`), which Settings' Auto-merge also runs, online
+only, while the app is unlocked. Errors are `ERR [<id>] <code>` with the
 codes above; `ERR <id> pending` if the transaction was sent but not yet
 confirmed (repeat the `SIG`).
 

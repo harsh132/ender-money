@@ -9,15 +9,20 @@
  * an answer if it sent a well-formed command.
  */
 import { isAddress } from 'viem';
-import { parseCommand, parseShieldedCommand, formatReply, normalizePhone, shortHex, unb64, withRetrieverHash, type Reply, type ShieldedCommand } from '../../protocol/sms';
+import { parseCommand, parseShieldedCommand, formatReply, normalizePhone, shortHex, unb64, withRetrieverHash, type Parsed, type Reply, type ShieldedCommand } from '../../protocol/sms';
 import type { NetworkName } from '../../protocol/networks';
 import { isPrivateAddress, shortPrivateAddress } from '../../protocol/recipient';
 import { account, GatewayError, quote, sign } from './core';
 import type { Env } from './env';
 import * as shielded from './shielded';
 
-/** The only network with a pool; private SMS commands carry no network. */
+/** The only network with a pool: where an unprefixed (older app's) private command goes. */
 const SHIELDED_NETWORK: NetworkName = 'testnet';
+
+/** A SIG whose prefix names another network than its quote's is refused (unprefixed: an older app, the quote's own). */
+const sameNetwork = (named: NetworkName | undefined, quoted: NetworkName | undefined) => {
+  if (named && quoted && named !== quoted) throw new GatewayError('wrong-network', 409);
+};
 
 export type Inbound = { from: string; body: string };
 /** `to` is the E.164 number to answer, `body` the one-segment reply. */
@@ -39,26 +44,30 @@ export const handleInbound = async (env: Env, { from: rawFrom, body }: Inbound):
   try {
     switch (command.kind) {
       case 'sync': {
-        network = command.network;
-        const a = await account(env, from, command.network);
+        network = command.network ?? 'mainnet';
+        const a = await account(env, from, network);
         return reply(env, from, { kind: 'ok', nonce: BigInt(a.nonce), delegated: a.delegated, balance: a.balance, inr: a.inr }, a.network);
       }
       case 'send': {
-        // An SMS SEND carries no network: it uses the number's current one.
-        network = (await env.DB.prepare('SELECT network FROM links WHERE phone = ?').bind(from).first<{ network: NetworkName }>())?.network;
-        const q = await quote(env, from, { to: command.to, amount: command.amount, deliver: command.deliver });
+        // The prefix names the network: `[Test] SEND` is testnet, no prefix is mainnet.
+        network = command.network ?? 'mainnet';
+        const q = await quote(env, from, { network, to: command.to, amount: command.amount, deliver: command.deliver });
         return reply(env, from, { kind: 'quote', id: q.id, nonce: BigInt(q.nonce), expires: q.deadline, fee: q.fee, to: q.to, out: q.out }, q.network);
       }
       case 'sig': {
         // A deposit's SIG has the public shape (a 65-byte EIP-3009 signature); its quote id says which it is.
-        if ((await shielded.quoteKind(env, from, command.id)) === 'shield') {
-          network = SHIELDED_NETWORK;
+        const deposit = await shielded.quoteOf(env, from, command.id);
+        if (deposit?.kind === 'shield') {
+          network = command.network ?? deposit.network;
+          sameNetwork(command.network, deposit.network);
           const r = await shielded.submit(env, from, { id: command.id, signature: command.signature });
           if (r.pending || r.p === undefined) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' }, network);
           return reply(env, from, { kind: 'shielded', id: command.id, amount: r.amount, tx: shortHex(r.tx), p: r.p }, network);
         }
-        network = (await env.DB.prepare('SELECT network FROM sessions WHERE id = ? AND phone = ?').bind(command.id, from).first<{ network: NetworkName }>())
+        const session = (await env.DB.prepare('SELECT network FROM sessions WHERE id = ? AND phone = ?').bind(command.id, from).first<{ network: NetworkName }>())
           ?.network;
+        network = command.network ?? session;
+        sameNetwork(command.network, session);
         const r = await sign(env, from, command.id, command.signature);
         return reply(env, from, { kind: 'sent', id: command.id, amount: r.amount, to: shortHex(r.to), tx: shortHex(r.txHash) }, network);
       }
@@ -72,10 +81,11 @@ export const handleInbound = async (env: Env, { from: rawFrom, body }: Inbound):
 };
 
 /** PAY / SHIELD / MERGE and the private SIG (refs + 64-byte signature). */
-const handleShielded = async (env: Env, from: string, command: ShieldedCommand): Promise<Outbound | null> => {
-  const network = SHIELDED_NETWORK;
+const handleShielded = async (env: Env, from: string, command: Parsed<ShieldedCommand>): Promise<Outbound | null> => {
+  const network = command.network ?? SHIELDED_NETWORK;
   try {
     if (command.kind === 'shieldedSig') {
+      sameNetwork(command.network, (await shielded.quoteOf(env, from, command.id))?.network);
       const r = await shielded.submit(env, from, { id: command.id, refs: command.refs, sig: command.signature });
       // Sent but unconfirmed: a Sent now would carry no change position. A repeated SIG answers once it lands.
       if (r.pending) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' }, network);

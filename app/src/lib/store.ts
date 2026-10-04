@@ -76,6 +76,8 @@ export type State = {
   shieldedPins: Record<string, string>;
   /** Asked once for RECEIVE_SMS (Activity), whatever the answer. */
   smsAsked?: boolean;
+  /** Settings' Auto-merge (networks with a pool): fold the 12 largest private notes while unlocked and online. Off by default. */
+  autoMerge?: boolean;
 };
 
 const initial: State = {

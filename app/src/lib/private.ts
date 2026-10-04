@@ -8,7 +8,7 @@ import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { formatUnits, parseUnits, stringToBytes, type Address, type Hex, type LocalAccount } from 'viem';
 import { AUSD_DECIMALS, AUSD_EIP712, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../../protocol/networks';
-import { CIRCUITS, eligible, planCircuit, selectNotes, settle } from '../../../protocol/select';
+import { CIRCUITS, eligible, planCircuit, selectMerge, selectNotes, settle } from '../../../protocol/select';
 import {
   buildDeposit,
   buildTx,
@@ -149,6 +149,22 @@ export const MERGE_OVER = CIRCUITS[CIRCUITS.length - 1]!;
 export const canMerge = (network: NetworkName, c: Pick<Cache, 'notes' | 'awaiting'>) => hasPool(network) && usable(c).length > MERGE_OVER;
 
 /**
+ * Auto-merge (Settings) runs one merge when it's on, the app is online, the
+ * spending key is in memory (an open Quick send session), the network's
+ * private balance is registered, nothing is waiting to settle (no merge, and
+ * no payment whose notes could collide with it), and there are more usable
+ * notes than one payment can spend.
+ */
+export const shouldAutoMerge = (o: {
+  on: boolean;
+  online: boolean;
+  unlocked: boolean;
+  registered: boolean;
+  network: NetworkName;
+  cache: Pick<Cache, 'notes' | 'awaiting'>;
+}) => o.on && o.online && o.unlocked && o.registered && o.cache.awaiting.length === 0 && canMerge(o.network, o.cache);
+
+/**
  * Online resync: the gateway's index replaces the cache. A waiting payment
  * whose inputs are now spent (or whose output appeared) settled; one past its
  * deadline that didn't never will.
@@ -238,7 +254,8 @@ export const signPrivate = (
   const me = owner(provingKeys(user));
   const fee = units(q.fee);
   const amount = units(d.amount);
-  const sel = selectNotes(usable(cache), amount + fee, rng);
+  // A merge folds the 12 largest notes; a payment takes the largest until covered, then random ones.
+  const sel = d.kind === 'merge' ? selectMerge(usable(cache), amount + fee) : selectNotes(usable(cache), amount + fee, rng);
   if (sel.err) return { err: sel.err };
   const inputs: Note[] = sel.ins.map(({ pos, amount, blinding }) => ({ pos, amount, blinding }));
   const s = settle(sum(inputs), amount, fee);

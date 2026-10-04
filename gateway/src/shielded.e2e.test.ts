@@ -236,7 +236,7 @@ test.skipIf(!ready)(
       domain: domain(),
     });
     const auth = receiveAuth({ address: token, ...AUSD_EIP712 }, monadTestnet.id, { from: aliceEOA.address, to: pool, value: dep.value, validBefore: q1.expires, nonce: dep.nonce });
-    const shielded = parseReply(await sms(ALICE, formatCommand({ kind: 'sig', id: q1.id, signature: await aliceEOA.signTypedData(auth) })));
+    const shielded = parseReply(await sms(ALICE, formatCommand({ kind: 'sig', id: q1.id, signature: await aliceEOA.signTypedData(auth) }, 'testnet')));
     expect(shielded).toEqual({ kind: 'shielded', id: q1.id, amount: '50', tx: expect.any(String), p: 0, test: true });
     expect(await unspent(ALICE)).toEqual([{ pos: 0, amount: AUSD('50'), blinding: dep.outs[0]!.blinding, spent: false } as Note]);
     await rootsMatch();
@@ -247,13 +247,13 @@ test.skipIf(!ready)(
     const byNumber = await api<{ to: string }>(ALICE, 'POST', '/shielded/quote', { network: 'testnet', kind: 'pay', to: BOB, amount: '20' });
     expect(byNumber.to).toBe(owners[BOB]!);
     expect((await api<{ to: string }>(ALICE, 'POST', '/shielded/quote', { network: 'testnet', kind: 'pay', to: bobAddress, amount: '20' })).to).toBe(owners[BOB]!);
-    const q2 = parseReply(await sms(ALICE, `PAY ${bobAddress}, 20 AUSD`));
+    const q2 = parseReply(await sms(ALICE, `PAY ${bobAddress}, 20 AUSD`)); // unprefixed, as an older app sends it: still testnet
     if (q2?.kind !== 'shieldedQuote') throw new Error(`no quote: ${JSON.stringify(q2)}`);
     expect(q2.to).toBeUndefined(); // the phone already has the key
     const pay = await phoneSigns(ALICE, { id: q2.id, exp: q2.expires, fee: q2.fee }, AUSD('20'), (change) => [{ amount: AUSD('20'), to: unpackAddress(bobPacked) }, change]);
     // The app's HTTPS submit and its SMS fallback race: one proves and sends, the other waits for the same outcome.
     const [smsText, http2] = await Promise.all([
-      sms(ALICE, formatShieldedCommand({ kind: 'shieldedSig', id: q2.id, refs: pay.refs, signature: pay.sig })),
+      sms(ALICE, formatShieldedCommand({ kind: 'shieldedSig', id: q2.id, refs: pay.refs, signature: pay.sig }, 'testnet')),
       api<{ tx: Hex; p: number }>(ALICE, 'POST', '/shielded/submit', { id: q2.id, refs: pay.refs, sig: b64(pay.sig) }),
     ]);
     const sentReply = parseReply(smsText);
@@ -271,7 +271,7 @@ test.skipIf(!ready)(
     await rootsMatch();
 
     // A repeated SIG returns the same transaction.
-    expect(parseReply(await sms(ALICE, formatShieldedCommand({ kind: 'shieldedSig', id: q2.id, refs: pay.refs, signature: pay.sig })))).toEqual(sentReply);
+    expect(parseReply(await sms(ALICE, formatShieldedCommand({ kind: 'shieldedSig', id: q2.id, refs: pay.refs, signature: pay.sig }, 'testnet')))).toEqual(sentReply);
 
     // 3. HTTPS: Bob withdraws his whole note to a fresh address: no change, two null outputs, no leaves, no p.
     const fresh = privateKeyToAccount(generatePrivateKey()).address;

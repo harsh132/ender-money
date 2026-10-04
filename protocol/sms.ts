@@ -1,8 +1,15 @@
 /**
  * The SMS protocol between the app and the gateway, in both directions.
  *
- * App → gateway: `SYNC [T]`, `SEND <to>, <amount> AUSD[ > CTK]`, `SIG <id> <sig>`.
+ * App → gateway: `SYNC`, `SEND <to>, <amount> AUSD[ > CTK]`, `SIG <id> <sig>`.
  * Gateway → app: `OK …`, `Q …`, `Sent …`, `ERR …`, plus alerts and OTPs.
+ *
+ * Every command the phone sends for testnet starts with `[Test] ` too (the
+ * formatters take the network); the gateway uses the network it names. No
+ * prefix is mainnet for SYNC, and for anything else either mainnet or an
+ * older app, so the gateway falls back to its legacy rule (the number's
+ * current network; the session's for a SIG; testnet for private commands).
+ * The older `SYNC T` still parses as testnet.
  *
  * Private payments (shielded pool, testnet only; see protocol/shielded.ts):
  *   `SEND` is always public. A private payment is `PAY <+number|ender1…|0x…>, <amount> AUSD`
@@ -41,7 +48,7 @@ export type NetworkCode = 'mainnet' | 'testnet';
 export type Deliver = 'AUSD' | 'CTK';
 
 export type Command =
-  | { kind: 'sync'; network: NetworkCode }
+  | { kind: 'sync' }
   | { kind: 'send'; to: string; amount: string; deliver: Deliver }
   | { kind: 'sig'; id: string; signature: Hex };
 
@@ -52,6 +59,13 @@ export type ShieldedCommand =
   | { kind: 'merge' }
   /** refs: tree positions of the 1-12 real input notes (sent mod REF_MOD); signature: 64-byte EdDSA. */
   | { kind: 'shieldedSig'; id: string; refs: number[]; signature: Uint8Array };
+
+/**
+ * A parsed command and the network its prefix names: testnet for `[Test] `
+ * (or the older `SYNC T`), mainnet for a plain `SYNC`, absent for any other
+ * unprefixed command (mainnet, or an older app: the gateway's legacy rule).
+ */
+export type Parsed<C> = C & { network?: NetworkCode };
 
 /** test: the text is about testnet (`[Test] ` prefix); untagged means mainnet. */
 export type Reply = (
@@ -142,12 +156,23 @@ export const shortHex = (hex: string, head = 4, tail = 2) => `${hex.slice(0, 2 +
 
 // ---------- app → gateway
 
-export const parseCommand = (raw: string): Command | null => {
+export const TEST_PREFIX = '[Test] ';
+const prefixed = (network: NetworkCode, text: string) => oneSegment(`${network === 'testnet' ? TEST_PREFIX : ''}${text}`);
+
+/** Normalised text without its `[Test] ` prefix (any case, any spacing), and the network the prefix names. */
+const unprefix = (raw: string): { text: string; network?: NetworkCode } => {
   const text = raw.trim().replace(/\s+/g, ' ');
+  const m = /^\[test\] ?/i.exec(text);
+  return m ? { text: text.slice(m[0].length), network: 'testnet' } : { text };
+};
+const withNetwork = <C extends object>(c: C | null, network?: NetworkCode) => (c && network ? { ...c, network } : c) as Parsed<C> | null;
+
+export const parseCommand = (raw: string): Parsed<Command> | null => {
+  const { text, network } = unprefix(raw);
   const [word, ...rest] = text.split(' ');
   switch (word?.toUpperCase()) {
     case 'SYNC': {
-      if (rest.length === 0) return { kind: 'sync', network: 'mainnet' };
+      if (rest.length === 0) return { kind: 'sync', network: network ?? 'mainnet' };
       if (rest.length === 1 && rest[0]!.toUpperCase() === 'T') return { kind: 'sync', network: 'testnet' };
       return null;
     }
@@ -158,34 +183,39 @@ export const parseCommand = (raw: string): Command | null => {
       const recipient = isAddress(to!) ? to!.toLowerCase() : to!;
       if (!isAddress(recipient) && !isPhone(recipient)) return null;
       if (!isAmount(amount!)) return null;
-      return { kind: 'send', to: recipient, amount: amount!, deliver: ctk ? 'CTK' : 'AUSD' };
+      return withNetwork({ kind: 'send', to: recipient, amount: amount!, deliver: ctk ? 'CTK' : 'AUSD' } as const, network);
     }
     case 'SIG': {
       if (rest.length !== 2) return null;
       const id = rest[0]!.toUpperCase();
       const signature = signatureFromBase64(rest[1]!);
       if (!isSessionId(id) || !signature) return null;
-      return { kind: 'sig', id, signature };
+      return withNetwork({ kind: 'sig', id, signature } as const, network);
     }
     default:
       return null;
   }
 };
 
-export const formatCommand = (c: Command): string => {
+/** `network`: the payment's own (never the mode the app shows); testnet adds `[Test] `. */
+export const formatCommand = (c: Command, network: NetworkCode): string => {
   switch (c.kind) {
     case 'sync':
-      return oneSegment(c.network === 'testnet' ? 'SYNC T' : 'SYNC');
+      return prefixed(network, 'SYNC');
     case 'send':
-      return oneSegment(`SEND ${c.to}, ${c.amount} AUSD${c.deliver === 'CTK' ? ' > CTK' : ''}`);
+      return prefixed(network, `SEND ${c.to}, ${c.amount} AUSD${c.deliver === 'CTK' ? ' > CTK' : ''}`);
     case 'sig':
-      return oneSegment(`SIG ${c.id} ${signatureToBase64(c.signature)}`);
+      return prefixed(network, `SIG ${c.id} ${signatureToBase64(c.signature)}`);
   }
 };
 
 /** `PAY`, `SHIELD`, `MERGE` and the private `SIG` (three fields); parseCommand returns null for all of them. */
-export const parseShieldedCommand = (raw: string): ShieldedCommand | null => {
-  const text = raw.trim().replace(/\s+/g, ' ');
+export const parseShieldedCommand = (raw: string): Parsed<ShieldedCommand> | null => {
+  const { text, network } = unprefix(raw);
+  return withNetwork(parseShielded(text), network);
+};
+
+const parseShielded = (text: string): ShieldedCommand | null => {
   const [word, ...rest] = text.split(' ');
   switch (word?.toUpperCase()) {
     case 'PAY': {
@@ -213,22 +243,22 @@ export const parseShieldedCommand = (raw: string): ShieldedCommand | null => {
   }
 };
 
-export const formatShieldedCommand = (c: ShieldedCommand): string => {
+export const formatShieldedCommand = (c: ShieldedCommand, network: NetworkCode): string => {
   switch (c.kind) {
     case 'pay':
-      return oneSegment(`PAY ${c.to}, ${c.amount} AUSD`);
+      return prefixed(network, `PAY ${c.to}, ${c.amount} AUSD`);
     case 'shield':
-      return oneSegment(`SHIELD ${c.amount} AUSD`);
+      return prefixed(network, `SHIELD ${c.amount} AUSD`);
     case 'merge':
-      return 'MERGE';
+      return prefixed(network, 'MERGE');
     case 'shieldedSig':
-      return oneSegment(`SIG ${c.id} ${encodeRefs(c.refs)} ${b64(c.signature)}`);
+      return prefixed(network, `SIG ${c.id} ${encodeRefs(c.refs)} ${b64(c.signature)}`);
   }
 };
 
 // ---------- gateway → app
 
-export const formatReply = (r: Reply): string => oneSegment(`${r.test ? '[Test] ' : ''}${formatBody(r)}`);
+export const formatReply = (r: Reply): string => oneSegment(`${r.test ? TEST_PREFIX : ''}${formatBody(r)}`);
 
 const formatBody = (r: Reply): string => {
   switch (r.kind) {
@@ -260,8 +290,8 @@ const fields = (parts: string[]) => Object.fromEntries(parts.map((p) => p.split(
 /** One reply, from its first line (the SMS Retriever hash follows on the next). */
 export const parseReply = (raw: string): Reply | null => {
   const line = raw.trim().split(/\r?\n/)[0]!.trim();
-  const test = line.startsWith('[Test] ');
-  const r = parseBody(test ? line.slice('[Test] '.length) : line);
+  const test = line.startsWith(TEST_PREFIX);
+  const r = parseBody(test ? line.slice(TEST_PREFIX.length) : line);
   return r && test ? { ...r, test } : r;
 };
 

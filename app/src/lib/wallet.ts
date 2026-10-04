@@ -8,10 +8,23 @@ import { b64, type Deliver, type Reply } from '../../../protocol/sms';
 import { api, ApiError, OfflineError, type ActivityItem, type AuthorizationJson } from './api';
 import { MAX_FEE } from './config';
 import { fileReceived, smsTwin, type Received } from './inbox';
-import type { Unlocked } from './keys';
-import { chooseRoute, fileReply, hasPool, POOL_NETWORKS, resync, settleAwaiting, type Awaiting, type Cache } from './private';
+import { quickSend, type Unlocked } from './keys';
+import {
+  checkShieldedQuote,
+  chooseRoute,
+  fileReply,
+  hasPool,
+  POOL_NETWORKS,
+  resync,
+  settleAwaiting,
+  shouldAutoMerge,
+  signPrivate,
+  type Awaiting,
+  type Cache,
+  type PrivateDraft,
+} from './private';
 import { getState, labelFor, setState, upsertTx, type State, type TxStatus } from './store';
-import { textGateway, type Pipe } from './transport';
+import { online, textGateway, type Pipe } from './transport';
 
 // ---------------------------------------------------------------- sync
 
@@ -153,6 +166,7 @@ export const pullNotes = async (network = getState().network) => {
   saveCache(network, r.cache);
   for (const a of r.settled) upsertTx({ id: a.id, status: 'sent' });
   for (const a of r.expired) upsertTx({ id: a.id, status: 'expired' });
+  void autoMerge(network);
 };
 
 /** A private payment or shield was signed: hold its notes until it settles. */
@@ -168,6 +182,7 @@ export const settlePrivate = (network: NetworkName, id: string, p?: number) => {
   const c = cacheOf(getState(), network);
   const a = c.awaiting.find((x) => x.id === id);
   if (a) saveCache(network, settleAwaiting(c, a, p));
+  void autoMerge(network);
 };
 
 /**
@@ -178,6 +193,7 @@ export const applyShieldedReply = (r: Reply) => {
   if (r.kind !== 'sent' && r.kind !== 'shielded' && r.kind !== 'got') return;
   const filed = fileReply(getState(), r);
   if (filed) setState(filed.patch);
+  if (filed?.settled) void autoMerge(filed.network);
   const id = filed?.settled?.id ?? (r.kind === 'got' ? undefined : r.id);
   if (id && getState().activity.some((t) => t.id === id)) upsertTx({ id, status: 'sent' });
   if (r.kind === 'got' && filed)
@@ -193,6 +209,67 @@ export const applyReceived = (r: Received) => {
   if (!filed) return;
   upsertTx({ ...filed.row, label: labelFor(r.from) });
   setState({ account: filed.account });
+};
+
+// ---------------------------------------------------------------- auto-merge
+
+let merging = false;
+
+/**
+ * Settings' Auto-merge: one merge (the 12 largest notes into one, fee 0.01)
+ * online in the background, when shouldAutoMerge says so. The spending key is
+ * the open Quick send session's; nothing is stored for this, so a locked app
+ * waits for the next unlock. Never by text. A failure only logs: the next
+ * trigger (a resync, a settled private payment, coming to the foreground, the
+ * toggle) tries again. A merge that settles re-checks, as more may be left.
+ */
+export const autoMerge = async (network: NetworkName = getState().network): Promise<void> => {
+  if (merging) return;
+  merging = true;
+  let again = false;
+  const ready = async () => {
+    const s = getState();
+    const cache = cacheOf(s, network);
+    const base = { on: !!s.autoMerge, unlocked: !!quickSend.get(), registered: isRegistered(network, s), network, cache };
+    // NetInfo is only asked once everything else holds.
+    return shouldAutoMerge({ ...base, online: true }) && (await online());
+  };
+  try {
+    if (!(await ready())) return;
+    const draft: PrivateDraft = { kind: 'merge', amount: '0' };
+    const q = await api.shieldedQuote({ network, kind: 'merge' });
+    const session = quickSend.get();
+    // Locked, turned off or a payment started meanwhile: the quote just expires.
+    if (!session || !(await ready())) return;
+    const quote = { id: q.id, exp: q.exp, fee: q.fee, ...(q.to === undefined ? {} : { to: q.to as Address }) };
+    const refused = checkShieldedQuote(draft, quote);
+    if (refused) throw new Error(refused.code);
+    const r = signPrivate(session.unlocked.shielded, cacheOf(getState(), network), draft, quote, network);
+    if ('err' in r) throw new Error(r.err);
+    holdNotes(network, r.awaiting);
+    upsertTx({ id: q.id, network, direction: 'out', amount: '0', fee: q.fee, label: 'Merged private notes', status: 'sending', at: Date.now(), deadline: q.exp, private: true });
+    try {
+      const res = await api.shieldedSubmit({ id: q.id, refs: r.refs, sig: btoa(String.fromCharCode(...r.sig)) });
+      // Still landing: its notes stay held until a resync sees it.
+      if (res.pending) return upsertTx({ id: q.id, txHash: res.tx });
+      upsertTx({ id: q.id, status: 'sent', txHash: res.tx });
+      const c = cacheOf(getState(), network);
+      saveCache(network, settleAwaiting(c, c.awaiting.find((x) => x.id === q.id)!, res.p));
+      again = true;
+    } catch (e) {
+      // Refused: the notes are free again. Lost connection: it may have gone through; held until a resync tells.
+      if (!(e instanceof OfflineError)) {
+        releaseNotes(network, q.id);
+        upsertTx({ id: q.id, status: 'failed', error: e instanceof ApiError ? e.code : undefined });
+      }
+      throw e;
+    }
+  } catch (e) {
+    console.warn('auto-merge:', e instanceof ApiError ? e.code : e instanceof Error ? e.message : e);
+  } finally {
+    merging = false;
+  }
+  if (again) void autoMerge(network);
 };
 
 /**
@@ -215,7 +292,7 @@ export const decideRoute = async (d: Draft): Promise<'private' | 'public'> => {
   return chooseRoute({ recipientPrivate, cache: cacheOf(s, d.network), amount: d.amount, deliver: d.deliver });
 };
 
-export const syncByText = () => textGateway({ kind: 'sync', network: getState().network });
+export const syncByText = () => textGateway({ kind: 'sync' }, getState().network);
 
 /** An `OK …` reply, from SYNC by text: the network it names (`[Test] ` is testnet). */
 export const applyOkReply = (r: Extract<Reply, { kind: 'ok' }>) =>
@@ -333,6 +410,7 @@ const ERRORS: Record<string, string> = {
   NOEOA: "Your wallet can't fund the private balance yet. Try again in a minute.",
   POLICY: 'The gateway refused this private payment.',
   syncing: 'The gateway is still catching up with the private pool. Try again in a minute.',
+  'wrong-network': 'That approval was for the other network. Nothing was sent.',
 };
 
 export const errorText = (e: unknown): string => {

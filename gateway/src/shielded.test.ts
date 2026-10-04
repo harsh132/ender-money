@@ -234,9 +234,61 @@ describe('register and SMS routing', () => {
     expect(await sms(ALICE, 'hello')).toBe('ERR bad-command');
   });
 
+  const linkNetwork = async (phone: string, network: string) => {
+    await env.DB.prepare('UPDATE links SET network = ? WHERE phone = ?').bind(network, phone).run();
+  };
+  const linkedTo = async (phone: string) => (await env.DB.prepare('SELECT network FROM links WHERE phone = ?').bind(phone).first<{ network: string }>())!.network;
+
+  test('[Test] SEND / PAY / SHIELD / MERGE / SIG go to testnet whatever the number last used', async () => {
+    await linkNetwork(ALICE, 'mainnet');
+    await linkNetwork(BOB, 'mainnet');
+    // SEND: quoted (and refused) on testnet, which becomes the number's current network, as SYNC T does.
+    expect(await sms(ALICE, '[Test] SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
+    expect(await linkedTo(ALICE)).toBe('testnet');
+    // Private commands: the testnet pool (mainnet has none: that would be `unsupported`).
+    expect(await sms(BOB, `[Test] PAY ${ALICE}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
+    expect(await sms(BOB, '[Test] SHIELD 5 AUSD')).toBe('[Test] ERR NOUSER');
+    expect(await sms(BOB, '[test]  merge')).toBe('[Test] ERR NOUSER');
+    expect(await sms(ALICE, `[Test] SIG 7F3K ${encodeRefs([1, 2])} ${b64(new Uint8Array(64).fill(7))}`)).toBe('[Test] ERR 7F3K UNKNOWN');
+    expect(await sms('+919800000005', '[Test] SYNC')).toBe('[Test] ERR not-registered');
+  });
+
+  test('the prefix names the network: an unprefixed SEND is mainnet, whatever the number used last', async () => {
+    await linkNetwork(ALICE, 'testnet');
+    expect(await sms(ALICE, 'SEND +919800000009, 1 AUSD')).toBe('ERR not-on-ender');
+    expect(await sms(ALICE, '[Test] SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
+    expect(await sms(BOB, 'MERGE')).toBe('[Test] ERR NOUSER'); // private: always the pool's network
+  });
+
+  test('a SIG whose prefix names another network than its quote is refused, and the quote stays open', async () => {
+    const t = Math.floor(Date.now() / 1000) + 300;
+    await env.DB.prepare(
+      `INSERT INTO sessions (id, phone, network, from_address, to_address, amount, fee, nonce, deadline, request_hash, expires_at)
+       VALUES ('M2N3', ?, 'mainnet', ?, '0x000000000000000000000000000000000000b0b0', '1000000', '10000', '0', ?, 'h', ?)`,
+    )
+      .bind(ALICE, eoa.address.toLowerCase(), t, t)
+      .run();
+    const stranger = privateKeyToAccount(generatePrivateKey());
+    const signature = signatureToBase64(await stranger.signMessage({ message: 'x' }));
+    expect(await sms(ALICE, `[Test] SIG M2N3 ${signature}`)).toBe('[Test] ERR M2N3 wrong-network');
+    expect(await env.DB.prepare(`SELECT state FROM sessions WHERE id = 'M2N3'`).first<{ state: string }>()).toEqual({ state: 'open' });
+    // Unprefixed (an older app, or mainnet): the session's own network, as before.
+    expect(await sms(ALICE, `SIG M2N3 ${signature}`)).toBe('ERR M2N3 bad-sig');
+
+    // Shielded quotes (a deposit's public-shaped SIG, a private SIG) check the same way.
+    for (const [id, kind] of [['M4N5', 'shield'], ['M6N7', 'merge']])
+      await env.DB.prepare(`INSERT INTO shielded_quotes (id, phone, network, kind, amount, fee, exp, created_at) VALUES (?, ?, 'mainnet', ?, '0', '10000', ?, 0)`)
+        .bind(id, ALICE, kind, t)
+        .run();
+    expect(await sms(ALICE, `[Test] SIG M4N5 ${signature}`)).toBe('[Test] ERR M4N5 wrong-network');
+    expect(await sms(ALICE, `[Test] SIG M6N7 ${encodeRefs([1])} ${b64(new Uint8Array(64).fill(7))}`)).toBe('[Test] ERR M6N7 wrong-network');
+    expect(await env.DB.prepare(`SELECT state FROM shielded_quotes WHERE id IN ('M4N5', 'M6N7')`).all()).toMatchObject({ results: [{ state: 'open' }, { state: 'open' }] });
+    // A prefix that matches goes through to the deposit as before.
+    expect(await sms(ALICE, `[Test] SIG D3P2 ${signature}`)).toBe('[Test] ERR D3P2 BADSIG');
+  });
+
   test('public replies about testnet carry [Test]; a reply with no network does not', async () => {
-    // Alice's number is on testnet, so her SEND is quoted (and refused) there.
-    expect(await sms(ALICE, 'SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
+    expect(await sms(ALICE, '[Test] SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
     expect(await sms('+919800000005', 'SYNC T')).toBe('[Test] ERR not-registered');
     expect(await sms('+919800000005', 'SYNC')).toBe('ERR not-registered');
   });

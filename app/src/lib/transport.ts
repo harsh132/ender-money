@@ -10,6 +10,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as SMS from 'expo-sms';
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
+import type { NetworkName } from '../../../protocol/networks';
 import { formatCommand, formatShieldedCommand, parseReply, type Command, type Reply, type ShieldedCommand } from '../../../protocol/sms';
 import { GATEWAY_SMS } from './config';
 import { whileOwnScreen } from './keys';
@@ -41,15 +42,19 @@ export const gatewayNumber = (): string | undefined => {
 export class NoSmsError extends Error {}
 
 const SHIELDED = new Set<string>(['pay', 'shield', 'merge', 'shieldedSig']);
-const format = (c: Command | ShieldedCommand) => (SHIELDED.has(c.kind) ? formatShieldedCommand(c as ShieldedCommand) : formatCommand(c as Command));
+const format = (c: Command | ShieldedCommand, network: NetworkName) =>
+  SHIELDED.has(c.kind) ? formatShieldedCommand(c as ShieldedCommand, network) : formatCommand(c as Command, network);
 
-/** Opens the composer with the command filled in; the user taps send. Private payments use PAY / SHIELD / the three-field SIG. */
-export const textGateway = async (command: Command | ShieldedCommand) => {
+/**
+ * Opens the composer with the command filled in; the user taps send. Private payments use PAY / SHIELD / the
+ * three-field SIG. `network`: the payment's own (testnet texts start with `[Test] `), never just the mode shown.
+ */
+export const textGateway = async (command: Command | ShieldedCommand, network: NetworkName) => {
   const to = gatewayNumber();
   if (!to) throw new NoSmsError('No gateway number for texts is set up in this build.');
   if (!(await SMS.isAvailableAsync())) throw new NoSmsError("This phone can't send texts.");
   expecting = Date.now() + REPLY_WINDOW_MS;
-  await whileOwnScreen(() => SMS.sendSMSAsync([to], format(command)));
+  await whileOwnScreen(() => SMS.sendSMSAsync([to], format(command, network)));
 };
 
 // ---------------------------------------------------------------- replies by clipboard
