@@ -69,7 +69,7 @@ test('replies round-trip and fit one segment, even at their longest', () => {
 test('alerts and OTPs fit, with the Retriever hash appended', () => {
   const alert: Reply = { kind: 'received', amount: '99999.999999', from: address, balance: '99999.999999', tx: '0xab12...ef', test: true };
   const text = withRetrieverHash(formatReply(alert), 'FA+9qCX9VSu');
-  expect(text).toBe(`[Test] Received 99999.999999 AUSD from ${address}. Balance 99999.999999 AUSD. Tx 0xab12...ef${'\n'}FA+9qCX9VSu`);
+  expect(text).toBe(`[Test] Received 99999.999999 AUSD from=${address} balance=99999.999999 tx=0xab12...ef${'\n'}FA+9qCX9VSu`);
   expect(fitsOneSegment(text)).toBe(true);
   expect(parseReply(text)).toEqual(alert); // the hash line is ignored
   expect(parseReply(formatReply({ ...alert, from: address.toLowerCase() as typeof address, test: false }))).toEqual({ ...alert, test: false }); // EIP-55 out
@@ -82,6 +82,44 @@ test('Got carries no sender; the older "from" form still parses', () => {
   expect(text).toBe('Got 20 AUSD (private) p=2 b=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAdbzRU');
   expect(parseReply(`${text}\nFA+9qCX9VSu`)).toEqual(got);
   expect(parseReply(text.replace('(private)', 'from +919800000001'))).toEqual(got);
+});
+
+test('Sent, Shielded and Received are key=value; Sent and Shielded carry the id; older forms still parse', () => {
+  const sent: Reply = { kind: 'sent', id: '7F3K', amount: '20', to: '+919800000002', tx: '0xab12...ef', p: 2 };
+  expect(formatReply(sent)).toBe('Sent 7F3K 20 AUSD to=+919800000002 tx=0xab12...ef p=2');
+  expect(parseReply(formatReply(sent))).toEqual(sent);
+  const shielded: Reply = { kind: 'shielded', id: '7F3K', amount: '1', tx: '0xab12...ef', p: 5 };
+  expect(formatReply(shielded)).toBe('Shielded 7F3K 1 AUSD tx=0xab12...ef p=5');
+  expect(parseReply(formatReply(shielded))).toEqual(shielded);
+  const received: Reply = { kind: 'received', amount: '10', from: address, balance: '10', tx: '0xab12...ef', test: true };
+  expect(formatReply(received)).toBe(`[Test] Received 10 AUSD from=${address} balance=10 tx=0xab12...ef`);
+  // Older gateways: no id, `to …. Tx …`, `. Tx …`, `from …. Balance … AUSD. Tx …`.
+  expect(parseReply('Sent 20 AUSD to +919800000002. Tx 0xab12...ef p=2')).toEqual({ kind: 'sent', amount: '20', to: '+919800000002', tx: '0xab12...ef', p: 2 });
+  expect(parseReply('Sent 2345 AUSD to 0x1234...cd. Tx 0xab12...ef')).toEqual({ kind: 'sent', amount: '2345', to: '0x1234...cd', tx: '0xab12...ef' }); // an all-digit amount, not an id
+  expect(parseReply('Shielded 50 AUSD. Tx 0xab12...ef p=0')).toEqual({ kind: 'shielded', amount: '50', tx: '0xab12...ef', p: 0 });
+  expect(parseReply(`[Test] Received 10 AUSD from ${address}. Balance 10 AUSD. Tx 0xab12...ef`)).toEqual(received);
+});
+
+test('[Test] marks every testnet text; worst cases fit one segment with it and the hash line', () => {
+  const max = '999999.999999';
+  const worst: Reply[] = [
+    { kind: 'ok', nonce: 18446744073709551615n, delegated: true, balance: max, inr: '88.72' },
+    { kind: 'quote', id: '7F3K', nonce: 18446744073709551615n, expires: 1791200000, fee: '0.01', to: address, out: '999999.999999999999999999' },
+    { kind: 'shieldedQuote', id: '7F3K', expires: 999999999999, fee: '0.01', to: new Uint8Array(64).fill(255) },
+    { kind: 'sent', id: '7F3K', amount: max, to: '+123456789012345', tx: '0xab12...ef', p: 99999999 },
+    { kind: 'shielded', id: '7F3K', amount: max, tx: '0xab12...ef', p: 99999999 },
+    { kind: 'got', amount: max, p: 99999999, blinding: (1n << 256n) - 1n },
+    { kind: 'error', id: '7F3K', code: 'send-failed' },
+    { kind: 'received', amount: max, from: address, balance: max, tx: '0xab12...ef', test: true },
+  ];
+  for (const r of worst) {
+    const text = withRetrieverHash(formatReply({ ...r, test: true }), 'FA+9qCX9VSu');
+    expect(text.startsWith('[Test] ')).toBe(true);
+    expect(fitsOneSegment(text)).toBe(true);
+    expect(parseReply(text)).toEqual({ ...r, test: true });
+    // Untagged: mainnet.
+    expect(parseReply(formatReply({ ...r, test: false }))?.test).toBeFalsy();
+  }
 });
 
 test('non-GSM characters are refused, extended ones cost two', () => {

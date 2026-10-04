@@ -7,7 +7,7 @@
 import type { Address } from 'viem';
 import type { NetworkName } from '../../../protocol/networks';
 import { shortHex, type Reply } from '../../../protocol/sms';
-import type { Tx } from './store';
+import type { State, Tx } from './store';
 
 export type Received = Extract<Reply, { kind: 'received' }>;
 
@@ -21,6 +21,17 @@ export const receivedRow = (activity: Tx[], r: Received, at: number): Tx | null 
   const known = activity.some((t) => t.network === network && (t.id === id || (t.direction === 'in' && !!t.txHash && shortHex(t.txHash).toLowerCase() === r.tx)));
   if (known) return null;
   return { id, network, direction: 'in', amount: r.amount, counterparty: r.from.toLowerCase() as Address, status: 'sent', at };
+};
+
+/**
+ * A Received text, applied to the network it names whatever mode the app shows: the new row and that network's
+ * balance. Null when Activity already has that transfer (its balance may be older than the synced one).
+ */
+export const fileReceived = (s: Pick<State, 'activity' | 'account'>, r: Received, at: number) => {
+  const row = receivedRow(s.activity, r, at);
+  if (!row) return null;
+  const a = s.account[row.network];
+  return { row, account: a ? { ...s.account, [row.network]: { ...a, balance: r.balance, syncedAt: at } } : s.account };
 };
 
 /** The row from a text that an incoming item of the online history stands for. */

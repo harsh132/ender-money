@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
 import { parseReply } from '../../../protocol/sms';
-import { receivedRow, smsTwin, type Received } from './inbox';
+import { fileReceived, receivedRow, smsTwin, type Received } from './inbox';
 import type { Tx } from './store';
 
 const HASH = '0xab12c0ffee000000000000000000000000000000000000000000000000000ef';
+/** The current form, and the older one (TEXT) that still parses. */
+const NEW = '[Test] Received 10 AUSD from=0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5 balance=45.2 tx=0xab12...ef\nFA+9qCX9VSu';
 const TEXT = '[Test] Received 10 AUSD from 0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5. Balance 45.2 AUSD. Tx 0xab12...ef\nFA+9qCX9VSu';
 
 test('a Received alert (with the Retriever hash line) becomes one incoming row', () => {
@@ -36,4 +38,18 @@ test('dedupe against the online history, both ways', () => {
   expect(smsTwin([row], 'mainnet', { txHash: HASH, direction: 'in' })).toBeUndefined();
   expect(smsTwin([row], 'testnet', { txHash: HASH, direction: 'out' })).toBeUndefined();
   expect(smsTwin([row], 'testnet', { txHash: `0x99${HASH.slice(4)}`, direction: 'in' })).toBeUndefined();
+});
+
+test('a Received lands in the network it names, whatever mode the app shows', () => {
+  const account = { mainnet: { balance: '1', nonce: '0', delegated: true, syncedAt: 0 }, testnet: { balance: '2', nonce: '0', delegated: true, syncedAt: 0 } };
+  // Showing testnet, a mainnet alert: mainnet row and balance (fileReceived never reads the mode).
+  const main = fileReceived({ activity: [], account }, parseReply(NEW.replace('[Test] ', '')) as Received, 7)!;
+  expect(main.row).toMatchObject({ id: 'sms:mainnet:0xab12...ef', network: 'mainnet' });
+  expect(main.account).toEqual({ ...account, mainnet: { ...account.mainnet, balance: '45.2', syncedAt: 7 } });
+  // Showing mainnet, a testnet alert: testnet row and balance.
+  const test_ = fileReceived({ activity: [], account }, parseReply(NEW) as Received, 7)!;
+  expect(test_.row).toMatchObject({ id: 'sms:testnet:0xab12...ef', network: 'testnet' });
+  expect(test_.account).toEqual({ ...account, testnet: { ...account.testnet, balance: '45.2', syncedAt: 7 } });
+  // Already in Activity: nothing.
+  expect(fileReceived({ activity: [test_.row], account }, parseReply(NEW) as Received, 8)).toBeNull();
 });

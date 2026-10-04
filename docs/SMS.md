@@ -1,6 +1,6 @@
 # SMS reference
 
-Every text Ender sends or receives, as the code does it at `2599c83`. The
+Every text Ender sends or receives, as the code does it after `29d0986`. The
 grammar lives in `protocol/sms.ts` (with `protocol/recipient.ts` for
 recipients and `protocol/shielded.ts` for private payments); the gateway side
 is `gateway/src/sms.ts`, `auth.ts`, `activity.ts` and `shielded.ts`; the app
@@ -38,7 +38,7 @@ Every text must fit one GSM-7 segment: 160 septets. One character outside
 the GSM-7 alphabet (`…`, `₹`, curly quotes) turns the whole text into UCS-2
 and cuts the segment to 70 characters, so formatters only emit ASCII and
 `septets()` returns `null` for anything else. The extension characters
-`^ { } \ [ ~ ] | €` cost two septets each; the only one Ender uses is `[ ]`
+`^ { } \ [ ~ ] | €` cost two septets each; the only ones Ender uses are `[ ]`
 in `[Test] `. Each formatter goes through `oneSegment`, which throws if the
 text does not fit: an overflow is a bug, not a user error (the gateway then
 answers `ERR internal` for an inbound command, or logs and skips an alert).
@@ -55,11 +55,33 @@ unset, nothing is appended.
 
 `parseReply` reads only the first line, so the hash line is ignored.
 
-### `[Test] `
+### `[Test] ` and the network of a text
 
-Only on `Received` alerts for testnet transfers (`test: network ===
-'testnet'`). It costs 9 septets (7 characters, two of them double). No other
-text says which network it is about.
+Every gateway text about testnet starts with `[Test] `: `OK`, both `Q`s,
+`Sent`, `Shielded`, `ERR`, `Got` and `Received`. No prefix means mainnet. It
+costs 9 septets (7 characters, `[` and `]` two each); every worst case below
+includes it. Formatters take `test: true` (`formatReply` adds the prefix);
+`parseReply` strips it and sets `test: true`.
+
+How the gateway knows the network: `SYNC T` / `SYNC` name it; `SEND` uses the
+number's current network (`links.network`); a public `SIG` uses its session's
+network; every private command and a deposit `SIG` are testnet
+(`SHIELDED_NETWORK`). Texts with no network: OTP, `ERR bad-command`, and an
+`ERR` for a number or session that doesn't exist (`not-registered` after a
+plain `SEND`, `unknown-session`).
+
+**The app's mode is display only.** Every text is applied to the network it
+names, whatever mode the app shows: `OK` sets that network's balance and
+nonce, `Received` adds a row to that network's Activity and sets its balance,
+`Sent` / `Shielded` / `Got` update that network's note cache and waiting
+payments. Private texts exist only on testnet today, so they go to the
+testnet note cache even while the app shows mainnet; an untagged private-only
+text (private `Q`, `Shielded`, `Got`, from an older gateway) is read as the
+network with a pool (`textNetwork`, `notesNetwork` in `private.ts`). The
+Review screen waiting for a reply compares its network with its payment's:
+a `Q`, `ERR`, or its own `Sent` / `Shielded` for the other network fails the
+payment ("That reply was for mainnet, not this payment. …"), code
+`wrong-network`.
 
 ### Case and whitespace
 
@@ -71,8 +93,9 @@ Commands (phone → gateway), `parseCommand` / `parseShieldedCommand`:
 - 0x addresses: lower-case, or mixed case with a valid EIP-55 checksum (viem `isAddress`); stored lower-case. `ender1…` addresses are case-insensitive and lower-cased.
 - Base64 fields are case-sensitive.
 
-Replies (gateway → phone), `parseReply`: case-sensitive keywords (`OK`, `Q`,
-`Sent`, `ERR`, …), fields split on whitespace, first line only. The app's
+Replies (gateway → phone), `parseReply`: an optional `[Test] ` prefix, then
+case-sensitive keywords (`OK`, `Q`, `Sent`, `ERR`, …), fields split on
+whitespace, first line only. The app's
 `acceptReply` tries every line of what it is given and takes the first that
 parses, so a copied thread or a line with the sender's name still works.
 
@@ -90,7 +113,8 @@ bound. Amounts in replies come from `formatUnits`, so no trailing zeros
 4 characters from `SESSION_ID_ALPHABET` = `23456789ABCDEFGHJKMNPQRSTVWXYZ`
 (30 symbols, no `0 1 I L O U`), random per quote (`byte % 30`). Public
 sessions and private quotes share the namespace: a new private quote skips
-any id a public session holds.
+any id a public session holds. The id is in `Q`, `SIG`, `ERR <id> …`,
+`Sent` and `Shielded`; the app matches every reply to its payment by it.
 
 ### Encodings
 
@@ -100,7 +124,7 @@ any id a public session holds.
 | Standard base64, unpadded (`b64` / `unb64`) | 64-byte EdDSA signature in a private `SIG` (86 chars); the 64-byte packed shielded address in `Q … to=` (86 chars); the 32-byte blinding in `Got … b=` (43 chars, big-endian) |
 | Refs (`encodeRefs`) | 3 base64-alphabet characters per input note: tree position mod 2^18 (`REF_MOD`), 6 bits per character, most significant first. Position 2 is `AAC`; 262146 is also `AAC` |
 | bech32m (`protocol/recipient.ts`) | Private address: HRP `ender`, the 64-byte packed address (`owner_key ‖ enc_pk`), 115 lower-case characters. Shortened in replies to `ender1abcd...wxyz` (`shortPrivateAddress`) |
-| Short hex (`shortHex`) | `0x` + 4 hex + `...` + 2 hex: tx hashes and addresses in `Sent`, `Shielded`, `Received` |
+| Short hex (`shortHex`) | `0x` + 4 hex + `...` + 2 hex: tx hashes (`tx=`) and addresses (`to=`) in `Sent`, `Shielded`, `Received` |
 
 Base64url is not used anywhere in SMS.
 
@@ -127,8 +151,8 @@ number with the command filled in; the user taps send. It also opens a
 
 Receiving, every path ends in `acceptReply(raw)`, whose listeners are the root
 layout (`OK` → `applyOkReply`, `Received` → `applyReceived`, everything else →
-`applyShieldedReply`) and the Review screen while it waits (`Q`, `ERR`,
-`Sent`, `Shielded`):
+`applyShieldedReply`, each on the network the text names) and the Review
+screen while it waits (`Q`, `ERR`, `Sent`, `Shielded`, matched by id):
 
 1. **RECEIVE_SMS** (Android, if granted; the Activity tab asks once). A
    manifest receiver (`SmsReceiver`) keeps only texts whose sender's last ten
@@ -202,8 +226,10 @@ not linked), `ERR rpc-unavailable`, `ERR internal`.
 ### `OK` (gateway → phone)
 
 ```
-OK n=<nonce> dlg=<0|1> AUSD=<balance>[ inr=<rate>]
+[Test] OK n=<nonce> dlg=<0|1> AUSD=<balance>[ inr=<rate>]
 ```
+
+`[Test] ` for `SYNC T` (and on every testnet text below; see Conventions).
 
 | Field | Meaning |
 | --- | --- |
@@ -215,14 +241,14 @@ OK n=<nonce> dlg=<0|1> AUSD=<balance>[ inr=<rate>]
 Examples:
 
 ```
-OK n=3 dlg=1 AUSD=45.2 inr=88.72          32 septets, 44 +hash
-OK n=0 dlg=0 AUSD=0                       19, 31
-OK n=18446744073709551615 dlg=1 AUSD=999999.999999 inr=88.72   60, 72
+OK n=3 dlg=1 AUSD=45.2 inr=88.72                 32 septets, 44 +hash
+[Test] OK n=3 dlg=1 AUSD=45.2 inr=88.72          41, 53
+[Test] OK n=18446744073709551615 dlg=1 AUSD=999999.999999 inr=88.72   69, 81 (worst)
 ```
 
 Parse needs `n`, `dlg` and `AUSD`. App (`applyOkReply`): writes balance,
-nonce and delegation for the app's current network (`OK` carries no network)
-and the INR rate if it is above zero.
+nonce and delegation for the network the text names (`[Test]` testnet, else
+mainnet), whatever mode the app shows, and the INR rate if it is above zero.
 
 ## Public payments
 
@@ -261,7 +287,7 @@ gets the same quote back (`request_hash`).
 ### `Q`, public (gateway → phone)
 
 ```
-Q <id> n=<nonce> exp=<unix> fee=<fee> to=<0x address>[ out=<ctk>]
+[Test] Q <id> n=<nonce> exp=<unix> fee=<fee> to=<0x address>[ out=<ctk>]
 ```
 
 | Field | Meaning |
@@ -276,13 +302,15 @@ Q <id> n=<nonce> exp=<unix> fee=<fee> to=<0x address>[ out=<ctk>]
 Examples:
 
 ```
-Q 7F3K n=4 exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc            80, 92 +hash
-Q 7F3K n=4 exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc out=1.5    88, 100
-Q 7F3K n=18446744073709551615 exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc out=999999.999999999999999999   129, 141 (worst)
+Q 7F3K n=4 exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc          80, 92 +hash
+[Test] Q 7F3K n=4 exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc   89, 101
+[Test] Q 7F3K n=18446744073709551615 exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc out=999999.999999999999999999   138, 150 (worst; CTK is testnet only)
 ```
 
-Parse needs `id`, `n`, `exp`, `fee` and a valid `to`. App (`checkQuote`),
-before any signing prompt:
+Parse needs `id`, `n`, `exp`, `fee` and a valid `to`. A `Q` for the other
+network than the payment's fails it (`wrong-network`): an SMS `SEND` is quoted
+on the number's current network, which the last online call or `SYNC` set.
+App (`checkQuote`), before any signing prompt:
 
 - `recipient-mismatch` if the user gave a 0x address and `to` differs.
 - `fee-too-high` if `fee` > `MAX_FEE` (0.01).
@@ -328,29 +356,36 @@ session answers the same `Sent`.
 ### `Sent`, public (gateway → phone)
 
 ```
-Sent <amount> AUSD to <short to>. Tx <short tx>
+[Test] Sent <id> <amount> AUSD to=<short to> tx=<short tx>
 ```
 
 | Field | Meaning |
 | --- | --- |
+| `id` | The session id the `SIG` named |
 | `amount` | The session's amount |
 | `to` | `shortHex` of the recipient address (also when paid to a number) |
-| `Tx` | `shortHex` of the transaction hash |
+| `tx` | `shortHex` of the transaction hash |
 
-Examples: `Sent 10.5 AUSD to 0x9965...dc. Tx 0xc6b9...fb` (45, 57 +hash);
-worst `Sent 999999.999999 AUSD to 0x9965...dc. Tx 0xc6b9...fb` (54, 66).
+Examples: `Sent 7F3K 10.5 AUSD to=0x9965...dc tx=0xc6b9...fb` (49, 61 +hash);
+`[Test] Sent 7F3K 10.5 AUSD to=0x9965...dc tx=0xc6b9...fb` (58, 70); worst
+`[Test] Sent 7F3K 999999.999999 AUSD to=0x9965...dc tx=0xc6b9...fb` (67, 79).
+An older gateway's `Sent 10.5 AUSD to 0x9965...dc. Tx 0xc6b9...fb` (no id)
+still parses; the app then falls back to matching by amount.
 
 Sent once the batch lands, or, if no receipt came within 30 s, with the
-hash of the pending batch: the public path has no `ERR pending`. App: the
-waiting Review screen marks the transfer sent (no full hash yet); the next
-online `/activity` pull matches it by recipient and amount and fills in the
+hash of the pending batch: the public path has no `ERR pending`. A repeated
+`SIG` answers the same text, id included. App: the Activity row with that id
+is marked sent (by the root listener, so also when Review is closed; the
+waiting Review screen takes only a `Sent` with its own id); the next online
+`/activity` pull matches it by recipient and amount and fills in the full
 hash. The recipient gets a `Received` alert from the Alchemy webhook.
 
 ## Private payments
 
 Testnet only: private commands carry no network and the gateway always uses
-`testnet` (`SHIELDED_NETWORK`). The sender must have registered proving keys
-online (`/shielded/register`), else `NOUSER`.
+`testnet` (`SHIELDED_NETWORK`), so every private reply starts with `[Test] `.
+The sender must have registered proving keys online (`/shielded/register`),
+else `NOUSER`.
 
 ### `PAY` (phone → gateway)
 
@@ -417,13 +452,22 @@ MERGE
 ```
 
 5 septets. Nothing after it. Folds notes into one: a transfer of 0 to self,
-the change being everything else minus the fee. Errors as `PAY`. The app
-never sends it (see Open questions).
+the change being everything else minus the fee. Errors as `PAY`.
+
+App: Home shows a **Merge** pill next to Make private on a network with a
+pool when more than 12 private notes are usable (`canMerge`: `eligible`, and
+not held by a waiting payment; 12 is the largest circuit). It opens Review in
+merge mode ("Merge", Private notes 12 into 1, Fee $0.01). Approving (passkey or
+Quick send) asks for the quote online (`POST /shielded/quote {kind:'merge'}`,
+no amount) or texts `MERGE`; the phone picks the notes with the protocol
+selection for T = fee (12 in) and builds 0 to itself plus the change, one note
+back at `p+1` (`signPrivate`, kind `merge`), then submits online or by the
+private `SIG`. The `Sent` with its id settles it.
 
 ### `Q`, private (gateway → phone)
 
 ```
-Q <id> exp=<unix> fee=<fee>[ to=<to>]
+[Test] Q <id> exp=<unix> fee=<fee>[ to=<to>]
 ```
 
 No `n=`: that is how the parser tells it from the public quote.
@@ -438,9 +482,10 @@ No `n=`: that is how the parser tells it from the public quote.
 Examples:
 
 ```
-Q 7F3K exp=1791200000 fee=0.01 to=GPKI5Dapg2iLd/Q5LqOePHr9dZXs2gU0BzR8TOhaQnPhxMQ3U4HRCBY71FIp5vo8ODhmyaVPFf4OqNlzrq1gKQ   120, 132 +hash
-Q 7F3K exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc   76, 88
-Q 7F3K exp=1791200000 fee=0.01                                                 30, 42
+[Test] Q 7F3K exp=1791200000 fee=0.01 to=GPKI5Dapg2iLd/Q5LqOePHr9dZXs2gU0BzR8TOhaQnPhxMQ3U4HRCBY71FIp5vo8ODhmyaVPFf4OqNlzrq1gKQ   129, 141 +hash
+[Test] Q 7F3K exp=1791200000 fee=0.01 to=0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc   85, 97
+[Test] Q 7F3K exp=1791200000 fee=0.01                                                 39, 51
+[Test] Q 7F3K exp=999999999999 fee=0.01 to=<86>                                        131, 143 (worst)
 ```
 
 Parse: `id` must be a valid id, `exp` 1-12 digits, `fee` an amount, `to`
@@ -454,7 +499,7 @@ came by text without `to=`, the typed address is used as `to`.
 | `expired` | `exp` has passed |
 | `bad-quote` | `exp` more than an hour ahead |
 | `fee-too-high` | `fee` > `MAX_FEE` |
-| `recipient-mismatch` | Shield with a `to`; withdrawal whose `to` isn't the requested 0x address; payment whose `to` isn't 64 bytes, or isn't the `ender1…` key the user gave |
+| `recipient-mismatch` | Shield or merge with a `to`; withdrawal whose `to` isn't the requested 0x address; payment whose `to` isn't 64 bytes, or isn't the `ender1…` key the user gave |
 | `KEY CHANGED` | The number's pinned shielded address (`shieldedPins`) differs from `to`. Shown as "This contact's private address changed since you last paid them. Nothing was sent." App-only; never on the wire |
 
 Then the app picks the notes (`selectNotes`; it can still answer `FUNDS` /
@@ -521,44 +566,50 @@ proves with the gateway's own dummy inputs and sends
 ### `Sent`, private (gateway → phone)
 
 ```
-Sent <amount> AUSD to <to>. Tx <short tx>[ p=<pos>]
+[Test] Sent <id> <amount> AUSD to=<to> tx=<short tx>[ p=<pos>]
 ```
 
 | Field | Meaning |
 | --- | --- |
+| `id` | The quote id the `SIG` named |
 | `amount` | The quote's amount (`0` for `MERGE`) |
 | `to` | `PAY` to a number: that number. `PAY` to `ender1…`: `ender1abcd...wxyz`, never its owner's number. Withdrawal: `shortHex` of the 0x address. `MERGE`: the sender's own number |
-| `Tx` | `shortHex` of the transaction |
+| `tx` | `shortHex` of the transaction |
 | `p` | Tree position of output 0; our change, if any, is at `p+1`. Up to 8 digits. Absent for a withdrawal with no change (two null outputs, no leaves) |
 
 Examples:
 
 ```
-Sent 20 AUSD to +919876543210. Tx 0xc6b9...fb p=2           49, 61 +hash
-Sent 20 AUSD to ender1rreg...6dx9. Tx 0xc6b9...fb p=2       53, 65
-Sent 5 AUSD to 0x9965...dc. Tx 0xc6b9...fb p=14             47, 59
-Sent 5 AUSD to 0x9965...dc. Tx 0xc6b9...fb                  42, 54
-Sent 0 AUSD to +919876543210. Tx 0xc6b9...fb p=40           49, 61 (MERGE)
-Sent 999999.999999 AUSD to +123456789012345. Tx 0xc6b9...fb p=99999999   70, 82 (worst)
+[Test] Sent 7F3K 20 AUSD to=+919876543210 tx=0xc6b9...fb p=2          62, 74 +hash
+[Test] Sent 7F3K 20 AUSD to=ender1rreg...6dx9 tx=0xc6b9...fb p=2      66, 78
+[Test] Sent 7F3K 5 AUSD to=0x9965...dc tx=0xc6b9...fb p=14            60, 72
+[Test] Sent 7F3K 5 AUSD to=0x9965...dc tx=0xc6b9...fb                 55, 67
+[Test] Sent 7F3K 0 AUSD to=+919876543210 tx=0xc6b9...fb p=40          62, 74 (MERGE)
+[Test] Sent 7F3K 999999.999999 AUSD to=+123456789012345 tx=0xc6b9...fb p=99999999   83, 95 (worst)
 ```
 
-Only sent once the receipt is in (else `ERR <id> pending`). App
-(`applyShieldedReply` → `applyReply`): the oldest waiting private payment
-(not a shield) with the same amount settles: its inputs are marked spent,
-our outputs are added at `p + i`, and a number's shielded address is pinned.
-The Review screen waiting for it shows done.
+Only sent once the receipt is in (else `ERR <id> pending`); a repeated `SIG`
+answers the same text, id included. App (`applyShieldedReply` → `fileReply` →
+`applyReply`), on the testnet note cache whatever mode the app shows: the
+waiting payment with that id settles: its inputs are marked spent, our
+outputs are added at `p + i`, and a number's shielded address is pinned. The
+Review screen waiting for that id shows done. A `Sent` without an id (older
+gateway, `Sent 20 AUSD to +91…. Tx … p=2`) still parses and settles the
+oldest waiting payment of that kind and amount.
 
 ### `Shielded` (gateway → phone)
 
 ```
-Shielded <amount> AUSD. Tx <short tx> p=<pos>
+[Test] Shielded <id> <amount> AUSD tx=<short tx> p=<pos>
 ```
 
-`p` is the position of the new note (output 0). `Shielded 50 AUSD. Tx
-0xc6b9...fb p=0` (36, 48 +hash); worst 54, 66.
+`id` is the deposit's quote id, `p` the position of the new note (output 0).
+`[Test] Shielded 7F3K 50 AUSD tx=0xc6b9...fb p=0` (49, 61 +hash); worst
+`[Test] Shielded 7F3K 999999.999999 AUSD tx=0xc6b9...fb p=99999999` (67, 79).
 
-App: the oldest waiting shield with the same amount settles and its note is
-added at `p`.
+App: the waiting shield with that id settles and its note is added at `p`.
+The older `Shielded 50 AUSD. Tx 0xc6b9...fb p=0` still parses (matched by
+amount).
 
 ### `Got` (gateway → recipient)
 
@@ -568,7 +619,7 @@ transaction lands, when the recipient is a different number, has alerts on
 (`alerts_sent`, shared with `Received`).
 
 ```
-Got <amount> AUSD (private) p=<pos> b=<blinding>
+[Test] Got <amount> AUSD (private) p=<pos> b=<blinding>
 ```
 
 | Field | Meaning |
@@ -581,13 +632,13 @@ No sender: a text never tells one user another's number. The older
 `Got <amt> AUSD from <who> p=… b=…` still parses; the sender is dropped.
 
 ```
-Got 20 AUSD (private) p=2 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0/k0                 71, 83 +hash
-Got 999999.999999 AUSD (private) p=99999999 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0/k0   89, 101
+[Test] Got 20 AUSD (private) p=2 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0/k0                 80, 92 +hash
+[Test] Got 999999.999999 AUSD (private) p=99999999 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0/k0   98, 110
 ```
 
-App: adds the note `{pos: p, amount, blinding}` to the cache and an incoming
-"Private payment" row `got:<network>:<p>`. The next online `/shielded/notes`
-replaces the cache anyway.
+App: adds the note `{pos: p, amount, blinding}` to the testnet cache (also
+while the app shows mainnet) and an incoming "Private payment" row
+`got:testnet:<p>`. The next online `/shielded/notes` replaces the cache anyway.
 
 ## Alerts
 
@@ -601,7 +652,7 @@ transaction per number (`alerts_sent`). Any AUSD sender counts, including a
 private withdrawal from the pool to an Ender wallet (then `from` is the pool).
 
 ```
-[Test] Received <amount> AUSD from <0x EIP-55>. Balance <balance> AUSD. Tx <short tx>
+[Test] Received <amount> AUSD from=<0x EIP-55> balance=<balance> tx=<short tx>
 ```
 
 | Field | Meaning |
@@ -609,20 +660,22 @@ private withdrawal from the pool to an Ender wallet (then `from` is the pool).
 | `[Test] ` | Testnet only |
 | `amount` | Transfer value |
 | `from` | Sender's full address, EIP-55. Never a number, even for an Ender sender |
-| `Balance` | Recipient's AUSD balance read when the alert is built |
-| `Tx` | `shortHex` of the hash: how the app matches the alert with `/activity` |
+| `balance` | Recipient's AUSD balance read when the alert is built |
+| `tx` | `shortHex` of the hash: how the app matches the alert with `/activity` |
 
 ```
-[Test] Received 10 AUSD from 0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc. Balance 25.5 AUSD. Tx 0xc6b9...fb   108, 120 +hash
-Received 10 AUSD from 0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc. Balance 25.5 AUSD. Tx 0xc6b9...fb          99, 111
-[Test] Received 999999.999999 AUSD from 0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc. Balance 999999.999999 AUSD. Tx 0xc6b9...fb   128, 140 (worst)
+[Test] Received 10 AUSD from=0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc balance=25.5 tx=0xc6b9...fb   101, 113 +hash
+Received 10 AUSD from=0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc balance=25.5 tx=0xc6b9...fb          92, 104
+[Test] Received 999999.999999 AUSD from=0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc balance=999999.999999 tx=0xc6b9...fb   121, 133 (worst)
 ```
 
-Parsed by one strict regex. App (`applyReceived`): network from `[Test]`; adds
-an incoming Activity row `sms:<network>:<short tx>` unless that transfer is
-already there (same row id, or an incoming row whose full hash shortens to
-it), and then sets that network's balance to `Balance`. When `/activity`
-later returns the transfer, the full row replaces the text's row.
+Parsed by a strict regex; the older `… from 0x…. Balance 25.5 AUSD. Tx
+0xc6b9...fb` still parses. App (`applyReceived` → `fileReceived`): network
+from `[Test]`, whatever mode the app shows; adds an incoming Activity row
+`sms:<network>:<short tx>` unless that transfer is already there (same row
+id, or an incoming row whose full hash shortens to it), and then sets that
+network's balance to `balance`. When `/activity` later returns the transfer,
+the full row replaces the text's row.
 
 ## Texts the app composes but the gateway never sees
 
@@ -653,37 +706,38 @@ recipient's `Received`.
 **Public send, offline**
 
 1. Phone → `SEND +919876543210, 20 AUSD`
-2. Gateway → `Q 7F3K n=4 exp=… fee=0.01 to=0x…` (or `ERR <code>`)
+2. Gateway → `Q 7F3K n=4 exp=… fee=0.01 to=0x…` (or `ERR <code>`; both with `[Test] ` on testnet)
 3. App checks the quote, user approves (passkey or Quick send).
 4. Phone → `SIG 7F3K <88>`
-5. Gateway → `Sent 20 AUSD to 0x9965...dc. Tx 0xc6b9...fb` (or `ERR 7F3K <code>`)
+5. Gateway → `Sent 7F3K 20 AUSD to=0x9965...dc tx=0xc6b9...fb` (or `ERR 7F3K <code>`)
 6. Gateway → recipient: `Received …` (webhook, alerts on).
 
 **Private `PAY` to a number** (offline; online: `/shielded/quote`, `/shielded/submit`)
 
 1. Phone → `PAY +919876543210, 20 AUSD`
-2. Gateway → `Q 7F3K exp=… fee=0.01 to=<86>`
+2. Gateway → `[Test] Q 7F3K exp=… fee=0.01 to=<86>`
 3. App checks (incl. `KEY CHANGED`), picks notes, signs.
 4. Phone → `SIG 7F3K <refs> <86>`
-5. Gateway → `Sent 20 AUSD to +919876543210. Tx … p=2` (or `ERR 7F3K pending`, then repeat 4)
-6. Gateway → recipient: `Got 20 AUSD (private) p=2 b=<43>` (alerts on).
+5. Gateway → `[Test] Sent 7F3K 20 AUSD to=+919876543210 tx=… p=2` (or `[Test] ERR 7F3K pending`, then repeat 4)
+6. Gateway → recipient: `[Test] Got 20 AUSD (private) p=2 b=<43>` (alerts on).
 
 **Private `PAY` to an `ender1…` address**: as above, but the `Q` has no
-`to=` (the app uses the typed key), `Sent` says `to ender1rreg...6dx9`, and
+`to=` (the app uses the typed key), `Sent` says `to=ender1rreg...6dx9`, and
 `Got` goes to the address's owner, whose number the payer never sees.
 
-**Private withdrawal to 0x**: `PAY 0x…, 5 AUSD` → `Q … to=0x…` (must equal
-the typed address) → `SIG <id> <refs> <86>` → `Sent 5 AUSD to 0x9965...dc. Tx
-… [p=…]`. If the 0x address is a linked Ender wallet, its owner gets a
+**Private withdrawal to 0x**: `PAY 0x…, 5 AUSD` → `[Test] Q … to=0x…` (must
+equal the typed address) → `SIG <id> <refs> <86>` → `[Test] Sent <id> 5 AUSD
+to=0x9965...dc tx=…[ p=…]`. If the 0x address is a linked Ender wallet, its owner gets a
 `Received` from the pool address.
 
-**`SHIELD`**: `SHIELD 50 AUSD` → `Q 7F3K exp=… fee=0.01` → app signs the
-EIP-3009 authorization with the wallet key → `SIG 7F3K <88>` → `Shielded 50
-AUSD. Tx … p=0` (or `ERR 7F3K pending`).
+**`SHIELD`**: `SHIELD 50 AUSD` → `[Test] Q 7F3K exp=… fee=0.01` → app signs
+the EIP-3009 authorization with the wallet key → `SIG 7F3K <88>` →
+`[Test] Shielded 7F3K 50 AUSD tx=… p=0` (or `[Test] ERR 7F3K pending`).
 
-**`MERGE`** (gateway only; no app UI): `MERGE` → `Q <id> exp=… fee=0.01` →
-`SIG <id> <refs> <86>` → `Sent 0 AUSD to <own number>. Tx … p=<n>`, merged
-note at `p+1`.
+**`MERGE`** (Home's Merge pill, more than 12 usable notes): `MERGE` →
+`[Test] Q <id> exp=… fee=0.01` → `SIG <id> <refs> <86>` (12 refs) →
+`[Test] Sent <id> 0 AUSD to=<own number> tx=… p=<n>`, merged note at `p+1`.
+Online: `/shielded/quote {kind:'merge'}`, `/shielded/submit`.
 
 **Incoming public payment**: transfer lands → Alchemy webhook → `transfers`
 row → `Received …` text (alerts on, ≤ 10 min old) → app adds the row; online,
@@ -698,7 +752,8 @@ decryption) → `Got …` to the recipient (alerts on) → app adds the note; on
 
 `ERR <code>` answers a command that has no id (`SYNC`, `SEND`, `PAY`,
 `SHIELD`, `MERGE`, an unparseable text); `ERR <id> <code>` answers a `SIG`.
-Codes never contain spaces. On HTTPS the same codes come as `{error}`. The app
+Codes never contain spaces. An `ERR` carries `[Test] ` when the gateway knows
+the command was about testnet. On HTTPS the same codes come as `{error}`. The app
 text is `ERRORS` in `wallet.ts`; codes missing there show
 `Gateway said: <code>`. While Review waits for a reply, any `ERR` (and, while
 waiting for `Sent`, any `ERR` with that id or no id) fails the step.
@@ -745,23 +800,18 @@ HTTPS-only codes (never in a text): `rate-limited`, `sms-unavailable`,
 
 App-only refusals (never on the wire): `expired`, `bad-quote`,
 `fee-too-high`, `recipient-mismatch`, `no-out`, `KEY CHANGED`,
-`wrong-passkey`, and the public pin-change warning.
+`wrong-passkey`, `wrong-network` (a reply for the other network than the
+payment's), and the public pin-change warning.
 
 ## Open questions
 
-- **`Sent` matching.** `Sent` carries no id. The waiting Review screen takes
-  any `Sent` / `Shielded` as its own, and `applyReply` settles the oldest
-  waiting private payment with the same amount, also on a public `Sent`. A late
-  or unrelated `Sent` of the same amount could settle the wrong one until the
-  next online resync.
-- **Private texts while in mainnet mode.** `applyShieldedReply` uses the app's
-  current network and returns unless it is registered there, so a `Got`,
-  `Sent` or `Shielded` that arrives while the app shows mainnet is dropped.
-  The next online `/shielded/notes` on testnet recovers it.
+- **`SEND` by text and the current network.** An SMS `SEND` is quoted on the
+  number's current network (`links.network`), which only an online call or
+  `SYNC` sets. If that differs from the payment's, Review fails with
+  `wrong-network` instead of signing for the wrong chain; texting `SYNC T` /
+  `SYNC` first would avoid it.
 - **`Got` needs alerts on.** `gotAlert` skips numbers with `links.alerts` off,
   so they learn of a private payment only online.
-- **`MERGE`** is in the protocol and the gateway, but the app has no screen
-  that sends it.
 - **Public `SIG` while pending.** `sign` returns `pending` when no receipt came
   in 30 s, but `gateway/src/sms.ts` answers `Sent` anyway, so the text can
   report a transfer that later fails (`GET /tx/:id` and `reconcile` know).

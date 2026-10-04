@@ -12,12 +12,17 @@
  *   `Q <id> exp=… fee=…[ to=…]` (no `n=`, which is how it differs from the
  *   public quote; `to=` is the recipient's packed address for a PAY to a number,
  *   the 0x address for a withdrawal, and absent for SHIELD, MERGE and a PAY to
- *   an ender1 address, whose key the phone already has), `Sent … p=<pos>`,
- *   `Shielded <amt> AUSD. Tx … p=<pos>`, `Got <amt> AUSD (private) p=<pos> b=<blinding>`
- *   (no sender: the gateway never tells one user another's number).
+ *   an ender1 address, whose key the phone already has),
+ *   `Sent <id> <amt> AUSD to=<to> tx=0x1234...ef[ p=<pos>]`, `Shielded <id> <amt> AUSD tx=… p=<pos>`,
+ *   `Got <amt> AUSD (private) p=<pos> b=<blinding>` (no sender: the gateway
+ *   never tells one user another's number). `Sent` and `Shielded` carry the id
+ *   the SIG named; an older gateway's forms (`… to <to>. Tx …`, no id) still parse.
  *
- * Alerts: `[Test] Received <amt> AUSD from 0x<EIP-55>. Balance <amt> AUSD. Tx 0x1234...ef`
- * (`[Test] ` on testnet only). Every text the gateway sends ends with the SMS
+ * Alerts: `Received <amt> AUSD from=0x<EIP-55> balance=<amt> tx=0x1234...ef`
+ * (the older `from 0x…. Balance … AUSD. Tx …` still parses).
+ * Every reply and alert about testnet starts with `[Test] ` (`test: true`);
+ * no tag means mainnet. The app applies each text to the network it names,
+ * whatever mode it shows. Every text the gateway sends ends with the SMS
  * Retriever hash on its own line; parseReply reads the first line only.
  *   The private `SIG <id> <refs> <signature>` has three fields after `SIG`, the
  *   public one two. A deposit's SIG has the public shape (a 65-byte EIP-3009 signature).
@@ -48,18 +53,23 @@ export type ShieldedCommand =
   /** refs: tree positions of the 1-12 real input notes (sent mod REF_MOD); signature: 64-byte EdDSA. */
   | { kind: 'shieldedSig'; id: string; refs: number[]; signature: Uint8Array };
 
-export type Reply =
+/** test: the text is about testnet (`[Test] ` prefix); untagged means mainnet. */
+export type Reply = (
   | { kind: 'ok'; nonce: bigint; delegated: boolean; balance: string; inr?: string }
   | { kind: 'quote'; id: string; nonce: bigint; expires: number; fee: string; to: Address; out?: string }
-  /** p: tree position of output 0 of a private payment (change is p+1); absent for public sends and change-less withdrawals. */
-  | { kind: 'sent'; amount: string; to: string; tx: string; p?: number }
+  /**
+   * id: the session or quote the SIG named (absent in an older gateway's text).
+   * p: tree position of output 0 of a private payment (change is p+1); absent for public sends and change-less withdrawals.
+   */
+  | { kind: 'sent'; id?: string; amount: string; to: string; tx: string; p?: number }
   | { kind: 'error'; id?: string; code: string }
   /** to: a 64-byte shielded address (transfer), a 0x address (withdrawal), or absent (deposit, answering SHIELD). */
   | { kind: 'shieldedQuote'; id: string; expires: number; fee: string; to?: Address | Uint8Array }
-  | { kind: 'shielded'; amount: string; tx: string; p: number }
+  | { kind: 'shielded'; id?: string; amount: string; tx: string; p: number }
   | { kind: 'got'; amount: string; p: number; blinding: bigint }
   /** A public incoming transfer. from: EIP-55; tx: shortHex of the hash (dedupes against the online history). */
-  | { kind: 'received'; amount: string; from: Address; balance: string; tx: string; test: boolean };
+  | { kind: 'received'; amount: string; from: Address; balance: string; tx: string; test: boolean }
+) & { test?: boolean };
 
 export const SEGMENT_SEPTETS = 160;
 
@@ -218,7 +228,9 @@ export const formatShieldedCommand = (c: ShieldedCommand): string => {
 
 // ---------- gateway → app
 
-export const formatReply = (r: Reply): string => {
+export const formatReply = (r: Reply): string => oneSegment(`${r.test ? '[Test] ' : ''}${formatBody(r)}`);
+
+const formatBody = (r: Reply): string => {
   switch (r.kind) {
     case 'ok':
       return oneSegment(`OK n=${r.nonce} dlg=${r.delegated ? 1 : 0} AUSD=${r.balance}${r.inr ? ` inr=${r.inr}` : ''}`);
@@ -227,7 +239,7 @@ export const formatReply = (r: Reply): string => {
         `Q ${r.id} n=${r.nonce} exp=${r.expires} fee=${r.fee} to=${r.to}${r.out ? ` out=${r.out}` : ''}`,
       );
     case 'sent':
-      return oneSegment(`Sent ${r.amount} AUSD to ${r.to}. Tx ${r.tx}${r.p === undefined ? '' : ` p=${r.p}`}`);
+      return oneSegment(`Sent ${r.id ? `${r.id} ` : ''}${r.amount} AUSD to=${r.to} tx=${r.tx}${r.p === undefined ? '' : ` p=${r.p}`}`);
     case 'error':
       return oneSegment(`ERR ${r.id ? `${r.id} ` : ''}${r.code}`);
     case 'shieldedQuote': {
@@ -235,11 +247,11 @@ export const formatReply = (r: Reply): string => {
       return oneSegment(`Q ${r.id} exp=${r.expires} fee=${r.fee}${to}`);
     }
     case 'shielded':
-      return oneSegment(`Shielded ${r.amount} AUSD. Tx ${r.tx} p=${r.p}`);
+      return oneSegment(`Shielded ${r.id ? `${r.id} ` : ''}${r.amount} AUSD tx=${r.tx} p=${r.p}`);
     case 'got':
       return oneSegment(`Got ${r.amount} AUSD (private) p=${r.p} b=${b64(numberToBytes(r.blinding, { size: 32 }))}`);
     case 'received':
-      return oneSegment(`${r.test ? '[Test] ' : ''}Received ${r.amount} AUSD from ${getAddress(r.from)}. Balance ${r.balance} AUSD. Tx ${r.tx}`);
+      return oneSegment(`Received ${r.amount} AUSD from=${getAddress(r.from)} balance=${r.balance} tx=${r.tx}`);
   }
 };
 
@@ -247,14 +259,22 @@ const fields = (parts: string[]) => Object.fromEntries(parts.map((p) => p.split(
 
 /** One reply, from its first line (the SMS Retriever hash follows on the next). */
 export const parseReply = (raw: string): Reply | null => {
-  const text = raw.trim().split(/\r?\n/)[0]!.trim();
+  const line = raw.trim().split(/\r?\n/)[0]!.trim();
+  const test = line.startsWith('[Test] ');
+  const r = parseBody(test ? line.slice('[Test] '.length) : line);
+  return r && test ? { ...r, test } : r;
+};
+
+const parseBody = (text: string): Reply | null => {
   const parts = text.split(/\s+/);
   switch (parts[0]) {
-    case '[Test]':
     case 'Received': {
-      const m = /^(\[Test\] )?Received (\d+(?:\.\d{1,6})?) AUSD from (0x[0-9a-fA-F]{40})\. Balance (\d+(?:\.\d{1,6})?) AUSD\. Tx (0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2})$/.exec(text);
+      // The older form: `… from 0x…. Balance <amt> AUSD. Tx 0x…`.
+      const m =
+        /^Received (\d+(?:\.\d{1,6})?) AUSD from=(0x[0-9a-fA-F]{40}) balance=(\d+(?:\.\d{1,6})?) tx=(0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2})$/.exec(text) ??
+        /^Received (\d+(?:\.\d{1,6})?) AUSD from (0x[0-9a-fA-F]{40})\. Balance (\d+(?:\.\d{1,6})?) AUSD\. Tx (0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2})$/.exec(text);
       if (!m) return null;
-      return { kind: 'received', amount: m[2]!, from: getAddress(m[3]!), balance: m[4]!, tx: m[5]!.toLowerCase(), test: !!m[1] };
+      return { kind: 'received', amount: m[1]!, from: getAddress(m[2]!), balance: m[3]!, tx: m[4]!.toLowerCase(), test: false };
     }
     case 'OK': {
       const f = fields(parts.slice(1));
@@ -274,15 +294,17 @@ export const parseReply = (raw: string): Reply | null => {
       if (!parts[1] || !f.n || !f.exp || !f.fee || !f.to || !isAddress(f.to)) return null;
       return { kind: 'quote', id: parts[1], nonce: BigInt(f.n), expires: Number(f.exp), fee: f.fee, to: f.to, out: f.out };
     }
+    // An older gateway sent no id and `… to <to>. Tx <tx>` / `… AUSD. Tx <tx>`; both still parse.
     case 'Sent': {
-      const m = /^Sent (\S+) AUSD to (\S+)\. Tx (\S+?)(?: p=(\d{1,8}))?$/.exec(text);
+      const m =
+        /^Sent (?:([23456789ABCDEFGHJKMNPQRSTVWXYZ]{4}) )?(\d+(?:\.\d{1,6})?) AUSD to=(\S+) tx=(\S+?)(?: p=(\d{1,8}))?$/.exec(text) ??
+        /^Sent (?:([23456789ABCDEFGHJKMNPQRSTVWXYZ]{4}) )?(\d+(?:\.\d{1,6})?) AUSD to (\S+)\. Tx (\S+?)(?: p=(\d{1,8}))?$/.exec(text);
       if (!m) return null;
-      const r = { kind: 'sent', amount: m[1]!, to: m[2]!, tx: m[3]! } as const;
-      return m[4] === undefined ? r : { ...r, p: Number(m[4]) };
+      return { kind: 'sent', ...(m[1] ? { id: m[1] } : {}), amount: m[2]!, to: m[3]!, tx: m[4]!, ...(m[5] === undefined ? {} : { p: Number(m[5]) }) };
     }
     case 'Shielded': {
-      const m = /^Shielded (\d+(?:\.\d{1,6})?) AUSD\. Tx (\S+) p=(\d{1,8})$/.exec(text);
-      return m ? { kind: 'shielded', amount: m[1]!, tx: m[2]!, p: Number(m[3]) } : null;
+      const m = /^Shielded (?:([23456789ABCDEFGHJKMNPQRSTVWXYZ]{4}) )?(\d+(?:\.\d{1,6})?) AUSD(?: tx=|\. Tx )(\S+) p=(\d{1,8})$/.exec(text);
+      return m ? { kind: 'shielded', ...(m[1] ? { id: m[1] } : {}), amount: m[2]!, tx: m[3]!, p: Number(m[4]) } : null;
     }
     case 'Got': {
       // `from <who>`: the older format (and the spike's); the sender is dropped.

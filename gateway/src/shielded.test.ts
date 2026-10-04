@@ -189,30 +189,30 @@ describe('register and SMS routing', () => {
   });
 
   test('PAY to a number without a shielded key', async () => {
-    expect(await sms(ALICE, `PAY ${BOB}, 1 AUSD`)).toBe('ERR NOUSER');
+    expect(await sms(ALICE, `PAY ${BOB}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
   });
 
   test('PAY to a private address nobody registered, or with another encryption key', async () => {
-    expect(await sms(ALICE, `PAY ${encodePrivateAddress(packAddress(owner(provingKeys(newUser()))))}, 1 AUSD`)).toBe('ERR NOUSER');
+    expect(await sms(ALICE, `PAY ${encodePrivateAddress(packAddress(owner(provingKeys(newUser()))))}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
     const swapped = packAddress({ ownerKey: owner(pk).ownerKey, encPk: new Uint8Array(32).fill(9) });
-    expect(await sms(ALICE, `PAY ${encodePrivateAddress(swapped)}, 1 AUSD`)).toBe('ERR NOUSER');
+    expect(await sms(ALICE, `PAY ${encodePrivateAddress(swapped)}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
     expect(await sms(ALICE, `PAY ${encodePrivateAddress(swapped).slice(0, -1)}q, 1 AUSD`)).toBe('ERR bad-command'); // typo: not a command
   });
 
   test('every reply ends with the SMS Retriever hash', async () => {
     const withHash = { ...env, SMS_RETRIEVER_HASH: 'FA+9qCX9VSu' } as Env;
-    expect((await handleInbound(withHash, { from: ALICE, body: `PAY ${BOB}, 1 AUSD` }))?.body).toBe('ERR NOUSER\nFA+9qCX9VSu');
+    expect((await handleInbound(withHash, { from: ALICE, body: `PAY ${BOB}, 1 AUSD` }))?.body).toBe('[Test] ERR NOUSER\nFA+9qCX9VSu');
   });
 
   test('PAY / MERGE / SHIELD from a number without a shielded key', async () => {
-    expect(await sms(BOB, `PAY ${ALICE}, 1 AUSD`)).toBe('ERR NOUSER');
-    expect(await sms(BOB, 'MERGE')).toBe('ERR NOUSER');
-    expect(await sms(BOB, 'SHIELD 5 AUSD')).toBe('ERR NOUSER');
+    expect(await sms(BOB, `PAY ${ALICE}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
+    expect(await sms(BOB, 'MERGE')).toBe('[Test] ERR NOUSER');
+    expect(await sms(BOB, 'SHIELD 5 AUSD')).toBe('[Test] ERR NOUSER');
   });
 
   test('private SIG (refs + 64-byte signature) for an unknown quote', async () => {
     const body = `SIG 7F3K ${encodeRefs([1, 2])} ${b64(new Uint8Array(64).fill(7))}`;
-    expect(await sms(ALICE, body)).toBe('ERR 7F3K UNKNOWN');
+    expect(await sms(ALICE, body)).toBe('[Test] ERR 7F3K UNKNOWN');
   });
 
   test('public-shaped SIG goes to the deposit when the quote is a SHIELD', async () => {
@@ -223,7 +223,7 @@ describe('register and SMS routing', () => {
       .run();
     const stranger = privateKeyToAccount(generatePrivateKey());
     const signature = await stranger.signMessage({ message: 'not the authorization' });
-    expect(await sms(ALICE, `SIG D3P2 ${signatureToBase64(signature)}`)).toBe('ERR D3P2 BADSIG');
+    expect(await sms(ALICE, `SIG D3P2 ${signatureToBase64(signature)}`)).toBe('[Test] ERR D3P2 BADSIG');
     const q = await env.DB.prepare(`SELECT state, error FROM shielded_quotes WHERE id = 'D3P2'`).first();
     expect(q).toEqual({ state: 'open', error: 'BADSIG' }); // reopened for a corrected retry
     // The same shape for an id that isn't a shielded quote is a public SIG.
@@ -232,6 +232,13 @@ describe('register and SMS routing', () => {
 
   test('unparseable text from a number on Ender', async () => {
     expect(await sms(ALICE, 'hello')).toBe('ERR bad-command');
+  });
+
+  test('public replies about testnet carry [Test]; a reply with no network does not', async () => {
+    // Alice's number is on testnet, so her SEND is quoted (and refused) there.
+    expect(await sms(ALICE, 'SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
+    expect(await sms('+919800000005', 'SYNC T')).toBe('[Test] ERR not-registered');
+    expect(await sms('+919800000005', 'SYNC')).toBe('ERR not-registered');
   });
 });
 

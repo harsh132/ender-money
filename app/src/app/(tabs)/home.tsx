@@ -6,12 +6,12 @@ import Svg, { Circle, Defs, Mask, Pattern, RadialGradient, Rect, Stop } from 're
 import { MAX_FEE } from '../../lib/config';
 import { ago, inr, usd } from '../../lib/format';
 import { quickSend } from '../../lib/keys';
-import { privateBalance } from '../../lib/private';
+import { canMerge, privateBalance } from '../../lib/private';
 import { useStore } from '../../lib/store';
 import { c, f } from '../../lib/theme';
 import { useOnline } from '../../lib/transport';
 import { isRegistered, refresh } from '../../lib/wallet';
-import { ArrowDown, ArrowUp, Bolt, Scan, Shield, Signal } from '../../ui/icons';
+import { ArrowDown, ArrowUp, Bolt, Merge, Scan, Shield, Signal } from '../../ui/icons';
 import { Banner, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
 import { Sigil } from '../../ui/Sigil';
 import { TxRow } from '../../ui/TxRow';
@@ -47,12 +47,15 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   // Private balance: testnet only (the only network with a pool). Mainnet shows none of it.
   const priv = useStore((s) => (isRegistered(s.network, s) ? privateBalance(s.notes[s.network] ?? []) : undefined));
+  // More notes than one payment can spend: offer to fold 12 into one.
+  const merge = useStore((s) => isRegistered(s.network, s) && canMerge(s.network, { notes: s.notes[s.network] ?? [], awaiting: s.awaiting[s.network] ?? [] }));
   const [split, setSplit] = useState(false);
 
   const recent = useMemo(() => activity.filter((t) => t.network === network).sort((a, b) => b.at - a.at).slice(0, 5), [activity, network]);
   const publicBalance = snapshot?.balance ?? '0';
   const balance = priv ? (Number(publicBalance) + Number(priv)).toFixed(6) : publicBalance;
   const [whole, cents] = usd(balance).split('.');
+  const makePrivate = priv !== undefined && Number(publicBalance) > Number(MAX_FEE);
 
   const pull = useCallback(async () => {
     setRefreshing(true);
@@ -113,9 +116,12 @@ export default function Home() {
               )}
             </T>
           </Pressable>
-          {priv !== undefined && Number(publicBalance) > Number(MAX_FEE) ? (
-            <View style={{ marginTop: 14 }}>
-              <Chip label="Make private" icon={<Shield size={14} color={c.accent} />} onPress={() => router.push({ pathname: '/send', params: { shield: '1' } })} />
+          {makePrivate || merge ? (
+            <View style={{ marginTop: 14, flexDirection: 'row', gap: 8 }}>
+              {makePrivate ? (
+                <Chip label="Make private" icon={<Shield size={14} color={c.accent} />} onPress={() => router.push({ pathname: '/send', params: { shield: '1' } })} />
+              ) : null}
+              {merge ? <Chip label="Merge" icon={<Merge size={14} color={c.accent} />} onPress={() => router.push({ pathname: '/review', params: { merge: '1' } })} /> : null}
             </View>
           ) : null}
         </View>

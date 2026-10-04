@@ -256,7 +256,7 @@ describe('POST /webhooks/alchemy', () => {
     expect(await rows('SELECT network, tx_hash, log_index, from_address, to_address, amount, block FROM transfers')).toEqual([
       { network: 'testnet', tx_hash: tx(1), log_index: 0, from_address: STRANGER, to_address: ALICE.address, amount: '10000000', block: 1_000_000 },
     ]);
-    expect(sent).toEqual([{ to: ALICE.phone, body: `[Test] Received 10 AUSD from ${STRANGER}. Balance 45.2 AUSD. Tx 0x0000...01${'\n'}FA+9qCX9VSu` }]);
+    expect(sent).toEqual([{ to: ALICE.phone, body: `[Test] Received 10 AUSD from=${STRANGER} balance=45.2 tx=0x0000...01${'\n'}FA+9qCX9VSu` }]);
 
     // Delivered again: no new row, no second text.
     expect((await deliver(payload)).status).toBe(200);
@@ -268,7 +268,7 @@ describe('POST /webhooks/alchemy', () => {
     const bob = '0x7e9bce1e34dadc99a83da4edcdb56d288afa84c5' as Address;
     await env.DB.prepare('UPDATE links SET address = ? WHERE phone = ?').bind(bob, BOB.phone).run();
     expect((await deliver(delivery([token({ hash: tx(7), from: bob, to: ALICE.address })]))).status).toBe(200);
-    expect(sent).toEqual([{ to: ALICE.phone, body: `[Test] Received 10 AUSD from 0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5. Balance 45.2 AUSD. Tx 0x0000...07${'\n'}FA+9qCX9VSu` }]);
+    expect(sent).toEqual([{ to: ALICE.phone, body: `[Test] Received 10 AUSD from=0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5 balance=45.2 tx=0x0000...07${'\n'}FA+9qCX9VSu` }]);
   });
 
   test('a stale delivery is recorded without a text', async () => {

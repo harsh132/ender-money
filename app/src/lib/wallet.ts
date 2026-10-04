@@ -7,9 +7,9 @@ import { owner, packAddress, provingKeys, type User } from '../../../protocol/sh
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
 import { api, ApiError, OfflineError, type ActivityItem, type AuthorizationJson } from './api';
 import { MAX_FEE } from './config';
-import { alertNetwork, receivedRow, smsTwin, type Received } from './inbox';
+import { fileReceived, smsTwin, type Received } from './inbox';
 import type { Unlocked } from './keys';
-import { applyReply, chooseRoute, hasPool, POOL_NETWORKS, resync, settleAwaiting, type Awaiting, type Cache } from './private';
+import { chooseRoute, fileReply, hasPool, POOL_NETWORKS, resync, settleAwaiting, type Awaiting, type Cache } from './private';
 import { getState, labelFor, setState, upsertTx, type State, type TxStatus } from './store';
 import { textGateway, type Pipe } from './transport';
 
@@ -170,15 +170,18 @@ export const settlePrivate = (network: NetworkName, id: string, p?: number) => {
   if (a) saveCache(network, settleAwaiting(c, a, p));
 };
 
-/** Sent / Shielded / Got texts update the note cache wherever the user is. */
+/**
+ * Sent / Shielded / Got texts, wherever the user is and whatever network the app shows: the note cache of the
+ * network the text names, and the Activity row with the text's id (a public Sent too).
+ */
 export const applyShieldedReply = (r: Reply) => {
-  const { network } = getState();
-  if (!isRegistered(network) || (r.kind !== 'sent' && r.kind !== 'shielded' && r.kind !== 'got')) return;
-  const { cache: next, settled } = applyReply(cacheOf(getState(), network), r);
-  saveCache(network, next);
-  if (settled) upsertTx({ id: settled.id, status: 'sent' });
-  if (r.kind === 'got')
-    upsertTx({ id: `got:${network}:${r.p}`, network, direction: 'in', amount: r.amount, label: 'Private payment', private: true, status: 'sent', at: Date.now() });
+  if (r.kind !== 'sent' && r.kind !== 'shielded' && r.kind !== 'got') return;
+  const filed = fileReply(getState(), r);
+  if (filed) setState(filed.patch);
+  const id = filed?.settled?.id ?? (r.kind === 'got' ? undefined : r.id);
+  if (id && getState().activity.some((t) => t.id === id)) upsertTx({ id, status: 'sent' });
+  if (r.kind === 'got' && filed)
+    upsertTx({ id: `got:${filed.network}:${r.p}`, network: filed.network, direction: 'in', amount: r.amount, label: 'Private payment', private: true, status: 'sent', at: Date.now() });
 };
 
 /**
@@ -186,14 +189,10 @@ export const applyShieldedReply = (r: Reply) => {
  * reports. A transfer Activity already has changes nothing: its balance may be older than the synced one.
  */
 export const applyReceived = (r: Received) => {
-  const row = receivedRow(getState().activity, r, Date.now());
-  if (!row) return;
-  upsertTx({ ...row, label: labelFor(r.from) });
-  const network = alertNetwork(r);
-  setState((s) => {
-    const a = s.account[network];
-    return a ? { account: { ...s.account, [network]: { ...a, balance: r.balance, syncedAt: Date.now() } } } : {};
-  });
+  const filed = fileReceived(getState(), r, Date.now());
+  if (!filed) return;
+  upsertTx({ ...filed.row, label: labelFor(r.from) });
+  setState({ account: filed.account });
 };
 
 /**
@@ -218,12 +217,12 @@ export const decideRoute = async (d: Draft): Promise<'private' | 'public'> => {
 
 export const syncByText = () => textGateway({ kind: 'sync', network: getState().network });
 
-/** An `OK …` reply, from SYNC by text, describes the current network. */
+/** An `OK …` reply, from SYNC by text: the network it names (`[Test] ` is testnet). */
 export const applyOkReply = (r: Extract<Reply, { kind: 'ok' }>) =>
   setState((s) => ({
     account: {
       ...s.account,
-      [s.network]: { balance: r.balance, nonce: r.nonce.toString(), delegated: r.delegated, syncedAt: Date.now() },
+      [r.test ? 'testnet' : 'mainnet']: { balance: r.balance, nonce: r.nonce.toString(), delegated: r.delegated, syncedAt: Date.now() },
     },
     ...(r.inr && Number(r.inr) > 0 ? { inr: Number(r.inr) } : {}),
   }));

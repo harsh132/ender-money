@@ -8,7 +8,7 @@ import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { formatUnits, parseUnits, stringToBytes, type Address, type Hex, type LocalAccount } from 'viem';
 import { AUSD_DECIMALS, AUSD_EIP712, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../../protocol/networks';
-import { eligible, planCircuit, selectNotes, settle } from '../../../protocol/select';
+import { CIRCUITS, eligible, planCircuit, selectNotes, settle } from '../../../protocol/select';
 import {
   buildDeposit,
   buildTx,
@@ -26,6 +26,7 @@ import {
 import { decodePrivateAddress } from '../../../protocol/recipient';
 import { b64, type Reply } from '../../../protocol/sms';
 import { MAX_FEE } from './config';
+import type { State } from './store';
 
 const units = (s: string) => parseUnits(s, AUSD_DECIMALS);
 
@@ -53,11 +54,11 @@ const domainOf = (n: NetworkName) => ({ chainId: NETWORKS[n].chain.id, pool: NET
 /** One note, as persisted (bigints as decimal strings; amount in AUSD base units). */
 export type CachedNote = { pos: number; amount: string; blinding: string; spent: boolean };
 
-/** A private payment or shield that was signed and is waiting for its Sent / Shielded. */
+/** A private payment, shield or merge that was signed and is waiting for its Sent / Shielded (matched by id). */
 export type Awaiting = {
   id: string;
-  kind: 'pay' | 'withdraw' | 'shield';
-  /** AUSD, as the user typed it (matches the Sent / Shielded text). */
+  kind: 'pay' | 'withdraw' | 'shield' | 'merge';
+  /** AUSD, as the user typed it (`0` for a merge); matches an older gateway's id-less Sent / Shielded. */
   amount: string;
   /** Tree positions of the real inputs: excluded from selection until settled. */
   ins: number[];
@@ -94,17 +95,58 @@ export const settleAwaiting = (c: Cache, a: Awaiting, p?: number): Cache => {
 };
 
 /**
- * An SMS reply: Sent (oldest private payment of that amount), Shielded (oldest
- * shield of that amount), Got (a note someone sent us). Returns the settled
- * payment too, so the caller can mark it in Activity. Anything else: unchanged.
+ * An SMS reply: Sent / Shielded (the waiting payment with that id), Got (a
+ * note someone sent us). Returns the settled payment too, so the caller can
+ * mark it in Activity. Anything else: unchanged. An older gateway's id-less
+ * Sent / Shielded falls back to the oldest waiting one of that kind and amount.
  */
 export const applyReply = (c: Cache, r: Reply): { cache: Cache; settled?: Awaiting } => {
   if (r.kind === 'got')
     return { cache: { ...c, notes: addNote(c.notes, { pos: r.p, amount: units(r.amount).toString(), blinding: r.blinding.toString(), spent: false }) } };
   if (r.kind !== 'sent' && r.kind !== 'shielded') return { cache: c };
-  const a = c.awaiting.find((x) => (x.kind === 'shield') === (r.kind === 'shielded') && units(x.amount) === units(r.amount));
+  const a = c.awaiting.find((x) =>
+    r.id ? x.id === r.id : (x.kind === 'shield') === (r.kind === 'shielded') && units(x.amount) === units(r.amount),
+  );
   return a ? { cache: settleAwaiting(c, a, r.p), settled: a } : { cache: c };
 };
+
+/**
+ * The network a text names: `[Test] ` testnet, no tag mainnet. The app's mode
+ * is display only. A private-only text (private Q, Shielded, Got) without a
+ * tag came from an older gateway: the network with the pool.
+ */
+export const textNetwork = (r: Reply): NetworkName => {
+  const named: NetworkName = r.test ? 'testnet' : 'mainnet';
+  return (r.kind === 'shieldedQuote' || r.kind === 'shielded' || r.kind === 'got') && !hasPool(named) ? POOL_NETWORKS[0]! : named;
+};
+
+/**
+ * The note cache a private text (Sent, Shielded, Got) goes to: the network
+ * it names; with no pool there (an older gateway didn't tag private texts),
+ * the network that has one. Never the network the app happens to show.
+ */
+export const notesNetwork = (r: Reply): NetworkName => {
+  const named: NetworkName = r.test ? 'testnet' : 'mainnet';
+  return hasPool(named) ? named : POOL_NETWORKS[0]!;
+};
+
+/**
+ * A Sent / Shielded / Got text, filed under the network it names: the state
+ * patch for that network's notes, waiting payments and pins, and the payment
+ * it settled. Nothing when that network has no registered private balance.
+ */
+export const fileReply = (s: Pick<State, 'notes' | 'awaiting' | 'shieldedPins' | 'shielded'>, r: Reply) => {
+  const network = notesNetwork(r);
+  if (!s.shielded?.registered.includes(network)) return undefined;
+  const { cache, settled } = applyReply({ notes: s.notes[network] ?? [], awaiting: s.awaiting[network] ?? [], pins: s.shieldedPins }, r);
+  const patch = { notes: { ...s.notes, [network]: cache.notes }, awaiting: { ...s.awaiting, [network]: cache.awaiting }, shieldedPins: cache.pins };
+  return { network, patch, settled };
+};
+
+/** One payment spends at most this many notes (the largest circuit); past it, Home offers a merge. */
+export const MERGE_OVER = CIRCUITS[CIRCUITS.length - 1]!;
+/** Home's Merge pill: a network with a pool and more usable notes than one payment can spend. */
+export const canMerge = (network: NetworkName, c: Pick<Cache, 'notes' | 'awaiting'>) => hasPool(network) && usable(c).length > MERGE_OVER;
 
 /**
  * Online resync: the gateway's index replaces the cache. A waiting payment
@@ -152,9 +194,9 @@ export const chooseRoute = ({
 
 // ---------------------------------------------------------------- quotes
 
-/** to: a 0x address (withdraw), the number or the private address (ender1…) paid (pay). */
-export type PrivateDraft = { kind: 'pay' | 'withdraw' | 'shield'; amount: string; to?: string; phone?: string };
-/** to: the recipient's 64-byte shielded address (pay), a 0x address (withdraw), none (shield). */
+/** to: a 0x address (withdraw), the number or the private address (ender1…) paid (pay). A merge pays 0 to ourselves. */
+export type PrivateDraft = { kind: 'pay' | 'withdraw' | 'shield' | 'merge'; amount: string; to?: string; phone?: string };
+/** to: the recipient's 64-byte shielded address (pay), a 0x address (withdraw), none (shield, merge). */
 export type ShieldedQuote = { id: string; exp: number; fee: string; to?: Address | Uint8Array };
 export type Refusal = { code: string; message: string };
 
@@ -165,7 +207,7 @@ export const checkShieldedQuote = (d: PrivateDraft, q: ShieldedQuote, pinned?: s
   if (q.exp > t + 3600) return { code: 'bad-quote', message: "The quote's deadline is out of range. Nothing was sent." };
   if (units(q.fee) > units(MAX_FEE)) return { code: 'fee-too-high', message: `The fee came back as $${q.fee}. Nothing was sent.` };
   const mismatch = { code: 'recipient-mismatch', message: 'The gateway quoted a different recipient. Nothing was sent.' };
-  if (d.kind === 'shield') return q.to === undefined ? undefined : mismatch;
+  if (d.kind === 'shield' || d.kind === 'merge') return q.to === undefined ? undefined : mismatch;
   if (d.kind === 'withdraw') return typeof q.to === 'string' && q.to.toLowerCase() === d.to?.toLowerCase() ? undefined : mismatch;
   if (!(q.to instanceof Uint8Array) || q.to.length !== 64) return mismatch;
   // Paid to a private address: the quote must name exactly that key.
@@ -205,7 +247,8 @@ export const signPrivate = (
   const tx =
     d.kind === 'withdraw'
       ? buildTx({ ...common, outputs: withdrawOutputs(change), extAmount: -amount, recipient: d.to as Address })
-      : buildTx({ ...common, outputs: [{ amount, to: unpackAddress(q.to as Uint8Array) }, change] });
+      : // A merge: 0 to ourselves (as the gateway rebuilds it), the inputs less the fee come back as one note at p+1.
+        buildTx({ ...common, outputs: [{ amount, to: d.kind === 'merge' ? me : unpackAddress(q.to as Uint8Array) }, change] });
   const refs = inputs.map((n) => n.pos);
   const outs = tx.outs.flatMap((o, i) => (o.to === me && o.amount > 0n ? [{ i, amount: o.amount.toString(), blinding: o.blinding.toString() }] : []));
   return {

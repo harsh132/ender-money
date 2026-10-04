@@ -237,7 +237,7 @@ test.skipIf(!ready)(
     });
     const auth = receiveAuth({ address: token, ...AUSD_EIP712 }, monadTestnet.id, { from: aliceEOA.address, to: pool, value: dep.value, validBefore: q1.expires, nonce: dep.nonce });
     const shielded = parseReply(await sms(ALICE, formatCommand({ kind: 'sig', id: q1.id, signature: await aliceEOA.signTypedData(auth) })));
-    expect(shielded).toMatchObject({ kind: 'shielded', amount: '50', p: 0 });
+    expect(shielded).toEqual({ kind: 'shielded', id: q1.id, amount: '50', tx: expect.any(String), p: 0, test: true });
     expect(await unspent(ALICE)).toEqual([{ pos: 0, amount: AUSD('50'), blinding: dep.outs[0]!.blinding, spent: false } as Note]);
     await rootsMatch();
 
@@ -257,13 +257,13 @@ test.skipIf(!ready)(
       api<{ tx: Hex; p: number }>(ALICE, 'POST', '/shielded/submit', { id: q2.id, refs: pay.refs, sig: b64(pay.sig) }),
     ]);
     const sentReply = parseReply(smsText);
-    expect(sentReply).toMatchObject({ kind: 'sent', amount: '20', to: shortPrivateAddress(bobAddress), p: 2 });
+    expect(sentReply).toMatchObject({ kind: 'sent', id: q2.id, amount: '20', to: shortPrivateAddress(bobAddress), p: 2, test: true });
     expect(smsText).not.toContain(BOB.slice(3));
     expect(http2.p).toBe(2);
     expect((sentReply as { tx: string }).tx).toBe(`${http2.tx.slice(0, 6)}...${http2.tx.slice(-2)}`);
     expect(sent.filter((s) => s.to === BOB)).toHaveLength(1);
     const got = sent.find((s) => s.to === BOB);
-    expect(parseReply(got!.body)).toEqual({ kind: 'got', amount: '20', p: 2, blinding: pay.tx.outs[0]!.blinding });
+    expect(parseReply(got!.body)).toEqual({ kind: 'got', amount: '20', p: 2, blinding: pay.tx.outs[0]!.blinding, test: true });
     expect(got!.body).not.toContain(ALICE.slice(3));
     expect((await unspent(BOB)).map((n) => [n.pos, n.amount])).toEqual([[2, AUSD('20')]]);
     expect((await unspent(ALICE)).map((n) => [n.pos, n.amount])).toEqual([[3, AUSD('29.99')]]);

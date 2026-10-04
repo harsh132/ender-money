@@ -528,7 +528,8 @@ const transfer = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
   const sent = await relay(env, q, data);
 
   if (q.kind === 'pay' && q.to_phone !== q.phone && sent.state === 'sent' && sent.p !== null) {
-    await gotAlert(env, q.to_phone!, sent.tx_hash!, { amount: formatUnits(amount, AUSD_DECIMALS), p: sent.p, blinding: r.tx.outs[0]!.blinding }).catch((e) =>
+    const got = { amount: formatUnits(amount, AUSD_DECIMALS), p: sent.p, blinding: r.tx.outs[0]!.blinding, test: network === 'testnet' };
+    await gotAlert(env, q.to_phone!, sent.tx_hash!, got).catch((e) =>
       console.error('got alert failed', e instanceof Error ? e.message : e),
     );
   }
@@ -586,7 +587,7 @@ const deposit = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
 };
 
 /** `Got …` to the recipient of a private payment the gateway relayed, if they take texts (one per tx, alerts_sent). */
-const gotAlert = async (env: Env, to: string, txHash: Hex, got: { amount: string; p: number; blinding: bigint }) => {
+const gotAlert = async (env: Env, to: string, txHash: Hex, got: { amount: string; p: number; blinding: bigint; test: boolean }) => {
   const link = await env.DB.prepare('SELECT alerts FROM links WHERE phone = ?').bind(to).first<{ alerts: number }>();
   if (!link?.alerts || !canText(to)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to).run();

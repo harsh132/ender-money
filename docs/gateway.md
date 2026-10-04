@@ -119,8 +119,13 @@ signing up needs the app online.
 | --- | --- |
 | `SYNC` / `SYNC T` | `OK n=3 dlg=1 AUSD=45.20 inr=83.9`; `T` also switches the phone to testnet |
 | `SEND <address or +number>, <amount> AUSD[ > CTK]` | `Q <id> n=4 exp=<unix> fee=0.01 to=0x<40>[ out=<ctk>]` |
-| `SIG <id> <sig>` | `Sent 10 AUSD to 0x12…cd. Tx 0xab…ef` |
+| `SIG <id> <sig>` | `Sent <id> 10 AUSD to=0x12…cd tx=0xab…ef` |
 | anything else | `ERR <id?> bad-command` |
+
+Every reply about testnet starts with `[Test] ` (`OK` for `SYNC T`, `Q`, `Sent`
+and `ERR` for a testnet number or session; every private reply, `Got` and
+testnet `Received`); no prefix means mainnet. The app applies each text to
+the network it names, whatever mode it shows. See [SMS.md](SMS.md).
 
 Errors: `expired`, `low-balance`, `bad-sig`, `not-on-ender`, `not-registered`,
 `rate-limited`. Duplicates are handled by the session rules above. Every outbound message is checked to fit one GSM-7
@@ -289,13 +294,12 @@ retry) is recorded but not texted about.
   `SHIELDED_KEY_SECRET`), no webhooks are made and incoming transfers go
   unrecorded.
 - Alert text (`protocol/sms.ts`, a `received` reply):
-  `[Test] Received 10 AUSD from 0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5. Balance 10 AUSD. Tx 0xab12...ef`
+  `[Test] Received 10 AUSD from=0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5 balance=10 tx=0xab12...ef`
   plus the SMS Retriever hash line; `[Test] ` on testnet only. The sender is
   always the full EIP-55 address, never a number, even when the sender is on
-  Ender: a text never tells one user another's number. `Tx` is the short hash
+  Ender: a text never tells one user another's number. `tx` is the short hash
   the app uses to match the alert with the same transfer from `/activity`.
-  Longest case 124 characters (126 septets: `[` and `]` cost two), 138 with
-  the hash. Folding several alerts into
+  Longest case 121 septets (`[` and `]` cost two), 133 with the hash. Folding several alerts into
   one (30 s) is not built.
 
 **Turning the webhook on** after deploying (`0006_alchemy.sql` applied
@@ -472,11 +476,11 @@ rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
    user; deposits only from a registered wallet.
 5. Prove, send as a `direct` item, wait for the receipt, index its logs.
 6. A payment to another user texts them
-   `Got <amt> AUSD (private) p=<pos> b=<blinding>` (alerts switch on,
+   `[Test] Got <amt> AUSD (private) p=<pos> b=<blinding>` (alerts switch on,
    `canText`, once per transaction through `alerts_sent`). No sender: the
    phone needs only `p` and `b`. A payment to a private address texts the
    address's owner; their number is looked up internally and never reaches
-   the payer (`Sent … to ender1abcd...wxyz`).
+   the payer (`Sent <id> … to=ender1abcd...wxyz`).
 
 **HTTPS** (JWT like every other route; `network` defaults to `testnet`):
 
@@ -492,7 +496,7 @@ Errors are the usual `{error}` with the SMS codes: `NOUSER`, `FUNDS`,
 `MERGE`, `REF`, `BADSIG`, `UNKNOWN`, `EXPIRED`, `NOEOA`, `POLICY`, plus
 `unsupported`, `syncing`, `in-progress`, `reverted`, `failed`, `bad-*`.
 
-**SMS** (parsed and formatted by `protocol/sms.ts`; always testnet):
+**SMS** (parsed and formatted by `protocol/sms.ts`; always testnet, so every reply starts with `[Test] `):
 
 | In | Out |
 | --- | --- |
@@ -501,8 +505,8 @@ Errors are the usual `{error}` with the SMS codes: `NOUSER`, `FUNDS`,
 | `PAY <0x address>, <amount> AUSD` (withdrawal) | `Q <id> exp=<unix> fee=0.01 to=0x<40>` |
 | `MERGE` | `Q <id> exp=<unix> fee=0.01` |
 | `SHIELD <amount> AUSD` | `Q <id> exp=<unix> fee=0.01` |
-| `SIG <id> <refs> <86-char signature>` | `Sent 20 AUSD to +91…. Tx 0xab…ef p=2` (`to ender1abcd...wxyz` for a private address; no `p=` for a change-free withdrawal) |
-| `SIG <id> <88-char signature>` for a `SHIELD` quote | `Shielded 50 AUSD. Tx 0xab…ef p=0` |
+| `SIG <id> <refs> <86-char signature>` | `Sent <id> 20 AUSD to=+91… tx=0xab…ef p=2` (`to=ender1abcd...wxyz` for a private address; no `p=` for a change-free withdrawal) |
+| `SIG <id> <88-char signature>` for a `SHIELD` quote | `Shielded <id> 50 AUSD tx=0xab…ef p=0` |
 
 A public-shaped `SIG` is a deposit's if its id is the number's `SHIELD`
 quote, else today's public `SIG`. Errors are `ERR [<id>] <code>` with the

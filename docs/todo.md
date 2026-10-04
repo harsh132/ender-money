@@ -6,9 +6,6 @@ Deliberately deferred. Newest first.
   - The app's 15 s quote timeout falls back to SMS, but a first quote can run
     the pool catch-up (up to 200 log chunks) and take longer.
   - Prover 400/422 errors reach the app as `internal` 500; map them to a code.
-  - The app matches a `Sent` by kind and amount only; a change-free
-    withdrawal's `Sent` has no `p=`, so a public `Sent` of the same amount could
-    settle a waiting private payment. Add the quote id or a short tag.
   - `registerShielded` swallows `key-changed`/`key-in-use` silently (see the
     re-link item below).
   - Nothing cleans up old `shielded_quotes` rows.

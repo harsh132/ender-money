@@ -264,10 +264,13 @@ test('SMS: every shielded message, formatted and parsed', () => {
   }
 
   for (const [amount, to, p] of [['20', '+919800000002', 2], ['10', evm, undefined], ['999999.999999', '+919800000002', 99999999]] as const) {
+    // Ours is `Sent <id> <amt> AUSD to=… tx=…`; the spike's `Sent <amt> AUSD to …. Tx …` still parses the same.
     const s = SM.formatSent({ amount, to, tx, p });
-    strings.push([TM.formatReply({ kind: 'sent', amount, to, tx: TM.shortHex(tx), p }), s]);
+    const ours = TM.formatReply({ kind: 'sent', id, amount, to, tx: TM.shortHex(tx), p });
+    strings.push([ours, ours]);
     const r = TM.parseReply(s) as Any;
     same({ amount: r.amount, to: r.to, tx: r.tx, p: r.p }, SM.parseSent(s));
+    expect(TM.parseReply(ours)).toEqual({ ...r, id });
   }
 
   const blinding = S.nullifier(1n, 2n, 3);
@@ -282,9 +285,11 @@ test('SMS: every shielded message, formatted and parsed', () => {
   strings.push([ours, ours]);
 
   const sh = SM.formatShielded({ amount: '50', tx, p: 0 });
-  strings.push([TM.formatReply({ kind: 'shielded', amount: '50', tx: TM.shortHex(tx), p: 0 }), sh]);
+  const shOurs = TM.formatReply({ kind: 'shielded', id, amount: '50', tx: TM.shortHex(tx), p: 0 });
+  strings.push([shOurs, shOurs]);
   const shp = TM.parseReply(sh) as Any;
   same({ amount: shp.amount, tx: shp.tx, p: shp.p }, SM.parseShielded(sh));
+  expect(TM.parseReply(shOurs)).toEqual({ ...shp, id });
 
   strings.push([TM.formatShieldedCommand({ kind: 'shield', amount: '50' }), SM.formatShield('50')]);
   same((TM.parseShieldedCommand(SM.formatShield('50')) as Any).amount, SM.parseShield(SM.formatShield('50')).amount);

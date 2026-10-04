@@ -12,7 +12,7 @@ import { api, ApiError, OfflineError } from '../lib/api';
 import { MAX_FEE } from '../lib/config';
 import { countdown, phoneDisplay, short, time, usd } from '../lib/format';
 import { lock, passkeyError, quickSend, unlockWallet, whileOwnScreen, type Unlocked } from '../lib/keys';
-import { checkShieldedQuote, hasPool, signPrivate, signShield, type Awaiting, type PrivateDraft, type ShieldedQuote } from '../lib/private';
+import { checkShieldedQuote, hasPool, MERGE_OVER, signPrivate, signShield, textNetwork, type Awaiting, type PrivateDraft, type ShieldedQuote } from '../lib/private';
 import { getState, rememberRecipient, upsertTx, useStore } from '../lib/store';
 import { c, f } from '../lib/theme';
 import { acceptReply, NoSmsError, onReply, online, textGateway, type Pipe } from '../lib/transport';
@@ -58,22 +58,26 @@ const paint = () => new Promise((r) => setTimeout(r, 32));
 
 /** Review, then the same screen tracks progress: Request sent -> Quote received -> Approve -> Sent. */
 export default function Review() {
-  const p = useLocalSearchParams<{ to: string; toAddress?: string; phone?: string; label?: string; amount: string; deliver?: string; shield?: string }>();
+  const p = useLocalSearchParams<{ to: string; toAddress?: string; phone?: string; label?: string; amount: string; deliver?: string; shield?: string; merge?: string }>();
   const network = useStore((s) => s.network);
   const wallet = useStore((s) => s.wallet)!;
   const recents = useStore((s) => s.recents);
   /** Make private: public balance -> private balance (shield). */
   const shield = p.shield === '1';
-  const deliver = p.deliver === 'CTK' && network === 'testnet' && !shield ? 'CTK' : 'AUSD';
-  const draft: Draft = shield
-    ? { network, to: wallet.address, amount: p.amount, deliver }
+  /** Merge: 12 private notes into one (0 to ourselves, the fee only). */
+  const merge = p.merge === '1';
+  /** Shield and merge pay ourselves: no recipient, always private. */
+  const self = shield || merge;
+  const deliver = p.deliver === 'CTK' && network === 'testnet' && !self ? 'CTK' : 'AUSD';
+  const draft: Draft = self
+    ? { network, to: wallet.address, amount: merge ? '0' : p.amount, deliver }
     : { network, to: p.to, toAddress: p.toAddress as Address | undefined, phone: p.phone, label: p.label, amount: p.amount, deliver };
-  const kind: PrivateDraft['kind'] = shield ? 'shield' : draft.toAddress ? 'withdraw' : 'pay';
+  const kind: PrivateDraft['kind'] = merge ? 'merge' : shield ? 'shield' : draft.toAddress ? 'withdraw' : 'pay';
   /** To a private address (ender1…): private only, never public. */
-  const privAddr = !shield && isPrivateAddress(draft.to);
+  const privAddr = !self && isPrivateAddress(draft.to);
   const pdraft: PrivateDraft = { kind, amount: draft.amount, to: draft.toAddress ?? draft.phone ?? draft.to, phone: draft.phone };
   // Private or public is decided once, on arrival (it may ask the gateway whether the number takes private payments).
-  const [route, setRoute] = useState<'private' | 'public' | undefined>(shield ? 'private' : undefined);
+  const [route, setRoute] = useState<'private' | 'public' | undefined>(self ? 'private' : undefined);
   const priv = route === 'private';
   /** A private address the private balance can't pay (or no private balance on this network yet). */
   const blocked = privAddr && route === 'public';
@@ -92,7 +96,7 @@ export default function Review() {
   }, [phase]);
 
   useEffect(() => {
-    if (!shield) void decideRoute(draft).then(setRoute, () => setRoute('public'));
+    if (!self) void decideRoute(draft).then(setRoute, () => setRoute('public'));
     void online().then((up) => setPipe(up ? 'internet' : 'text'));
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -102,7 +106,7 @@ export default function Review() {
   const mark = (step: Step) => setTimes((t) => ({ ...t, [step]: stamp() }));
   const recipientAddress = (quote?.to ?? draft.toAddress)?.toLowerCase();
   const isRecent =
-    shield ||
+    self ||
     (!!recipientAddress && recents.some((r) => r.address === recipientAddress)) ||
     (priv && !!draft.phone && recents.some((r) => r.phone === draft.phone)) ||
     (privAddr && recents.some((r) => r.address === draft.to));
@@ -261,7 +265,7 @@ export default function Review() {
 
   const failPrivate = (step: Step, e: unknown) => {
     const code = e instanceof ApiError ? e.code : typeof e === 'string' ? e : undefined;
-    if (!shield && !privAddr && code && PUBLIC_INSTEAD.has(code)) setRoute('public');
+    if (!self && !privAddr && code && PUBLIC_INSTEAD.has(code)) setRoute('public');
     if (privAddr && code === 'NOUSER') return fail(step, new TransferError(code, "That private address isn't on Ender (or isn't on this network). Nothing was sent."));
     fail(step, e);
   };
@@ -271,7 +275,7 @@ export default function Review() {
     mark('request');
     if (await online()) {
       try {
-        const q = await api.shieldedQuote({ network, kind, amount: draft.amount, ...(shield ? {} : { to: draft.to }) });
+        const q = await api.shieldedQuote({ network, kind, ...(merge ? {} : { amount: draft.amount }), ...(self ? {} : { to: draft.to }) });
         setPipe('internet');
         mark('quote');
         const to = q.to === undefined ? undefined : q.to.startsWith('0x') ? (q.to.toLowerCase() as Address) : (unb64(q.to.replace(/=+$/, ''), 64) ?? new Uint8Array());
@@ -282,7 +286,7 @@ export default function Review() {
     }
     setPipe('text');
     try {
-      await textGateway(shield ? { kind: 'shield', amount: draft.amount } : { kind: 'pay', to: draft.to, amount: draft.amount });
+      await textGateway(merge ? { kind: 'merge' } : shield ? { kind: 'shield', amount: draft.amount } : { kind: 'pay', to: draft.to, amount: draft.amount });
       setPhase({ k: 'wait-quote' });
     } catch (e) {
       fail('request', e);
@@ -324,17 +328,17 @@ export default function Review() {
     mark('approve');
     holdNotes(network, signed.awaiting);
     const address = draft.toAddress ?? (draft.phone ? getState().pins[draft.phone] : undefined);
-    if (!shield && (address || privAddr)) rememberRecipient({ address: address ?? draft.to, phone: draft.phone, name: draft.label });
+    if (!self && (address || privAddr)) rememberRecipient({ address: address ?? draft.to, phone: draft.phone, name: draft.label });
     upsertTx({
       id: q.id,
       network,
       direction: 'out',
       amount: draft.amount,
       fee: q.fee,
-      counterparty: shield ? NETWORKS[network].pool : address,
+      counterparty: shield ? NETWORKS[network].pool : merge ? undefined : address,
       phone: draft.phone,
       ...(privAddr ? { to: draft.to } : {}),
-      label: shield ? 'Private balance' : (draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : undefined)),
+      label: shield ? 'Private balance' : merge ? 'Merged private notes' : (draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : undefined)),
       status: 'sending',
       at: stamp(),
       deadline: q.exp,
@@ -383,8 +387,12 @@ export default function Review() {
     () =>
       onReply((r: Reply) => {
         const ph = phaseRef.current;
+        // A reply names its own network ([Test] or not); one for the other network than this payment's is an error.
+        const otherNetwork = textNetwork(r) !== network;
+        const wrongNetwork = new TransferError('wrong-network', `That reply was for ${network === 'testnet' ? 'mainnet' : 'Test mode'}, not this payment. Check Activity before trying again.`);
         if (ph.k === 'wait-quote') {
-          if (r.kind === 'quote') {
+          if ((r.kind === 'quote' || r.kind === 'shieldedQuote' || r.kind === 'error') && otherNetwork) fail('quote', wrongNetwork);
+          else if (r.kind === 'quote') {
             mark('quote');
             afterQuote({ id: r.id, to: r.to, fee: r.fee, nonce: r.nonce, deadline: r.expires, pipe: 'text', out: r.out });
           } else if (r.kind === 'shieldedQuote') {
@@ -392,8 +400,13 @@ export default function Review() {
             afterPrivateQuote({ id: r.id, exp: r.expires, fee: r.fee, to: r.to, pipe: 'text' });
           } else if (r.kind === 'error') failPrivate('request', r.code);
         } else if (ph.k === 'wait-sent') {
-          // The note cache is updated by the root listener (applyShieldedReply).
-          if (r.kind === 'sent' || r.kind === 'shielded') {
+          // The note cache is updated by the root listener (applyShieldedReply). Ours by id; an older gateway's
+          // id-less text by amount.
+          const ours = (r.kind === 'sent' || r.kind === 'shielded') && (r.id ? r.id === ph.id : Number(r.amount) === Number(draft.amount));
+          if ((ours || (r.kind === 'error' && (!r.id || r.id === ph.id))) && otherNetwork) {
+            upsertTx({ id: ph.id, status: 'failed', error: 'wrong-network' });
+            setPhase({ k: 'failed', step: 'sent', message: wrongNetwork.message });
+          } else if (ours) {
             mark('sent');
             upsertTx({ id: ph.id, status: 'sent' });
             setPhase({ k: 'done' });
@@ -401,7 +414,7 @@ export default function Review() {
             // Sent, not confirmed yet: like an online `pending`, its notes stay held until a resync sees it.
             setPhase({ k: 'done' });
           } else if (r.kind === 'error' && (!r.id || r.id === ph.id)) {
-            releaseNotes(getState().network, ph.id);
+            releaseNotes(network, ph.id);
             upsertTx({ id: ph.id, status: 'failed', error: r.code });
             setPhase({ k: 'failed', step: 'sent', message: errorText(r.code) });
           }
@@ -463,7 +476,7 @@ export default function Review() {
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 24, flexGrow: 1 }}>
         <BackHeader
-          title={phase.k === 'done' ? (shield ? 'Done' : 'Sent') : 'Review'}
+          title={phase.k === 'done' ? (self ? 'Done' : 'Sent') : merge ? 'Merge' : 'Review'}
           right={
             <View style={{ flexDirection: 'row', gap: 8 }}>
               {network === 'testnet' ? <TestnetPill /> : null}
@@ -472,7 +485,9 @@ export default function Review() {
           }
         />
         <Card>
-          {shield ? (
+          {merge ? (
+            <KV k="Private notes" v={`${MERGE_OVER} into 1`} />
+          ) : shield ? (
             <>
               <KV k="From" v="Public balance" />
               <KV k="To" v="Private balance" />
@@ -496,9 +511,9 @@ export default function Review() {
               ) : null}
             </>
           )}
-          <KV k="Amount" v={`$${usd(draft.amount)}`} />
-          <KV k="Fee" v={`$${usd(fee)}`} />
-          <KV k="Total" v={`$${usd(total(draft.amount, fee))}`} last={deliver !== 'CTK'} />
+          {merge ? null : <KV k="Amount" v={`$${usd(draft.amount)}`} />}
+          <KV k="Fee" v={`$${usd(fee)}`} last={merge} />
+          {merge ? null : <KV k="Total" v={`$${usd(total(draft.amount, fee))}`} last={deliver !== 'CTK'} />}
           {deliver === 'CTK' ? <KV k="They get" v={quote?.out ? `${Number(quote.out).toLocaleString('en-US', { maximumFractionDigits: 2 })} CTK` : 'CTK, quoted next'} last /> : null}
         </Card>
         {blocked ? (
@@ -544,7 +559,15 @@ export default function Review() {
             <Button title="Cancel" kind="text" onPress={() => router.back()} />
           </>
         ) : phase.k === 'review' || busy ? (
-          <Button title={shield ? (quick ? 'Make private with Quick send' : 'Approve & make private') : quick ? 'Send with Quick send' : 'Approve & send'} onPress={begin} busy={busy || route === undefined} />
+          <Button
+            title={
+              merge ? (quick ? 'Merge with Quick send' : 'Approve & merge')
+              : shield ? (quick ? 'Make private with Quick send' : 'Approve & make private')
+              : quick ? 'Send with Quick send' : 'Approve & send'
+            }
+            onPress={begin}
+            busy={busy || route === undefined}
+          />
         ) : null}
         {phase.k === 'wait-quote' || phase.k === 'wait-sent' ? (
           <>
