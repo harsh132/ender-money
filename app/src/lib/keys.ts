@@ -2,7 +2,9 @@
  * The wallet key: a passkey's PRF output, turned into a secp256k1 key the
  * way Mera's "create passkey accounts" recipe does (PRF -> BIP-39 entropy ->
  * seed -> m/44'/60'/0'/0/0). Nothing is stored; every signature starts from a
- * passkey prompt, or from an open Quick send session.
+ * passkey prompt, or from an open Quick send session. The private-balance
+ * (shielded) keys come from the same PRF output under their own label
+ * (lib/private.ts) and live in memory just as long.
  */
 import {
   createPasskeyWithPrfOutput,
@@ -19,7 +21,9 @@ import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { AppState, Platform } from 'react-native';
 import type { Address, LocalAccount } from 'viem';
+import type { User } from '../../../protocol/shielded';
 import { QUICK_SEND, RP_ID } from './config';
+import { shieldedUser } from './private';
 
 const ETH_PATH = "m/44'/60'/0'/0/0";
 
@@ -47,12 +51,13 @@ const webAuthnClient = nativeClient && {
   }),
 };
 
-const sessionFromPrf = (prfOutput: Uint8Array): Secp256k1SigningSession => {
+const sessionFromPrf = (prfOutput: Uint8Array): { session: Secp256k1SigningSession; shielded: User } => {
+  const shielded = shieldedUser(prfOutput);
   const seed = mnemonicToSeedSync(entropyToMnemonic(prfOutput, wordlist));
   const node = HDKey.fromMasterSeed(seed).derive(ETH_PATH);
   try {
     // The session keeps its own copy; wipe ours.
-    return createSecp256k1SigningSession({ privateKey: node.privateKey! });
+    return { session: createSecp256k1SigningSession({ privateKey: node.privateKey! }), shielded };
   } finally {
     node.wipePrivateData();
     seed.fill(0);
@@ -65,14 +70,23 @@ export type Unlocked = {
   address: Address;
   account: LocalAccount;
   session: Secp256k1SigningSession;
+  /** Shielded keys; authSk is the private balance's spending key. */
+  shielded: User;
 };
 
-const unlocked = (credential: PasskeyCredentialMetadata, session: Secp256k1SigningSession): Unlocked => ({
+const unlocked = (credential: PasskeyCredentialMetadata, { session, shielded }: ReturnType<typeof sessionFromPrf>): Unlocked => ({
   credential,
   address: getEvmAddress(session.publicKey),
   account: toViemAccount(session),
   session,
+  shielded,
 });
+
+/** Ends the session and wipes the shielded spending key. */
+export const lock = (u: Unlocked) => {
+  u.session.end();
+  u.shielded.authSk.fill(0);
+};
 
 /** N1: a new passkey named "Ender" for ender.money. One prompt (two on authenticators without create-time PRF). */
 export const createWalletKey = async (): Promise<Unlocked> => {
@@ -129,7 +143,7 @@ export const quickSend = {
   /** Keep a freshly prompted key as the session, counting the transfer it just signed. */
   open: (u: Unlocked, spentUsd: number) => {
     quickSend.end();
-    if (spentUsd > QUICK_SEND.total) return u.session.end();
+    if (spentUsd > QUICK_SEND.total) return lock(u);
     quick = { unlocked: u, openedAt: Date.now(), spent: spentUsd };
     timer = setTimeout(quickSend.end, QUICK_SEND.minutes * 60_000);
     notify();
@@ -146,7 +160,7 @@ export const quickSend = {
   end: () => {
     clearTimeout(timer);
     if (!quick) return;
-    quick.unlocked.session.end();
+    lock(quick.unlocked);
     quick = null;
     notify();
   },

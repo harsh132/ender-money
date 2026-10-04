@@ -3,13 +3,15 @@ import { useCallback, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, Mask, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { MAX_FEE } from '../../lib/config';
 import { ago, inr, usd } from '../../lib/format';
 import { quickSend } from '../../lib/keys';
+import { privateBalance } from '../../lib/private';
 import { useStore } from '../../lib/store';
 import { c, f } from '../../lib/theme';
 import { useOnline } from '../../lib/transport';
-import { refresh } from '../../lib/wallet';
-import { ArrowDown, ArrowUp, Bolt, Scan, Signal } from '../../ui/icons';
+import { isRegistered, refresh } from '../../lib/wallet';
+import { ArrowDown, ArrowUp, Bolt, Scan, Shield, Signal } from '../../ui/icons';
 import { Banner, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
 import { Sigil } from '../../ui/Sigil';
 import { TxRow } from '../../ui/TxRow';
@@ -43,9 +45,13 @@ export default function Home() {
   const online = useOnline();
   const quickMin = useQuickSend();
   const [refreshing, setRefreshing] = useState(false);
+  // Private balance: testnet only (the only network with a pool). Mainnet shows none of it.
+  const priv = useStore((s) => (isRegistered(s.network, s) ? privateBalance(s.notes[s.network] ?? []) : undefined));
+  const [split, setSplit] = useState(false);
 
   const recent = useMemo(() => activity.filter((t) => t.network === network).sort((a, b) => b.at - a.at).slice(0, 5), [activity, network]);
-  const balance = snapshot?.balance ?? '0';
+  const publicBalance = snapshot?.balance ?? '0';
+  const balance = priv ? (Number(publicBalance) + Number(priv)).toFixed(6) : publicBalance;
   const [whole, cents] = usd(balance).split('.');
 
   const pull = useCallback(async () => {
@@ -85,14 +91,33 @@ export default function Home() {
 
         <View style={{ alignItems: 'center', paddingTop: 40, paddingBottom: 36 }}>
           <DotGrid />
-          <T v="hero" accessibilityLabel={`Balance ${usd(balance)} dollars`}>
-            ${whole}
-            <T style={{ fontFamily: f.display, fontSize: 36, color: c.fg2 }}>.{cents}</T>
-          </T>
-          <T v="meta" style={{ fontSize: 18, marginTop: 12 }}>
-            ≈ ₹{inr(balance, rate)}
-            {snapshot ? ` · synced ${ago(snapshot.syncedAt)}` : ''}
-          </T>
+          <Pressable
+            disabled={priv === undefined}
+            onPress={() => setSplit((x) => !x)}
+            accessibilityRole={priv === undefined ? undefined : 'button'}
+            accessibilityHint={priv === undefined ? undefined : 'Shows private and public balances'}
+            style={{ alignItems: 'center' }}
+          >
+            <T v="hero" accessibilityLabel={`Balance ${usd(balance)} dollars`}>
+              ${whole}
+              <T style={{ fontFamily: f.display, fontSize: 36, color: c.fg2 }}>.{cents}</T>
+            </T>
+            <T v="meta" style={{ fontSize: 18, marginTop: 12 }}>
+              {split && priv !== undefined ? (
+                `Private $${usd(priv)} · Public $${usd(publicBalance)}`
+              ) : (
+                <>
+                  ≈ ₹{inr(balance, rate)}
+                  {snapshot ? ` · synced ${ago(snapshot.syncedAt)}` : ''}
+                </>
+              )}
+            </T>
+          </Pressable>
+          {priv !== undefined && Number(publicBalance) > Number(MAX_FEE) ? (
+            <View style={{ marginTop: 14 }}>
+              <Chip label="Make private" icon={<Shield size={14} color={c.accent} />} onPress={() => router.push({ pathname: '/send', params: { shield: '1' } })} />
+            </View>
+          ) : null}
         </View>
 
         {online === false ? (

@@ -21,9 +21,9 @@ export class OfflineError extends Error {
   }
 }
 
-const request = async <T,>(method: 'GET' | 'POST', path: string, body?: unknown, token = getState().token): Promise<T> => {
+const request = async <T,>(method: 'GET' | 'POST', path: string, body?: unknown, token = getState().token, timeoutMs = HTTP_TIMEOUT_MS): Promise<T> => {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), HTTP_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res: Response;
   try {
     res = await fetch(`${GATEWAY_URL}${path}`, {
@@ -84,6 +84,10 @@ export type ActivityItem = {
 
 export type AuthorizationJson = { address: Address; chainId: number; nonce: number; r: Hex; s: Hex; yParity: number };
 
+/** Shielded-pool quote (see /shielded/quote): to is a base64 shielded address (pay) or 0x (withdraw). */
+export type ShieldedQuoteInfo = { id: string; exp: number; fee: string; to?: string };
+export type ShieldedKind = 'pay' | 'withdraw' | 'shield' | 'merge';
+
 export const api = {
   startAuth: (phone: string) => request<{ sent: true; queued: boolean; expiresIn: number; devCode?: string }>('POST', '/auth/start', { phone }, ''),
   verifyAuth: (phone: string, code: string) =>
@@ -99,4 +103,15 @@ export const api = {
   tx: (id: string) => request<TxInfo>('GET', `/tx/${id}`),
   setAlerts: (on: boolean) => request<{ alerts: boolean }>('POST', '/account/alerts', { on }),
   activity: (network: NetworkName) => request<{ items: ActivityItem[] }>('GET', `/activity?network=${network}`),
+
+  // Private balance (shielded pool). Bigints travel as decimal strings.
+  shieldedRegister: (network: NetworkName, keys: { Ax: string; Ay: string; nk: string; viewSk: string }) =>
+    request<{ owner: string }>('POST', '/shielded/register', { network, keys }),
+  shieldedNotes: (network: NetworkName) =>
+    request<{ notes: { pos: number; amount: string; blinding: string; spent: boolean }[]; root: string }>('GET', `/shielded/notes?network=${network}`),
+  shieldedQuote: (body: { network: NetworkName; kind: ShieldedKind; to?: string; amount: string }) => request<ShieldedQuoteInfo>('POST', '/shielded/quote', body, undefined, 15_000),
+  shieldedSubmit: (body: { id: string; refs?: number[]; sig?: string; signature?: Hex }) => // The gateway proves (1-4 s) and waits for the receipt before answering.
+    request<{ tx: Hex; p?: number; pending?: true }>('POST', '/shielded/submit', body, undefined, 60_000),
+  shieldedAddress: (network: NetworkName, phone: string) =>
+    request<{ owner: string }>('GET', `/shielded/address?network=${network}&phone=${encodeURIComponent(phone)}`),
 };

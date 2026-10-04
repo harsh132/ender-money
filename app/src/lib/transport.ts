@@ -10,7 +10,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as SMS from 'expo-sms';
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
-import { formatCommand, parseReply, type Command, type Reply } from '../../../protocol/sms';
+import { formatCommand, formatShieldedCommand, parseReply, type Command, type Reply, type ShieldedCommand } from '../../../protocol/sms';
 import { GATEWAY_SMS } from './config';
 import { whileOwnScreen } from './keys';
 import { getState } from './store';
@@ -40,13 +40,16 @@ export const gatewayNumber = (): string | undefined => {
 
 export class NoSmsError extends Error {}
 
-/** Opens the composer with the command filled in; the user taps send. */
-export const textGateway = async (command: Command) => {
+const SHIELDED = new Set<string>(['pay', 'shield', 'merge', 'shieldedSig']);
+const format = (c: Command | ShieldedCommand) => (SHIELDED.has(c.kind) ? formatShieldedCommand(c as ShieldedCommand) : formatCommand(c as Command));
+
+/** Opens the composer with the command filled in; the user taps send. Private payments use PAY / SHIELD / the three-field SIG. */
+export const textGateway = async (command: Command | ShieldedCommand) => {
   const to = gatewayNumber();
   if (!to) throw new NoSmsError('No gateway number for texts is set up in this build.');
   if (!(await SMS.isAvailableAsync())) throw new NoSmsError("This phone can't send texts.");
   expecting = Date.now() + REPLY_WINDOW_MS;
-  await whileOwnScreen(() => SMS.sendSMSAsync([to], formatCommand(command)));
+  await whileOwnScreen(() => SMS.sendSMSAsync([to], format(command)));
 };
 
 // ---------------------------------------------------------------- replies by clipboard

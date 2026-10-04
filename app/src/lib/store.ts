@@ -10,6 +10,7 @@ import { Platform } from 'react-native';
 import type { Address } from 'viem';
 import type { NetworkName } from '../../../protocol/networks';
 import { DEFAULT_INR_PER_USD, DEFAULT_NETWORK } from './config';
+import type { Awaiting, CachedNote } from './private';
 
 export type TxStatus = 'sending' | 'sent' | 'failed' | 'expired';
 
@@ -20,7 +21,14 @@ export type Tx = {
   direction: 'in' | 'out';
   amount: string;
   fee?: string;
-  counterparty: Address;
+  /** Unknown for a private payment to a number. */
+  counterparty?: Address;
+  /** The number paid, for a private payment (to retry it). */
+  phone?: string;
+  /** Through the private balance (shielded pool). */
+  private?: true;
+  /** Moved from the public to the private balance. */
+  shield?: true;
   /** Contact name or phone number, when we know one. */
   label?: string;
   status: TxStatus;
@@ -54,6 +62,15 @@ export type State = {
   pins: Record<string, Address>;
   alerts: boolean;
   gateway: 'auto' | 'india' | 'international';
+  /**
+   * Private balance. Only public values: the packed shielded address (base64)
+   * and the networks it is registered on. The keys come from the passkey.
+   */
+  shielded?: { owner: string; registered: NetworkName[] };
+  notes: Partial<Record<NetworkName, CachedNote[]>>;
+  awaiting: Partial<Record<NetworkName, Awaiting[]>>;
+  /** phone -> shielded address (base64) seen on the first private payment; a different one later is refused. */
+  shieldedPins: Record<string, string>;
 };
 
 const initial: State = {
@@ -66,6 +83,9 @@ const initial: State = {
   pins: {},
   alerts: true,
   gateway: 'auto',
+  notes: {},
+  awaiting: {},
+  shieldedPins: {},
 };
 
 const STATE_KEY = 'ender:state:v1';

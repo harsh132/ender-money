@@ -13,7 +13,7 @@ import { useEffect } from 'react';
 import { c } from '../lib/theme';
 import { hydrate, useStore } from '../lib/store';
 import { onReply } from '../lib/transport';
-import { applyOkReply } from '../lib/wallet';
+import { applyOkReply, applyShieldedReply } from '../lib/wallet';
 
 void SplashScreen.preventAutoHideAsync();
 void hydrate();
@@ -27,8 +27,8 @@ export default function Root() {
     if (ready) void SplashScreen.hideAsync();
   }, [ready]);
 
-  // A SYNC reply copied from Messages updates the balance wherever the user is.
-  useEffect(() => onReply((r) => r.kind === 'ok' && applyOkReply(r)), []);
+  // A SYNC reply copied from Messages updates the balance wherever the user is; Sent / Shielded / Got update private notes.
+  useEffect(() => onReply((r) => (r.kind === 'ok' ? applyOkReply(r) : applyShieldedReply(r))), []);
 
   if (!ready) return null;
   return (

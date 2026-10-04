@@ -1,8 +1,11 @@
 import * as Clipboard from 'expo-clipboard';
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { Share, View } from 'react-native';
+import { MAX_FEE } from '../lib/config';
 import { phoneDisplay } from '../lib/format';
 import { useStore } from '../lib/store';
+import { isRegistered } from '../lib/wallet';
 import { c, f } from '../lib/theme';
 import { Copy, Share as ShareIcon } from '../ui/icons';
 import { Button, T, TestnetPill } from '../ui/kit';
@@ -12,6 +15,7 @@ import { QR } from '../ui/QR';
 export default function Receive() {
   const wallet = useStore((s) => s.wallet);
   const network = useStore((s) => s.network);
+  const canShield = useStore((s) => isRegistered(s.network, s) && Number(s.account[s.network]?.balance ?? 0) > Number(MAX_FEE));
   const [copied, setCopied] = useState(false);
   if (!wallet) return null;
 
@@ -39,6 +43,16 @@ export default function Receive() {
         Or just your number: {phoneDisplay(wallet.phone)}. We'll text you when money arrives.
       </T>
       <View style={{ flex: 1, minHeight: 24 }} />
+      {canShield ? (
+        <Button
+          title="Make private"
+          kind="text"
+          onPress={() => {
+            router.back();
+            router.push({ pathname: '/send', params: { shield: '1' } });
+          }}
+        />
+      ) : null}
       <View style={{ flexDirection: 'row', gap: 12, marginBottom: 28 }}>
         <Button title={copied ? 'Copied' : 'Copy'} kind="ghost" icon={<Copy size={20} />} onPress={copy} style={{ flex: 1 }} />
         <Button

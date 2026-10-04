@@ -2,11 +2,11 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useRef, useState } from 'react';
 import { View } from 'react-native';
 import { phoneDisplay } from '../lib/format';
-import { createWalletKey, passkeyError, quickSend, unlockWallet, type Unlocked } from '../lib/keys';
+import { createWalletKey, lock, passkeyError, quickSend, unlockWallet, type Unlocked } from '../lib/keys';
 import { onboarding } from '../lib/onboarding';
 import { getState, setState } from '../lib/store';
 import { c } from '../lib/theme';
-import { createWallet, errorText, sync } from '../lib/wallet';
+import { createWallet, errorText, registerShielded, sync } from '../lib/wallet';
 import { Check, Fingerprint } from '../ui/icons';
 import { BackHeader, Banner, Button, Card, KV, Screen, Spinner, Steps, T } from '../ui/kit';
 
@@ -46,7 +46,8 @@ export default function Create() {
         ...(prev?.address.toLowerCase() === res.address.toLowerCase() ? {} : { network: 'mainnet', account: {}, activity: [] }),
       });
       onboarding.verified = undefined;
-      u.session.end();
+      void registerShielded(u.shielded);
+      lock(u);
       key.current = null;
       void sync();
       if (mode === 'change') router.dismissTo('/settings');

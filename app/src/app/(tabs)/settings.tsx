@@ -6,11 +6,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
 import { ago, phoneMasked, short } from '../../lib/format';
-import { passkeyError, quickSend, unlockWallet } from '../../lib/keys';
+import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
 import { getState, setState, signOut, useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { online } from '../../lib/transport';
-import { errorText, refresh, syncByText } from '../../lib/wallet';
+import { ensureRegistered, errorText, refresh, syncByText } from '../../lib/wallet';
 import { Chevron } from '../../ui/icons';
 import { Banner, T, TestnetPill } from '../../ui/kit';
 
@@ -36,7 +36,8 @@ export default function Settings() {
     try {
       quickSend.end();
       const u = await unlockWallet({ credentialId: wallet.credentialId });
-      u.session.end();
+      ensureRegistered(u);
+      lock(u);
       const next: NetworkName = on ? 'testnet' : 'mainnet';
       setState({ network: next });
       if (!(await refresh())) await syncByText().catch(() => {});

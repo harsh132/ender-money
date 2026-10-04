@@ -2,11 +2,11 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { short, usd } from '../lib/format';
-import { passkeyError, unlockWallet } from '../lib/keys';
+import { lock, passkeyError, unlockWallet } from '../lib/keys';
 import { onboarding } from '../lib/onboarding';
 import { setState } from '../lib/store';
 import { c } from '../lib/theme';
-import { sync } from '../lib/wallet';
+import { registerShielded, sync } from '../lib/wallet';
 import { Fingerprint } from '../ui/icons';
 import { BackHeader, Banner, Button, Card, KV, Screen, Steps, T } from '../ui/kit';
 
@@ -27,8 +27,8 @@ export default function Restore() {
       const u = await unlockWallet();
       const address = u.address;
       const credential = u.credential;
-      u.session.end();
       if (address.toLowerCase() !== v.address.toLowerCase()) {
+        lock(u);
         setError('That passkey belongs to another wallet. Pick the other Ender passkey.');
         return;
       }
@@ -39,6 +39,9 @@ export default function Restore() {
         account: { mainnet: { balance: v.balance, nonce: '0', delegated: true, syncedAt: Date.now() } },
       });
       onboarding.verified = undefined;
+      // After the token is set: registration is an authenticated call.
+      void registerShielded(u.shielded);
+      lock(u);
       void sync();
       router.replace('/home');
     } catch (e) {

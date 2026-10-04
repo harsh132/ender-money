@@ -8,9 +8,10 @@ import { normalizePhone } from '../../../protocol/sms';
 import { MAX_FEE } from '../lib/config';
 import { phoneDisplay, short, usd } from '../lib/format';
 import { quickSend, whileOwnScreen } from '../lib/keys';
+import { privateBalance } from '../lib/private';
 import { useStore, type Recipient } from '../lib/store';
 import { c, f } from '../lib/theme';
-import { Back, Bolt, Person, Scan } from '../ui/icons';
+import { Back, Bolt, Person, Scan, Shield } from '../ui/icons';
 import { Sigil } from '../ui/Sigil';
 import { useQuickSend } from '../ui/useQuickSend';
 import { Avatar, BackHeader, Banner, Button, Chip, Field, Screen, T, TestnetPill } from '../ui/kit';
@@ -30,11 +31,17 @@ const fromRecent = (r: Recipient): To => (r.phone ? { to: r.phone, phone: r.phon
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'] as const;
 
 export default function Send() {
-  const params = useLocalSearchParams<{ to?: string; amount?: string }>();
+  const params = useLocalSearchParams<{ to?: string; amount?: string; shield?: string }>();
+  /** Make private: the amount step alone, from the public balance into the private one. */
+  const shield = params.shield === '1';
   const recents = useStore((s) => s.recents);
   const pins = useStore((s) => s.pins);
   const network = useStore((s) => s.network);
-  const balance = useStore((s) => s.account[s.network]?.balance);
+  const publicBalance = useStore((s) => s.account[s.network]?.balance);
+  const notes = useStore((s) => s.notes[s.network]);
+  // A payment comes all from one balance; Review picks which (private when it can).
+  const priv = notes && !shield ? privateBalance(notes) : '0';
+  const balance = publicBalance !== undefined && Number(priv) > Number(publicBalance) ? priv : publicBalance;
   const [text, setText] = useState('');
   const [to, setTo] = useState<To | null>(() => (params.to ? parseRecipient(params.to) : null));
   const [amount, setAmount] = useState(params.amount ?? '');
@@ -78,7 +85,7 @@ export default function Send() {
   };
 
   // ------------------------------------------------------------ amount step
-  if (to) {
+  if (to || shield) {
     const max = balance ? parseUnits(balance, AUSD_DECIMALS) - parseUnits(MAX_FEE, AUSD_DECIMALS) : 0n;
     const value = /^\d+(\.\d{0,6})?$/.test(amount) ? parseUnits(amount.replace(/\.$/, ''), AUSD_DECIMALS) : 0n;
     const tooMuch = balance !== undefined && value > max;
@@ -91,10 +98,16 @@ export default function Send() {
         return a.length >= 9 ? a : a + k;
       });
     };
-    const name = to.label ?? (to.phone ? phoneDisplay(to.phone) : short(to.to));
+    const name = to ? (to.label ?? (to.phone ? phoneDisplay(to.phone) : short(to.to))) : '';
     return (
       <Screen>
-        <BackHeader title="Send" right={chips} />
+        <BackHeader title={shield ? 'Make private' : 'Send'} right={chips} />
+        {!to ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, paddingHorizontal: 16, borderRadius: 20, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line }}>
+            <Shield size={28} color={c.accent} />
+            <T v="meta" style={{ flex: 1 }}>From your public balance to your private one. Private payments don't show who you paid.</T>
+          </View>
+        ) : (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, paddingHorizontal: 16, borderRadius: 20, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line }}>
           <Sigil address={to.toAddress ?? (to.phone ? pins[to.phone] : undefined)} fallback={name} size={44} />
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -107,6 +120,7 @@ export default function Send() {
             <T v="meta" style={{ color: c.accent, fontFamily: f.uiMedium }}>Change</T>
           </Pressable>
         </View>
+        )}
 
         <T v="amount" style={{ textAlign: 'center', paddingTop: 36, paddingBottom: 8 }} numberOfLines={1} adjustsFontSizeToFit>
           <T v="amount" style={{ color: c.fg3 }}>$ </T>
@@ -123,7 +137,7 @@ export default function Send() {
           ) : null}
         </View>
 
-        {network === 'testnet' ? (
+        {network === 'testnet' && !shield ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginTop: 20 }}>
             <T v="meta">Recipient gets</T>
             <View style={{ flexDirection: 'row', backgroundColor: c.surface, borderRadius: 999, borderWidth: 1, borderColor: c.line, padding: 4 }}>
@@ -153,7 +167,14 @@ export default function Send() {
         <Button
           title="Review"
           disabled={value <= 0n || tooMuch}
-          onPress={() => router.push({ pathname: '/review', params: { ...to, amount: amount.replace(/\.$/, ''), ...(network === 'testnet' && deliver === 'CTK' ? { deliver } : {}) } })}
+          onPress={() =>
+            router.push({
+              pathname: '/review',
+              params: to
+                ? { ...to, amount: amount.replace(/\.$/, ''), ...(network === 'testnet' && deliver === 'CTK' ? { deliver } : {}) }
+                : { shield: '1', amount: amount.replace(/\.$/, '') },
+            })
+          }
           style={{ marginTop: 8, marginBottom: 12 }}
         />
       </Screen>

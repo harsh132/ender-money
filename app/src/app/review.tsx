@@ -5,16 +5,31 @@ import { useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Address, Hex } from 'viem';
-import type { Reply } from '../../../protocol/sms';
+import { NETWORKS } from '../../../protocol/networks';
+import { unb64, type Command, type Reply, type ShieldedCommand } from '../../../protocol/sms';
 import { api, ApiError, OfflineError } from '../lib/api';
 import { MAX_FEE } from '../lib/config';
 import { countdown, phoneDisplay, short, time, usd } from '../lib/format';
-import { passkeyError, quickSend, unlockWallet, whileOwnScreen } from '../lib/keys';
+import { lock, passkeyError, quickSend, unlockWallet, whileOwnScreen, type Unlocked } from '../lib/keys';
+import { checkShieldedQuote, hasPool, signPrivate, signShield, type Awaiting, type PrivateDraft, type ShieldedQuote } from '../lib/private';
 import { getState, rememberRecipient, upsertTx, useStore } from '../lib/store';
 import { c, f } from '../lib/theme';
 import { acceptReply, NoSmsError, onReply, online, textGateway, type Pipe } from '../lib/transport';
-import { checkQuote, errorText, signQuote, TransferError, type Draft, type Quote } from '../lib/wallet';
-import { Bolt, Check, Globe, Message } from '../ui/icons';
+import {
+  cache,
+  checkQuote,
+  decideRoute,
+  ensureRegistered,
+  errorText,
+  holdNotes,
+  releaseNotes,
+  settlePrivate,
+  signQuote,
+  TransferError,
+  type Draft,
+  type Quote,
+} from '../lib/wallet';
+import { Bolt, Check, Globe, Message, Shield } from '../ui/icons';
 import { BackHeader, Banner, Button, Card, Chip, KV, Spinner, T, TestnetPill } from '../ui/kit';
 
 type Step = 'request' | 'quote' | 'approve' | 'sent';
@@ -25,7 +40,7 @@ type Phase =
   | { k: 'working'; step: Step }
   | { k: 'wait-quote' }
   | { k: 'pin'; quote: Quote }
-  | { k: 'wait-sent'; quote: Quote; signature: Hex }
+  | { k: 'wait-sent'; id: string; sms: Command | ShieldedCommand }
   | { k: 'done'; txHash?: string }
   | { k: 'failed'; step: Step; message: string; quote?: Quote; code?: string };
 
@@ -34,14 +49,30 @@ const total = (amount: string, fee: string) => (Number(amount) + Number(fee)).to
 const msLeft = (q: Quote) => q.deadline * 1000 - Date.now();
 const stamp = () => Date.now();
 
+type PQuote = ShieldedQuote & { pipe: Pipe };
+/** A private quote: the gateway refused because the recipient or our notes can't do it privately; paying publicly may work. */
+const PUBLIC_INSTEAD = new Set(['NOUSER', 'FUNDS', 'MERGE']);
+/** Lets the spinner paint before the heavy part (Poseidon, BabyJubJub) blocks the JS thread. */
+const paint = () => new Promise((r) => setTimeout(r, 32));
+
 /** Review, then the same screen tracks progress: Request sent -> Quote received -> Approve -> Sent. */
 export default function Review() {
-  const p = useLocalSearchParams<{ to: string; toAddress?: string; phone?: string; label?: string; amount: string; deliver?: string }>();
+  const p = useLocalSearchParams<{ to: string; toAddress?: string; phone?: string; label?: string; amount: string; deliver?: string; shield?: string }>();
   const network = useStore((s) => s.network);
   const wallet = useStore((s) => s.wallet)!;
   const recents = useStore((s) => s.recents);
-  const deliver = p.deliver === 'CTK' && network === 'testnet' ? 'CTK' : 'AUSD';
-  const draft: Draft = { network, to: p.to, toAddress: p.toAddress as Address | undefined, phone: p.phone, label: p.label, amount: p.amount, deliver };
+  /** Make private: public balance -> private balance (shield). */
+  const shield = p.shield === '1';
+  const deliver = p.deliver === 'CTK' && network === 'testnet' && !shield ? 'CTK' : 'AUSD';
+  const draft: Draft = shield
+    ? { network, to: wallet.address, amount: p.amount, deliver }
+    : { network, to: p.to, toAddress: p.toAddress as Address | undefined, phone: p.phone, label: p.label, amount: p.amount, deliver };
+  const kind: PrivateDraft['kind'] = shield ? 'shield' : draft.toAddress ? 'withdraw' : 'pay';
+  const pdraft: PrivateDraft = { kind, amount: draft.amount, to: draft.toAddress ?? draft.phone, phone: draft.phone };
+  // Private or public is decided once, on arrival (it may ask the gateway whether the number takes private payments).
+  const [route, setRoute] = useState<'private' | 'public' | undefined>(shield ? 'private' : undefined);
+  const priv = route === 'private';
+  const [pq, setPq] = useState<PQuote>();
 
   const [phase, setPhase] = useState<Phase>({ k: 'review' });
   const [pipe, setPipe] = useState<Pipe>('internet');
@@ -56,14 +87,17 @@ export default function Review() {
   }, [phase]);
 
   useEffect(() => {
+    if (!shield) void decideRoute(draft).then(setRoute, () => setRoute('public'));
     void online().then((up) => setPipe(up ? 'internet' : 'text'));
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const mark = (step: Step) => setTimes((t) => ({ ...t, [step]: stamp() }));
   const recipientAddress = (quote?.to ?? draft.toAddress)?.toLowerCase();
-  const isRecent = !!recipientAddress && recents.some((r) => r.address === recipientAddress);
+  const isRecent =
+    shield || (!!recipientAddress && recents.some((r) => r.address === recipientAddress)) || (priv && !!draft.phone && recents.some((r) => r.phone === draft.phone));
   const quick = quickSend.covers(Number(draft.amount), isRecent);
   const name = draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : short(draft.to));
 
@@ -117,26 +151,39 @@ export default function Review() {
     void approve(q);
   };
 
+  /** Signs with the open Quick send session when it covers this, else after a passkey prompt (which then opens one). */
+  const withKey = async <R,>(toIsRecent: boolean, sign: (u: Unlocked) => Promise<R>): Promise<R> => {
+    const amountUsd = Number(draft.amount);
+    const session = quickSend.get();
+    if (session && quickSend.covers(amountUsd, toIsRecent)) {
+      const r = await sign(session.unlocked);
+      quickSend.spend(amountUsd);
+      setUsedQuick(true);
+      return r;
+    }
+    const u = await unlockWallet({ credentialId: wallet.credentialId });
+    if (u.address.toLowerCase() !== wallet.address.toLowerCase()) {
+      lock(u);
+      throw new TransferError('wrong-passkey', 'That passkey belongs to another wallet. Pick your Ender passkey.');
+    }
+    ensureRegistered(u);
+    let r: R;
+    try {
+      r = await sign(u);
+    } catch (e) {
+      lock(u);
+      throw e;
+    }
+    quickSend.open(u, amountUsd);
+    return r;
+  };
+
   const approve = async (q: Quote) => {
     setPhase({ k: 'working', step: 'approve' });
-    const amountUsd = Number(draft.amount);
     const toIsRecent = getState().recents.some((r) => r.address === q.to.toLowerCase());
     let signature: Hex;
     try {
-      const session = quickSend.get();
-      if (session && quickSend.covers(amountUsd, toIsRecent)) {
-        signature = await signQuote(session.unlocked.account, draft, q);
-        quickSend.spend(amountUsd);
-        setUsedQuick(true);
-      } else {
-        const u = await unlockWallet({ credentialId: wallet.credentialId });
-        if (u.address.toLowerCase() !== wallet.address.toLowerCase()) {
-          u.session.end();
-          throw new TransferError('wrong-passkey', 'That passkey belongs to another wallet. Pick your Ender passkey.');
-        }
-        signature = await signQuote(u.account, draft, q);
-        quickSend.open(u, amountUsd);
-      }
+      signature = await withKey(toIsRecent, (u) => signQuote(u.account, draft, q));
     } catch (e) {
       return setPhase({ k: 'failed', step: 'approve', message: e instanceof TransferError ? e.message : (passkeyError(e) ?? 'Approval cancelled.'), quote: q });
     }
@@ -175,8 +222,9 @@ export default function Review() {
     }
     setPipe('text');
     try {
-      await textGateway({ kind: 'sig', id: q.id, signature });
-      setPhase({ k: 'wait-sent', quote: q, signature });
+      const sms = { kind: 'sig', id: q.id, signature } as const;
+      await textGateway(sms);
+      setPhase({ k: 'wait-sent', id: q.id, sms });
     } catch (e) {
       setPhase({ k: 'failed', step: 'sent', message: e instanceof NoSmsError ? e.message : errorText(e), quote: q });
     }
@@ -201,6 +249,123 @@ export default function Review() {
     setPhase({ k: 'done', txHash });
   };
 
+  // ---------------------------------------------------------------- private (shielded pool)
+
+  const failPrivate = (step: Step, e: unknown) => {
+    const code = e instanceof ApiError ? e.code : typeof e === 'string' ? e : undefined;
+    if (!shield && code && PUBLIC_INSTEAD.has(code)) setRoute('public');
+    fail(step, e);
+  };
+
+  const startPrivate = async () => {
+    setPhase({ k: 'working', step: 'request' });
+    mark('request');
+    if (await online()) {
+      try {
+        const q = await api.shieldedQuote({ network, kind, amount: draft.amount, ...(shield ? {} : { to: draft.to }) });
+        setPipe('internet');
+        mark('quote');
+        const to = q.to === undefined ? undefined : q.to.startsWith('0x') ? (q.to.toLowerCase() as Address) : (unb64(q.to.replace(/=+$/, ''), 64) ?? new Uint8Array());
+        return afterPrivateQuote({ id: q.id, exp: q.exp, fee: q.fee, to, pipe: 'internet' });
+      } catch (e) {
+        if (!(e instanceof OfflineError)) return failPrivate('request', e);
+      }
+    }
+    setPipe('text');
+    try {
+      await textGateway(shield ? { kind: 'shield', amount: draft.amount } : { kind: 'pay', to: draft.to, amount: draft.amount });
+      setPhase({ k: 'wait-quote' });
+    } catch (e) {
+      fail('request', e);
+    }
+  };
+
+  const afterPrivateQuote = (q: PQuote) => {
+    setPq(q);
+    const refused = checkShieldedQuote(pdraft, q, draft.phone ? getState().shieldedPins[draft.phone] : undefined);
+    if (refused) return fail('quote', new TransferError(refused.code, refused.message));
+    void approvePrivate(q);
+  };
+
+  const approvePrivate = async (q: PQuote) => {
+    setPhase({ k: 'working', step: 'approve' });
+    let signed: { sms: Command | ShieldedCommand; body: Parameters<typeof api.shieldedSubmit>[0]; awaiting: Awaiting };
+    try {
+      signed = await withKey(isRecent, async (u) => {
+        if (shield) {
+          const r = await signShield(u.shielded, u.account, draft.amount, q, network);
+          return { sms: { kind: 'sig', id: q.id, signature: r.signature }, body: { id: q.id, signature: r.signature }, awaiting: r.awaiting };
+        }
+        await paint();
+        const t0 = Date.now();
+        const r = signPrivate(u.shielded, cache(network), pdraft, q, network);
+        if (__DEV__) console.log(`[private] notes picked, transaction built and signed in ${Date.now() - t0} ms`);
+        if ('err' in r) throw new TransferError(r.err, errorText(r.err));
+        return {
+          sms: { kind: 'shieldedSig', id: q.id, refs: r.refs, signature: r.sig },
+          body: { id: q.id, refs: r.refs, sig: btoa(String.fromCharCode(...r.sig)) },
+          awaiting: r.awaiting,
+        };
+      });
+    } catch (e) {
+      return setPhase({ k: 'failed', step: 'approve', message: e instanceof TransferError ? e.message : (passkeyError(e) ?? 'Approval cancelled.') });
+    }
+    mark('approve');
+    holdNotes(network, signed.awaiting);
+    const address = draft.toAddress ?? (draft.phone ? getState().pins[draft.phone] : undefined);
+    if (!shield && address) rememberRecipient({ address, phone: draft.phone, name: draft.label });
+    upsertTx({
+      id: q.id,
+      network,
+      direction: 'out',
+      amount: draft.amount,
+      fee: q.fee,
+      counterparty: shield ? NETWORKS[network].pool : address,
+      phone: draft.phone,
+      label: shield ? 'Private balance' : (draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : undefined)),
+      status: 'sending',
+      at: stamp(),
+      deadline: q.exp,
+      private: true,
+      ...(shield ? { shield: true as const } : {}),
+    });
+    await submitPrivate(q.id, signed.body, signed.sms);
+  };
+
+  const submitPrivate = async (id: string, body: Parameters<typeof api.shieldedSubmit>[0], sms: Command | ShieldedCommand) => {
+    if (await online()) {
+      try {
+        const r = await api.shieldedSubmit(body);
+        setPipe('internet');
+        // Still landing: its notes stay held until a resync (pull to refresh) sees it.
+        if (r.pending) {
+          upsertTx({ id, txHash: r.tx });
+          return setPhase({ k: 'done' });
+        }
+        settlePrivate(network, id, r.p);
+        mark('sent');
+        upsertTx({ id, status: 'sent', txHash: r.tx });
+        return setPhase({ k: 'done', txHash: r.tx });
+      } catch (e) {
+        if (!(e instanceof OfflineError)) {
+          releaseNotes(network, id);
+          upsertTx({ id, status: 'failed', error: errorText(e) });
+          return setPhase({ k: 'failed', step: 'sent', message: errorText(e) });
+        }
+      }
+    }
+    setPipe('text');
+    try {
+      await textGateway(sms);
+      setPhase({ k: 'wait-sent', id, sms });
+    } catch (e) {
+      // Nothing left the phone: free the notes.
+      releaseNotes(network, id);
+      upsertTx({ id, status: 'failed' });
+      setPhase({ k: 'failed', step: 'sent', message: e instanceof NoSmsError ? e.message : errorText(e) });
+    }
+  };
+
   // Replies that come back by text (copied from Messages, read on focus or pasted).
   useEffect(
     () =>
@@ -210,15 +375,20 @@ export default function Review() {
           if (r.kind === 'quote') {
             mark('quote');
             afterQuote({ id: r.id, to: r.to, fee: r.fee, nonce: r.nonce, deadline: r.expires, pipe: 'text', out: r.out });
-          } else if (r.kind === 'error') fail('request', r.code);
+          } else if (r.kind === 'shieldedQuote') {
+            mark('quote');
+            afterPrivateQuote({ id: r.id, exp: r.expires, fee: r.fee, to: r.to, pipe: 'text' });
+          } else if (r.kind === 'error') failPrivate('request', r.code);
         } else if (ph.k === 'wait-sent') {
-          if (r.kind === 'sent') {
+          // The note cache is updated by the root listener (applyShieldedReply).
+          if (r.kind === 'sent' || r.kind === 'shielded') {
             mark('sent');
-            upsertTx({ id: ph.quote.id, status: 'sent' });
+            upsertTx({ id: ph.id, status: 'sent' });
             setPhase({ k: 'done' });
-          } else if (r.kind === 'error' && (!r.id || r.id === ph.quote.id)) {
-            upsertTx({ id: ph.quote.id, status: 'failed', error: r.code });
-            setPhase({ k: 'failed', step: 'sent', message: errorText(r.code), quote: ph.quote });
+          } else if (r.kind === 'error' && (!r.id || r.id === ph.id)) {
+            releaseNotes(getState().network, ph.id);
+            upsertTx({ id: ph.id, status: 'failed', error: r.code });
+            setPhase({ k: 'failed', step: 'sent', message: errorText(r.code) });
           }
         }
       }),
@@ -231,8 +401,16 @@ export default function Review() {
     setPasteNote(acceptReply(text) ? undefined : "That doesn't look like a reply from Ender. Copy the whole text and try again.");
   };
 
+  const begin = () => void (priv ? startPrivate() : start());
+
   const retry = () => {
     if (phase.k !== 'failed') return;
+    if (priv) {
+      if (phase.step === 'approve' && pq && pq.exp * 1000 - Date.now() > 15_000) return void approvePrivate(pq);
+      setPq(undefined);
+      setTimes({});
+      return begin();
+    }
     const q = phase.quote;
     const live = q && msLeft(q) > 15_000;
     if (live && phase.step === 'approve') return void approve(q);
@@ -252,13 +430,15 @@ export default function Review() {
     : phase.k === 'failed' ? phase.step
     : 'sent';
   const doneUpTo = phase.k === 'done' ? 4 : phase.k === 'review' ? 0 : ORDER.indexOf(current);
-  const left = quote ? quote.deadline * 1000 - now : 0;
-  const fee = quote?.fee ?? MAX_FEE;
+  const deadline = quote?.deadline ?? pq?.exp;
+  const quotePipe = quote?.pipe ?? pq?.pipe;
+  const left = deadline ? deadline * 1000 - now : 0;
+  const fee = quote?.fee ?? pq?.fee ?? MAX_FEE;
   const busy = phase.k === 'working';
 
   const stepSub: Record<Step, string | undefined> = {
     request: times.request ? time(times.request) : undefined,
-    quote: quote ? (left > 0 ? `${quote.pipe === 'text' ? 'Arrived by text · ' : ''}valid for ${countdown(left)}` : 'Expired') : phase.k === 'wait-quote' ? 'Waiting for the reply text' : undefined,
+    quote: deadline ? (left > 0 ? `${quotePipe === 'text' ? 'Arrived by text · ' : ''}valid for ${countdown(left)}` : 'Expired') : phase.k === 'wait-quote' ? 'Waiting for the reply text' : undefined,
     approve: usedQuick || (phase.k === 'review' && quick) ? 'Quick send, no fingerprint' : 'Signs exactly what\'s above',
     sent: phase.k === 'wait-sent' ? 'Waiting for the reply text' : phase.k === 'done' ? (times.sent ? time(times.sent) : 'On its way') : undefined,
   };
@@ -267,7 +447,7 @@ export default function Review() {
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 24, flexGrow: 1 }}>
         <BackHeader
-          title={phase.k === 'done' ? 'Sent' : 'Review'}
+          title={phase.k === 'done' ? (shield ? 'Done' : 'Sent') : 'Review'}
           right={
             <View style={{ flexDirection: 'row', gap: 8 }}>
               {network === 'testnet' ? <TestnetPill /> : null}
@@ -276,14 +456,37 @@ export default function Review() {
           }
         />
         <Card>
-          <KV k="To" v={name} />
-          {draft.label && draft.phone ? <KV k="Number" v={phoneDisplay(draft.phone)} /> : null}
-          {recipientAddress ? <KV k="Wallet" v={short(recipientAddress)} mono /> : null}
+          {shield ? (
+            <>
+              <KV k="From" v="Public balance" />
+              <KV k="To" v="Private balance" />
+            </>
+          ) : (
+            <>
+              <KV k="To" v={name} />
+              {draft.label && draft.phone ? <KV k="Number" v={phoneDisplay(draft.phone)} /> : null}
+              {recipientAddress ? <KV k="Wallet" v={short(recipientAddress)} mono /> : null}
+              {priv ? (
+                <KV
+                  k="Payment"
+                  v={
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Shield size={16} color={c.positive} />
+                      <T v="body" style={{ fontFamily: f.uiSemi, color: c.positive }}>Private</T>
+                    </View>
+                  }
+                />
+              ) : null}
+            </>
+          )}
           <KV k="Amount" v={`$${usd(draft.amount)}`} />
           <KV k="Fee" v={`$${usd(fee)}`} />
           <KV k="Total" v={`$${usd(total(draft.amount, fee))}`} last={deliver !== 'CTK'} />
           {deliver === 'CTK' ? <KV k="They get" v={quote?.out ? `${Number(quote.out).toLocaleString('en-US', { maximumFractionDigits: 2 })} CTK` : 'CTK, quoted next'} last /> : null}
         </Card>
+        {hasPool(network) && route === 'public' ? (
+          <T v="meta" style={{ marginTop: 10, marginHorizontal: 4 }}>Public payment: amount and wallets are visible on Monad.</T>
+        ) : null}
 
         <View style={{ marginTop: 24 }}>
           <StepRow title="Request sent" sub={stepSub.request} state={rowState('request', doneUpTo, current, phase)} />
@@ -312,7 +515,9 @@ export default function Review() {
       </ScrollView>
 
       <View style={{ paddingHorizontal: 20, paddingBottom: 12, gap: 4 }}>
-        {phase.k === 'review' || busy ? <Button title={quick ? 'Send with Quick send' : 'Approve & send'} onPress={start} busy={busy} /> : null}
+        {phase.k === 'review' || busy ? (
+          <Button title={shield ? (quick ? 'Make private with Quick send' : 'Approve & make private') : quick ? 'Send with Quick send' : 'Approve & send'} onPress={begin} busy={busy || route === undefined} />
+        ) : null}
         {phase.k === 'wait-quote' || phase.k === 'wait-sent' ? (
           <>
             <Button title="Paste reply" onPress={paste} />
@@ -320,9 +525,7 @@ export default function Review() {
               title="Text again"
               kind="text"
               onPress={() =>
-                phase.k === 'wait-quote'
-                  ? void start()
-                  : void textGateway({ kind: 'sig', id: phase.quote.id, signature: phase.signature }).catch((e) => fail('sent', e, phase.quote))
+                phase.k === 'wait-quote' ? begin() : void textGateway(phase.sms).catch((e) => fail('sent', e))
               }
             />
           </>

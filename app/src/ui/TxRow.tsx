@@ -9,12 +9,18 @@ import { Sigil } from './Sigil';
 
 const STATUS = { sending: 'Sending', sent: 'Sent', failed: 'Failed', expired: 'Expired' } as const;
 
-export const meta = (tx: Tx) => {
+const metaText = (tx: Tx) => {
   if (tx.direction === 'in') return `Received · ${time(tx.at)}`;
   if (tx.status === 'sending' && tx.deadline && tx.deadline * 1000 > Date.now()) return `Sending · ${countdown(tx.deadline * 1000 - Date.now())} left`;
   if (tx.status === 'failed' || tx.status === 'expired') return `${STATUS[tx.status]} · tap to retry`;
   return `${STATUS[tx.status]} · ${time(tx.at)}`;
 };
+
+export const meta = (tx: Tx) =>
+  tx.shield && tx.status === 'sent' ? `Made private · ${time(tx.at)}` : tx.private ? `Private · ${metaText(tx)}` : metaText(tx);
+
+/** Name of the other side: contact, number, address, or (a private payment to a number we don't know) "Private". */
+export const who = (tx: Tx) => tx.label ?? (tx.counterparty ? short(tx.counterparty) : 'Private');
 
 export const TxRow = ({ tx }: { tx: Tx }) => {
   const incoming = tx.direction === 'in';
@@ -28,7 +34,7 @@ export const TxRow = ({ tx }: { tx: Tx }) => {
         </View>
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <T v="body" numberOfLines={1}>{tx.label ?? short(tx.counterparty)}</T>
+        <T v="body" numberOfLines={1}>{who(tx)}</T>
         <T v="meta" numberOfLines={1} style={{ marginTop: 2, color: dead ? c.negative : c.fg2 }}>{meta(tx)}</T>
       </View>
       <T v="body" style={{ fontFamily: f.uiSemi, color: incoming ? c.positive : dead ? c.fg3 : c.fg, textDecorationLine: dead ? 'line-through' : 'none' }}>

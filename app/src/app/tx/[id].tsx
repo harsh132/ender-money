@@ -5,7 +5,7 @@ import { dayLabel, short, time, usd } from '../../lib/format';
 import { useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { Button, Card, KV, T } from '../../ui/kit';
-import { meta } from '../../ui/TxRow';
+import { meta, who } from '../../ui/TxRow';
 
 /** Detail sheet for one transfer. */
 export default function TxDetail() {
@@ -24,8 +24,9 @@ export default function TxDetail() {
       </T>
       <T v="meta" style={{ textAlign: 'center', marginTop: 6, color: dead ? c.negative : c.fg2 }}>{meta(tx)}</T>
       <Card style={{ marginTop: 24 }}>
-        <KV k={incoming ? 'From' : 'To'} v={tx.label ?? short(tx.counterparty)} />
-        {tx.label ? <KV k="Wallet" v={short(tx.counterparty)} mono /> : null}
+        <KV k={incoming ? 'From' : 'To'} v={who(tx)} />
+        {tx.label && tx.counterparty ? <KV k="Wallet" v={short(tx.counterparty)} mono /> : null}
+        {tx.private ? <KV k="Privacy" v="Private" /> : null}
         {tx.fee ? <KV k="Fee" v={`$${usd(tx.fee)}`} /> : null}
         <KV k="When" v={`${dayLabel(tx.at)}, ${time(tx.at)}`} />
         {tx.error ? <KV k="Error" v={tx.error} /> : null}
@@ -34,12 +35,19 @@ export default function TxDetail() {
       </Card>
       <View style={{ flex: 1, minHeight: 24 }} />
       <View style={{ gap: 4, marginBottom: 24 }}>
-        {dead && !incoming ? (
+        {dead && !incoming && (tx.shield || tx.phone || tx.counterparty) ? (
           <Button
             title="Try again"
             onPress={() => {
               router.back();
-              router.push({ pathname: '/review', params: { to: tx.counterparty, toAddress: tx.counterparty, amount: tx.amount, ...(tx.label ? { label: tx.label } : {}) } });
+              router.push({
+                pathname: '/review',
+                params: tx.shield
+                  ? { shield: '1', amount: tx.amount }
+                  : tx.phone
+                    ? { to: tx.phone, phone: tx.phone, amount: tx.amount, ...(tx.label ? { label: tx.label } : {}) }
+                    : { to: tx.counterparty!, toAddress: tx.counterparty!, amount: tx.amount, ...(tx.label ? { label: tx.label } : {}) },
+              });
             }}
           />
         ) : null}
