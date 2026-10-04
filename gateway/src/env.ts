@@ -8,13 +8,15 @@ export type Env = {
   GATEWAY_PRIVATE_KEY: string;
   JWT_SECRET: string;
   FEE_AUSD: string;
+  /** "1" stops all HTTP requests (503) and cron work: the emergency stop. */
+  PAUSED?: string;
   RELAY_TOKEN: string;
   /** Android SMS Retriever hash appended to replies; unset until the app is signed. */
   SMS_RETRIEVER_HASH?: string;
   RELAY: DurableObjectNamespace<Relay>;
   RPC_MAINNET?: string;
   RPC_TESTNET?: string;
-  /** Per-IP limiter for /auth/* and /tx/* (Cloudflare rate-limit binding). */
+  /** Per-IP limiter for /auth/*, /tx/*, /wallet/* and /shielded/* (Cloudflare rate-limit binding). */
   IP_LIMITER: RateLimit;
   /** Comma-separated networks a signup delegates on; defaults to "mainnet,testnet". */
   SIGNUP_NETWORKS?: string;

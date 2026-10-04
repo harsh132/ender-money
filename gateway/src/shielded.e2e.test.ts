@@ -79,6 +79,7 @@ let pool: Address;
 const sent: Sent = [];
 const users: Record<string, User> = { [ALICE]: newUser(), [BOB]: newUser() };
 const me = (phone: string) => owner(provingKeys(users[phone]!));
+const restore: { testnet?: typeof NETWORKS.testnet; eip712?: typeof AUSD_EIP712 } = {};
 
 const deploy = async (abi: Abi, bytecode: Hex, args: unknown[] = []) => {
   const hash = await wallet(deployer).deployContract({ abi, bytecode, args });
@@ -115,7 +116,9 @@ beforeAll(async () => {
   });
   const receipt = await pub.waitForTransactionReceipt({ hash: deployHash });
   pool = receipt.contractAddress!;
-  // Point the testnet config at the local deployment (MockAUSD's EIP-712 name differs from AUSD's).
+  // Point the testnet config at the local deployment (MockAUSD's EIP-712 name differs from AUSD's); afterAll restores
+  // both, since every test file shares these modules.
+  Object.assign(restore, { testnet: { ...NETWORKS.testnet }, eip712: { ...AUSD_EIP712 } });
   Object.assign(NETWORKS.testnet, { ausd: token, pool, poolDeployBlock: receipt.blockNumber });
   Object.assign(AUSD_EIP712 as { name: string }, { name: 'Mock AUSD' });
   // Gas for the gateway key, AUSD for Alice's wallet.
@@ -146,6 +149,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(() => {
+  if (restore.testnet) Object.assign(NETWORKS.testnet, restore.testnet);
+  if (restore.eip712) Object.assign(AUSD_EIP712 as object, restore.eip712);
   anvil?.kill();
   if (ready) spawnSync('docker', ['rm', '-f', PROVER_NAME], { stdio: 'ignore' });
 });

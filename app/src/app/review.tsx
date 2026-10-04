@@ -385,6 +385,9 @@ export default function Review() {
             mark('sent');
             upsertTx({ id: ph.id, status: 'sent' });
             setPhase({ k: 'done' });
+          } else if (r.kind === 'error' && r.code === 'pending' && r.id === ph.id) {
+            // Sent, not confirmed yet: like an online `pending`, its notes stay held until a resync sees it.
+            setPhase({ k: 'done' });
           } else if (r.kind === 'error' && (!r.id || r.id === ph.id)) {
             releaseNotes(getState().network, ph.id);
             upsertTx({ id: ph.id, status: 'failed', error: r.code });

@@ -313,6 +313,7 @@ const ERRORS: Record<string, string> = {
   EXPIRED: 'That quote has expired. Try again.',
   NOEOA: "Your wallet can't fund the private balance yet. Try again in a minute.",
   POLICY: 'The gateway refused this private payment.',
+  syncing: 'The gateway is still catching up with the private pool. Try again in a minute.',
 };
 
 export const errorText = (e: unknown): string => {

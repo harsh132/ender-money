@@ -96,6 +96,11 @@ The code is in `src/select.mjs`, which both sides import.
 
 ## SMS messages
 
+These are the spike's messages. What shipped (`protocol/sms.ts`, gateway and
+app) keeps `SEND` public and uses `PAY <+number|0x…>, <amount> AUSD` for a
+private payment or withdrawal; `SHIELD` and `MERGE` are real commands there.
+See [gateway.md](gateway.md#shielded-pool-testnet-built-4-oct).
+
 | Message | Example | Worst-case length |
 | --- | --- | --- |
 | `SEND` (unchanged) | `SEND +919800000002, 20 AUSD` | 67 |

@@ -12,7 +12,12 @@
     { "pattern": "ender.money/.well-known/assetlinks.json", "zone_name": "ender.money" }
   ],
 
+  // A runaway request dies here; proving runs in the container, so nothing legitimate needs more.
+  "limits": { "cpu_ms": 5000 },
+
   "vars": {
+    // Emergency stop: "1" answers every request with 503 and skips the cron.
+    "PAUSED": "0",
     "FEE_AUSD": "0.01",
     "SMS_RETRIEVER_HASH": "IaTP8lLJOvM",
     // Where Alchemy's Address Activity webhooks deliver. Webhooks are made only once the ALCHEMY_AUTH_TOKEN secret is set.

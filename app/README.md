@@ -14,6 +14,7 @@ src/app/          routes (expo-router)
 src/lib/
   keys.ts       passkey -> PRF -> secp256k1 key (Mera), Quick send sessions
   wallet.ts     sync, signup (7702 authorizations), quote checks, signing
+  private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing
   transport.ts  internet first; SMS composer + clipboard replies when offline
   api.ts        gateway HTTPS client (5 s timeout, then SMS)
   store.ts      persisted state (AsyncStorage; JWT in SecureStore)
@@ -30,6 +31,11 @@ transfer, recent recipients only, and ends when the app is backgrounded.
 
 The app signs the Calibur batch it builds itself from the fields on screen
 (recipient, amount, fee), never calldata from the gateway.
+
+The private balance's keys (testnet only) come from the same PRF output under
+HKDF label `ender/shielded/v1/seed` (`lib/private.ts`). The app registers the
+proving keys with the gateway (`/shielded/register`); the spending key never
+leaves the phone. Mainnet shows no private balance.
 
 ## Passkeys need the signing key
 

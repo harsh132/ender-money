@@ -45,7 +45,7 @@ single atomic SQL statement, so concurrent requests can't double-act.
 | D1 `links` | `phone (E.164) · address · network · alerts · created_at`, unique on phone and on address. The directory, queried both ways: phone → address to pay a number, address → phone for alerts |
 | D1 `otps` | `phone · code_hash · attempts · expires_at`. A try is `UPDATE … SET attempts = attempts + 1 WHERE phone = ? AND expires_at > ? AND attempts < 5 RETURNING *` |
 | D1 `sessions` | pending quotes, i.e. exactly what the user is asked to sign (below). Signing claims one with `UPDATE … SET state = 'sending' WHERE id = ? AND state = 'open' RETURNING *`; a racing duplicate gets nothing back and reads the tx hash instead |
-| D1 `alerts_sent` | `tx_hash · phone`, so a re-scan (or a second source later) never alerts twice |
+| D1 `alerts_sent` | `tx_hash · phone`, so a repeated webhook delivery (or a `Got` for the same transaction) never alerts twice |
 | D1 `transfers` | AUSD `Transfer` logs touching a linked address (`network · tx_hash · log_index · from · to · amount · block · at`), written by the Alchemy webhook (`INSERT OR IGNORE`, so a repeated delivery writes nothing); serves `GET /activity` and alerts |
 | D1 `alchemy_webhooks` | `id · network · signing_key · addresses · created_at`: the Address Activity webhooks the gateway made itself (`0006_alchemy.sql`); `signing_key` sealed under `SHIELDED_KEY_SECRET` |
 | D1 `alchemy_addresses` | `network · address`: linked addresses already pushed to that network's webhook |
@@ -122,7 +122,7 @@ signing up needs the app online.
 
 Errors: `expired`, `low-balance`, `bad-sig`, `not-on-ender`, `not-registered`,
 `rate-limited`. Duplicates are handled by the session rules above. Every outbound message is checked to fit one GSM-7
-segment; replies to Android numbers append the SMS Retriever hash.
+segment; every reply appends the SMS Retriever hash (`SMS_RETRIEVER_HASH`) on its own line.
 
 OTP text: `Ender code: 481926. Don't share it.` plus the Retriever hash.
 
@@ -217,8 +217,8 @@ The queue lives in the network's `Sponsor` DO, the single sender:
 - **Funding.** Monad bills the gas limit and, because execution trails
   consensus, requires the sender to cover gas still in flight (its
   reserve-balance rule; to be checked against Monad's docs). With one
-  batch in flight that's one transaction's worth. The cron warns when the
-  sender runs low.
+  batch in flight that's one transaction's worth. A low-balance warning
+  for the sender isn't built yet.
 
 Fees go to `FEE_RECIPIENT`, a treasury address, not the sender key, so a
 second sender key can be added later as configuration if one key ever
@@ -305,16 +305,37 @@ next `/wallet/create`, whichever comes first); `wrangler tail` shows
   gateway relays nothing it can't rebuild from its own session.
 - Phone ↔ address only revealed after an OTP; paying a number reveals the
   address only to a sender who is about to sign a transfer to it.
-- Rate limits: Cloudflare rate-limit bindings per IP on `/auth/*` and
-  `/tx/*`, plus per-number limits on OTP sends and SMS through the same
+- Rate limits: Cloudflare rate-limit bindings per IP on `/auth/*`,
+  `/tx/*`, `/wallet/*` and `/shielded/*`, plus per-number limits on OTP sends and SMS through the same
   binding keyed by phone.
 - Phone numbers masked in logs (`+91 98•••••210`).
 - Secrets: `GATEWAY_PRIVATE_KEY`, `JWT_SECRET`, `RELAY_TOKEN`,
   `SHIELDED_KEY_SECRET`, `GATEWAY_SHIELDED_SEED`,
-  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `ALCHEMY_AUTH_TOKEN`,
-  `SMS_RETRIEVER_HASH`. Alchemy webhook signing keys are not secrets to
+  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (Twilio not built yet),
+  `ALCHEMY_AUTH_TOKEN`. Plain vars in `wrangler.jsonc`: `FEE_AUSD`,
+  `SMS_RETRIEVER_HASH`, `ALCHEMY_WEBHOOK_URL`. Alchemy webhook signing keys are not secrets to
   set: the gateway receives them when it creates a webhook and keeps them
   sealed in D1 (`alchemy_webhooks`).
+
+## Emergency stop
+
+There is no spending cap on Workers Paid. If the gateway runs away:
+
+1. **Roll back** a bad deploy: Deployments → Rollback, or
+   `bunx wrangler rollback -c gateway/wrangler.jsonc`.
+2. **Pause**: set the `PAUSED` var to `"1"` (dashboard → Settings → Variables;
+   saving deploys a new version at once). Every request gets
+   `503 {"error":"paused"}` and the cron does nothing. Durable Objects and the
+   prover only get work through the Worker, so they go quiet too. Set it back to
+   `"0"` to resume.
+3. **Cut a trigger**: delete the cron (Settings → Trigger events) or remove the
+   `api.ender.money` route.
+4. Deleting the Worker is the last resort: it wipes the Durable Objects' storage.
+
+Caps already in place: `limits.cpu_ms` 5000 per invocation, the prover container
+at one instance sleeping after 60 s, `IP_LIMITER` on the public routes. The
+money that can actually run out is the gateway key's MON: keep a small float.
+Turn on Notifications → Workers usage (weekly summary and the CPU-spike alert).
 
 ## Testing
 

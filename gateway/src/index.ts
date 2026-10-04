@@ -235,6 +235,9 @@ const shieldedNetwork = (network: string | undefined) => {
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
+    // Emergency stop: PAUSED = "1" (dashboard → Settings → Variables) turns every request away; DOs and the prover
+    // only get work through here.
+    if (env.PAUSED === '1') return json({ error: 'paused' }, 503);
     try {
       return await route(request, env, ctx);
     } catch (error) {
@@ -244,6 +247,7 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx) {
+    if (env.PAUSED === '1') return;
     const log = (what: string) => (e: unknown) => console.error(`cron: ${what} failed`, e instanceof Error ? e.message : e);
     ctx.waitUntil(
       Promise.all([

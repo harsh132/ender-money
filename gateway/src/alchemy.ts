@@ -138,8 +138,8 @@ type Delivery = { webhookId?: string; createdAt?: string; type?: string; event?:
 
 /**
  * One delivery. Nothing is read past the webhook row until the signature
- * checks out under that webhook's key. AUSD transfers only, as the scan
- * records them; a log a reorg took back (`removed`) is skipped. A failed
+ * checks out under that webhook's key. AUSD transfers only; a log a reorg
+ * took back (`removed`) is skipped. A failed
  * write answers 500 so Alchemy delivers again; a repeat writes nothing.
  */
 export const alchemyWebhook = async (request: Request, env: Env, ctx: ExecutionContext) => {
