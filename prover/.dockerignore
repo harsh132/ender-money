@@ -1,0 +1,6 @@
+*
+!assets/circuits
+!assets/lib
+!assets/keys/*.zkey
+!assets/keys/*.r1cs
+!server.cpp
