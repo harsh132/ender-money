@@ -25,14 +25,28 @@
     { "binding": "DB", "database_name": "ender-money", "database_id": "a708e05c-85c9-4fd4-ac91-01c36414f59f", "migrations_dir": "migrations" }
   ],
 
+  // Groth16 prover for the shielded pool (prover/). Run prover/sync.sh before deploying: it copies the zkeys the image
+  // bakes in. One instance, asleep 60 s after its last request.
+  "containers": [
+    {
+      "class_name": "ProverContainer",
+      "image": "../prover/Dockerfile",
+      "image_build_context": "../prover",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 1, "memory_mib": 3072, "disk_mb": 2000 }
+    }
+  ],
+
   "durable_objects": {
     "bindings": [
       { "name": "SPONSOR", "class_name": "Sponsor" },
-      { "name": "RELAY", "class_name": "Relay" }
+      { "name": "RELAY", "class_name": "Relay" },
+      { "name": "PROVER", "class_name": "ProverContainer" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Sponsor"] },
-    { "tag": "v2", "new_sqlite_classes": ["Relay"] }
+    { "tag": "v2", "new_sqlite_classes": ["Relay"] },
+    { "tag": "v3", "new_sqlite_classes": ["ProverContainer"] }
   ]
 }

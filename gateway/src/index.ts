@@ -6,8 +6,10 @@ import { createWallet, startAuth, verifyAuth, TOKEN_TTL_SECONDS } from './auth';
 import { account, delegate, GatewayError, quote, reconcile, sign, txStatus } from './core';
 import type { Env } from './env';
 import { signJwt, verifyJwt } from './jwt';
+import * as shielded from './shielded';
 import { handleInbound } from './sms';
 
+export { ProverContainer } from './prover';
 export { Relay } from './relay';
 export { Sponsor } from './sponsor';
 
@@ -61,7 +63,7 @@ const ASSET_LINKS = [
   },
 ];
 
-const route = async (request: Request, env: Env): Promise<Response> => {
+const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise<Response> => {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -69,7 +71,7 @@ const route = async (request: Request, env: Env): Promise<Response> => {
   if (url.pathname === '/.well-known/assetlinks.json') return json(ASSET_LINKS);
 
   // Per-IP limit on everything a stranger can hammer: OTP sends and transfers.
-  if (/^\/(auth|tx|wallet)\//.test(url.pathname)) {
+  if (/^\/(auth|tx|wallet|shielded)\//.test(url.pathname)) {
     const ip = request.headers.get('cf-connecting-ip') ?? 'local';
     if (!(await env.IP_LIMITER.limit({ key: ip })).success) throw new GatewayError('rate-limited', 429);
   }
@@ -130,6 +132,54 @@ const route = async (request: Request, env: Env): Promise<Response> => {
       return json(await sign(env, phone, req.id.toUpperCase(), req.signature as Hex));
     }
 
+    // Shielded pool (testnet). `network` defaults to testnet, the only network with a pool.
+    case 'POST /shielded/register': {
+      const phone = await phoneFrom(env, request);
+      const req = await body<{ network?: string; keys?: Record<string, unknown> }>(request);
+      return json(await shielded.register(env, phone, shieldedNetwork(req.network), req.keys));
+    }
+
+    case 'GET /shielded/notes': {
+      const phone = await phoneFrom(env, request);
+      return json(await shielded.notes(env, phone, shieldedNetwork(url.searchParams.get('network') ?? undefined)));
+    }
+
+    case 'POST /shielded/quote': {
+      const phone = await phoneFrom(env, request);
+      const req = await body<{ network?: string; kind?: string; to?: string; amount?: string }>(request);
+      if (!['pay', 'withdraw', 'shield', 'merge'].includes(req.kind ?? '')) throw new GatewayError('bad-request');
+      return json(
+        await shielded.quote(
+          env,
+          phone,
+          { network: shieldedNetwork(req.network), kind: req.kind as shielded.ShieldedKind, to: req.to, amount: req.amount },
+          (p) => ctx.waitUntil(p),
+        ),
+      );
+    }
+
+    case 'POST /shielded/submit': {
+      const phone = await phoneFrom(env, request);
+      const req = await body<{ id?: unknown; refs?: unknown; sig?: unknown; signature?: unknown }>(request);
+      if (typeof req.id !== 'string') throw new GatewayError('bad-request');
+      const sig = req.sig === undefined ? undefined : shielded.sigFromBase64(req.sig);
+      if (sig === null) throw new GatewayError('bad-request');
+      if (req.refs !== undefined && (!Array.isArray(req.refs) || req.refs.length > 12)) throw new GatewayError('bad-request');
+      if (req.signature !== undefined && (!isHex(req.signature) || req.signature.length !== 132)) throw new GatewayError('bad-request');
+      // Finish even if the app gives up waiting (it then texts the SIG, which waits for this same outcome).
+      const settled = shielded.submit(env, phone, { id: req.id.toUpperCase(), refs: req.refs as number[] | undefined, sig, signature: req.signature as Hex | undefined });
+      ctx.waitUntil(settled.catch(() => {}));
+      const r = await settled;
+      return json({ tx: r.tx, ...(r.p !== undefined ? { p: r.p } : {}), ...(r.pending ? { pending: true } : {}) });
+    }
+
+    case 'GET /shielded/address': {
+      await phoneFrom(env, request);
+      const phone = url.searchParams.get('phone') ?? '';
+      if (!isPhone(phone)) throw new GatewayError('bad-phone');
+      return json(await shielded.shieldedAddress(env, shieldedNetwork(url.searchParams.get('network') ?? undefined), phone));
+    }
+
     // The Android relay phone's WebSocket.
     case 'GET /relay': {
       if (request.headers.get('upgrade') !== 'websocket') throw new GatewayError('upgrade-required', 426);
@@ -172,10 +222,16 @@ const route = async (request: Request, env: Env): Promise<Response> => {
   return json({ error: 'not-found' }, 404);
 };
 
+const shieldedNetwork = (network: string | undefined) => {
+  if (network === undefined) return 'testnet' as const;
+  if (!isNetwork(network)) throw new GatewayError('bad-network');
+  return network;
+};
+
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     try {
-      return await route(request, env);
+      return await route(request, env, ctx);
     } catch (error) {
       if (error instanceof GatewayError) return json({ error: error.code }, error.status);
       console.error('unhandled', error instanceof Error ? error.stack : error);

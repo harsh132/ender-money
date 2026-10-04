@@ -276,6 +276,7 @@ number.
   binding keyed by phone.
 - Phone numbers masked in logs (`+91 98•••••210`).
 - Secrets: `GATEWAY_PRIVATE_KEY`, `JWT_SECRET`, `RELAY_TOKEN`,
+  `SHIELDED_KEY_SECRET`, `GATEWAY_SHIELDED_SEED`,
   `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `ALCHEMY_AUTH_TOKEN`, Alchemy
   webhook signing key, `SMS_RETRIEVER_HASH`.
 
@@ -284,6 +285,12 @@ number.
 - `bun test`: SMS parse/format round trips and the one-segment limit,
   digest rebuild against a signature made with the demo key, quote → sign
   happy path against an anvil fork of Monad, every error code.
+- `bun test ./gateway`: the shielded tree against fixed-merkle-tree, key
+  sealing, ref resolution, the owner policy and SMS routing
+  (`shielded.test.ts`); the shielded flow end to end on anvil with the
+  pool, MockAUSD, the real `Sponsor` and the prover container
+  (`shielded.e2e.test.ts`; needs anvil, the spike's forge build and the
+  `ender-prover` docker image, else skipped).
 - `wrangler dev` plus `scripts/play.ts`: plays the app with the demo key
   through both pipes, HTTPS and a dev-only `POST /dev/sms` that injects an
   inbound text as if the relay delivered it.
@@ -303,6 +310,129 @@ number.
    wallet over HTTPS and over SMS.
 4. **9 Oct** — Twilio transport, Alchemy webhook. (Log scan, alerts and
    `GET /activity` landed early, on 2 Oct, for the app.)
+
+## Shielded pool (testnet, built 4 Oct)
+
+Private payments through the split-key pool
+([splitkey-spike.md](splitkey-spike.md); reference code
+`spikes/nova-splitkey/src/gateway.mjs`). Testnet only: the pool is
+`NETWORKS.testnet.pool` (`0xbe34…10ff`, deployed in block 68154262); a
+network without a pool answers `unsupported`. The gateway holds each user's
+proving keys (`nk`, viewing key, authority public key), never the authority
+private key: it can rebuild, prove and relay exactly what the phone signed,
+and can't spend, redirect or reprice. Code: `shielded.ts` (core, both
+transports), `pool.ts` (index and Merkle tree), `prover.ts` (container).
+
+**Storage** (D1, `0005_shielded.sql`):
+
+| Store | Holds |
+| --- | --- |
+| `shielded_users` | `phone · network · Ax · Ay · nk · view_sk · owner_key · enc_pk · eoa · created_at`. `nk` and `view_sk` are AES-256-GCM ciphertexts under `SHIELDED_KEY_SECRET`, bound to `phone|network|field`; `owner_key` and `enc_pk` are the public parts of the shielded address; `eoa` is the number's linked wallet, the only account its deposits may come from |
+| `pool_leaves` | `network · idx · commitment · ciphertext · block`, every `NewCommitment` |
+| `pool_nodes` | the Merkle tree (23 levels, Poseidon, empty leaf `ZERO_VALUE`): `network · level · idx · hash`, level 0 the leaves, level 23 the root; an absent node is that level's zero. A path costs one query |
+| `pool_appends` | one row per tree append `[from_size, to_size)`, keyed by `from_size`: two racing appends from the same size can't both commit (the D1 batch rolls back), so the tree is never built from stale siblings |
+| `pool_nullifiers` | every `NewNullifier` |
+| `pool_cursors` | the catch-up scan's last block and whether it reached the pool's leaf count |
+| `shielded_notes` | `network · pos · phone · amount · blinding · nullifier · spent`: each user's notes, found by trial decryption |
+| `shielded_quotes` | `id · phone · network · kind · to_phone · to_address · amount · fee · exp · state · ins · tx_hash · p · error`. Claimed like `sessions` (`open → sending → sent`); `ins` reserves the notes being spent while a SIG is proved; `exp` (10 minutes) is also the signed on-chain deadline |
+
+**Indexing.** Every pool transaction goes through the gateway (deposits and
+transfers are gateway-only on-chain, and open exits aren't supported yet), so
+the index is fed from the gateway's own receipts: after each relayed
+transaction its `NewCommitment` / `NewNullifier` logs are inserted, new
+leaves are trial-decrypted for every registered user (`decryptNote` plus the
+commitment check), notes whose nullifier appeared are marked spent, and the
+tree is extended. There is no cron step. The only log scan is a catch-up on
+first use, or after a gap (a leaf past the tree's end means a receipt was
+missed): 100-block `eth_getLogs` filtered on the pool address only, from the
+deploy block (or the gap) until the tree holds the pool's `nextIndex`
+leaves, with the cursor saved after each chunk. At most 200 chunks per
+request; beyond that the request answers `syncing` (503) and the next one
+continues. The tree's root equals the pool's `getLastRoot()`.
+
+**Prover.** `ProverContainer` (prover/, Cloudflare Containers: 1 vCPU,
+3 GiB, 2 GB disk, one instance, asleep 60 s after its last request). The
+Worker posts `witnessInput` (`witnessJson`) to `/prove` and turns the
+snarkjs-shaped proof into the pool's arguments (`proofArgs`). Sending a `Q`
+warms it (loads the circuit the quote will need), so the `SIG` that follows
+doesn't wait on a cold start. Run `prover/sync.sh` before deploying.
+
+**Sending.** `pool.transact` and `depositWithAuthorization` check
+`msg.sender == gateway`, so they can't ride a Multicall3 batch: they are a
+`direct` item in the network's `Sponsor` queue, sent alone by the gateway key
+in queue order, so the nonce stays serialized with the sponsored batches.
+The relayer in every transaction is `FEE_RECIPIENT` (the gateway key's
+address on testnet) and the fee is `FEE_AUSD`.
+
+**Quote** (`/shielded/quote`, `PAY` / `SHIELD` / `MERGE`): the sender must
+be registered (`NOUSER`); a payment's recipient must be a registered number
+(`NOUSER`), a withdrawal's any 0x address; a deposit needs the AUSD in the
+linked wallet (`FUNDS`). For payments, withdrawals and merges the selection
+rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
+`FUNDS` / `MERGE` come before the quote.
+
+**Submit** (`/shielded/submit`, `SIG`), in order, before any gas:
+
+1. Claim the quote (one `UPDATE … RETURNING`); a repeat after success
+   returns the same transaction; any refusal below reopens it.
+2. Resolve the refs to the sender's eligible notes (unspent, ≥ 0.001 AUSD,
+   not reserved by another SIG in flight); a duplicate or unmatched ref is
+   `REF`; colliding refs (positions 2^18 apart) try every combination, at
+   most 64.
+3. Rebuild the transaction with `buildTx` from the quote (change under
+   0.001 AUSD goes to the fee; a change-free withdrawal has two null outputs
+   via `withdrawOutputs`, so no leaves and no `p`); the signature must verify
+   (`BADSIG`). A deposit instead rebuilds `buildDeposit` and recovers the
+   EIP-3009 signer, which must be the number's wallet.
+4. Policy (`POLICY`): inputs are the one sender's notes, or the gateway's
+   zero-value deposit dummies (signed with its own authority key, from
+   `GATEWAY_SHIELDED_SEED`); every non-null output belongs to a registered
+   user; deposits only from a registered wallet.
+5. Prove, send as a `direct` item, wait for the receipt, index its logs.
+6. A payment to another number texts them
+   `Got <amt> AUSD from <number> p=<pos> b=<blinding>` (alerts switch on,
+   `canText`, once per transaction through `alerts_sent`).
+
+**HTTPS** (JWT like every other route; `network` defaults to `testnet`):
+
+| Call | Does |
+| --- | --- |
+| `POST /shielded/register {network, keys: {Ax, Ay, nk, viewSk}}` | decimal strings; `viewSk` is the 32 key bytes as a big-endian integer. Returns `{owner}`, the 64-byte packed shielded address in unpadded base64 (`protocol/sms.ts` `b64`). `eoa` = the number's linked wallet. Idempotent; other keys for the same number are `key-changed` (409), the same keys under another number `key-in-use` (409) |
+| `GET /shielded/notes?network=` | `{notes: [{pos, amount, blinding, spent}], root}`: the number's whole index, spent included (amount, blinding and root as decimal strings) |
+| `POST /shielded/quote {network, kind, to?, amount}` | `kind`: `pay` (to a number), `withdraw` (to a 0x address), `shield`, `merge` (amount ignored). Returns `{id, exp, fee, to?}`: `to` is the recipient's packed address (base64) for `pay`, the address for `withdraw`, absent otherwise |
+| `POST /shielded/submit {id, refs?, sig?, signature?}` | `refs` (tree positions) + `sig` (64-byte EdDSA, base64, padded or not) for pay / withdraw / merge; `signature` (0x, 65-byte EIP-3009) for shield. Returns `{tx, p?}` after the receipt (`p` = position of output 0; absent for a change-free withdrawal); `{tx, pending: true}` if the receipt didn't come within 30 s, and a repeated submit settles it |
+| `GET /shielded/address?network=&phone=` | `{owner}` of a registered number, so the app can pin a contact's key online; `NOUSER` (404) otherwise |
+
+Errors are the usual `{error}` with the SMS codes: `NOUSER`, `FUNDS`,
+`MERGE`, `REF`, `BADSIG`, `UNKNOWN`, `EXPIRED`, `NOEOA`, `POLICY`, plus
+`unsupported`, `syncing`, `in-progress`, `reverted`, `failed`, `bad-*`.
+
+**SMS** (parsed and formatted by `protocol/sms.ts`; always testnet):
+
+| In | Out |
+| --- | --- |
+| `PAY <+number>, <amount> AUSD` | `Q <id> exp=<unix> fee=0.01 to=<86-char shielded address>` |
+| `PAY <0x address>, <amount> AUSD` (withdrawal) | `Q <id> exp=<unix> fee=0.01 to=0x<40>` |
+| `MERGE` | `Q <id> exp=<unix> fee=0.01` |
+| `SHIELD <amount> AUSD` | `Q <id> exp=<unix> fee=0.01` |
+| `SIG <id> <refs> <86-char signature>` | `Sent 20 AUSD to +91…. Tx 0xab…ef p=2` (no `p=` for a change-free withdrawal) |
+| `SIG <id> <88-char signature>` for a `SHIELD` quote | `Shielded 50 AUSD. Tx 0xab…ef p=0` |
+
+A public-shaped `SIG` is a deposit's if its id is the number's `SHIELD`
+quote, else today's public `SIG`. Errors are `ERR [<id>] <code>` with the
+codes above; `ERR <id> pending` if the transaction was sent but not yet
+confirmed (repeat the `SIG`).
+
+**Secrets**: `SHIELDED_KEY_SECRET` (any long random string; losing it means
+every user registers again) and `GATEWAY_SHIELDED_SEED` (hex, 32+ bytes,
+e.g. `openssl rand -hex 32`), set with `wrangler secret put` and, for
+`wrangler dev`, in `gateway/.dev.vars`. Neither is ever logged, nor are
+`nk`, viewing keys or prover request bodies.
+
+**Not built**: a scan for pool transactions the gateway didn't relay (open
+exits; `TODO(open-exit)` in `pool.ts`), backfilling notes for keys
+registered after they received notes (the policy makes that impossible
+today), alert MACs.
 
 ## Not in the gateway
 

@@ -18,6 +18,11 @@ export type SponsorItem =
   | { kind: 'call'; account: Address; data: Hex }
   /** A gateway-side call (e.g. the testnet swap whitelister); succeeds if the batch does. */
   | { kind: 'plain'; target: Address; data: Hex }
+  /**
+   * A gateway-side call that must come from the gateway key itself (msg.sender), not through Multicall3: the
+   * shielded pool's transact / depositWithAuthorization. Sent alone, in queue order; succeeds if it doesn't revert.
+   */
+  | { kind: 'direct'; target: Address; data: Hex }
   | { kind: 'delegation'; account: Address; authorization: SignedAuthorization };
 
 export type SponsorResult =
@@ -80,9 +85,11 @@ export class Sponsor extends DurableObject<Env> {
   private async pump(): Promise<void> {
     if (this.busy || this.queue.length === 0) return;
     this.busy = true;
-    const batch = this.queue.splice(0, MAX_BATCH);
+    // A direct item goes alone; a batch stops before the next one, so queue order (and the nonce order) holds.
+    const direct = this.queue.findIndex((p) => p.item.kind === 'direct');
+    const batch = this.queue.splice(0, direct === 0 ? 1 : direct > 0 ? Math.min(direct, MAX_BATCH) : MAX_BATCH);
     try {
-      await this.send(batch);
+      await (batch[0]!.item.kind === 'direct' ? this.sendDirect(batch[0]!) : this.send(batch));
     } catch (error) {
       console.error('sponsor: batch failed', error instanceof Error ? error.message : error);
       // Resolving twice is a no-op, so this only reaches callers send() hadn't answered.
@@ -90,6 +97,41 @@ export class Sponsor extends DurableObject<Env> {
     } finally {
       this.busy = false;
       void this.pump();
+    }
+  }
+
+  private async sendDirect(p: Pending) {
+    const { target, data } = p.item as Extract<SponsorItem, { kind: 'direct' }>;
+    const pub = publicClient(this.env, this.network!);
+    const gateway = privateKeyToAccount(this.env.GATEWAY_PRIVATE_KEY as Hex);
+    try {
+      await pub.call({ account: gateway.address, to: target, data });
+    } catch (error) {
+      console.warn('sponsor: direct call reverts', error instanceof Error ? error.message.split('\n')[0] : error);
+      return p.resolve({ ok: false, error: 'reverted' });
+    }
+    const [gas, fees, nonce] = await Promise.all([
+      pub.estimateGas({ account: gateway.address, to: target, data }),
+      pub.estimateFeesPerGas(),
+      pub.getTransactionCount({ address: gateway.address, blockTag: 'pending' }),
+    ]);
+    const serializedTransaction = await gateway.signTransaction({
+      type: 'eip1559',
+      chainId: NETWORKS[this.network!].chain.id,
+      nonce,
+      to: target,
+      data,
+      value: 0n,
+      gas: (gas * GAS_MARGIN_PERCENT) / 100n,
+      maxFeePerGas: fees.maxFeePerGas,
+      maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+    });
+    const txHash = await pub.sendRawTransaction({ serializedTransaction });
+    try {
+      const receipt = await pub.waitForTransactionReceipt({ hash: txHash, timeout: RECEIPT_TIMEOUT_MS });
+      p.resolve(receipt.status === 'success' ? { ok: true, txHash } : { ok: false, error: 'failed', txHash });
+    } catch {
+      p.resolve({ ok: false, error: 'timeout', txHash });
     }
   }
 
@@ -146,7 +188,7 @@ export class Sponsor extends DurableObject<Env> {
     const senders = tokenSenders(receipt, net.ausd);
     const landed = receipt.status === 'success';
     for (const p of calls) {
-      const ok = p.item.kind === 'plain' ? landed : senders.has(p.item.account.toLowerCase());
+      const ok = p.item.kind === 'call' ? senders.has(p.item.account.toLowerCase()) : landed;
       p.resolve(ok ? { ok: true, txHash } : { ok: false, error: 'failed', txHash });
     }
     // Delegations leave no log; the account's code says whether it took.
