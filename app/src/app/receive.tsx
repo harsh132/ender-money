@@ -38,7 +38,7 @@ export default function Receive() {
       <T v="meta" style={{ textAlign: 'center', marginTop: 12 }}>
         Or just your number: {phoneDisplay(wallet.phone)}. We'll text you when money arrives.
       </T>
-      <View style={{ flex: 1 }} />
+      <View style={{ flex: 1, minHeight: 24 }} />
       <View style={{ flexDirection: 'row', gap: 12, marginBottom: 28 }}>
         <Button title={copied ? 'Copied' : 'Copy'} kind="ghost" icon={<Copy size={20} />} onPress={copy} style={{ flex: 1 }} />
         <Button

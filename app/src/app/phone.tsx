@@ -74,7 +74,7 @@ export default function PhoneScreen() {
           Ender's gateway keeps your number next to your wallet address to route payments and alerts.
         </T>
         {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
-        <View style={{ flex: 1 }} />
+        <View style={{ flex: 1, minHeight: 24 }} />
         <Button title="Send code" onPress={send} busy={busy} disabled={!phone} style={{ marginBottom: 12 }} />
       </Screen>
     </KeyboardAvoidingView>

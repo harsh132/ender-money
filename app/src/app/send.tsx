@@ -142,7 +142,7 @@ export default function Send() {
           </View>
         ) : null}
 
-        <View style={{ flex: 1 }} />
+        <View style={{ flex: 1, minHeight: 24 }} />
         <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
           {KEYS.map((k) => (
             <Pressable key={k} accessibilityLabel={k === '⌫' ? 'Delete' : k} onPress={() => press(k)} style={({ pressed }) => ({ width: '33.33%', height: 68, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: pressed ? c.surface : 'transparent' })}>

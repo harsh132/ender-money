@@ -292,7 +292,7 @@ export default function Review() {
           <StepRow title="Sent" sub={stepSub.sent} state={rowState('sent', doneUpTo, current, phase)} last />
         </View>
 
-        <View style={{ flex: 1 }} />
+        <View style={{ flex: 1, minHeight: 24 }} />
         <View style={{ gap: 12, marginTop: 12 }}>
           {pipe === 'text' && phase.k !== 'done' ? <Banner icon={<Message size={20} color={c.warning} />} tone="warning">No internet, sending over SMS.</Banner> : null}
           {deliver === 'CTK' && phase.k !== 'done' ? <Banner>CTK is Agora's test token, standing in for local currency. Swapped at a fixed price, settled in the same transaction.</Banner> : null}

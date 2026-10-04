@@ -62,7 +62,7 @@ export default function Restore() {
         <KV k="Balance" v={`$${usd(v.balance)}`} last />
       </Card>
       {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
-      <View style={{ flex: 1 }} />
+      <View style={{ flex: 1, minHeight: 24 }} />
       <Button title="Use my passkey" icon={<Fingerprint size={22} color={c.accentInk} />} busy={busy} onPress={open} />
       <Button title="I lost my passkey" kind="text" onPress={() => router.push('/lost')} style={{ marginBottom: 4 }} />
     </Screen>

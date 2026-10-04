@@ -89,7 +89,7 @@ export default function Create() {
         {error ? (
           <>
             <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View>
-            <View style={{ flex: 1 }} />
+            <View style={{ flex: 1, minHeight: 24 }} />
             <Button title="Try again" onPress={() => setUp()} style={{ marginBottom: 12 }} />
           </>
         ) : null}
@@ -113,7 +113,7 @@ export default function Create() {
           <KV k="Balance" v={`$${getState().account.mainnet?.balance ?? '0.00'}`} last />
         </Card>
         <View style={{ marginTop: 20 }}><Banner>Now try it with mobile data off. Ender only needs signal.</Banner></View>
-        <View style={{ flex: 1 }} />
+        <View style={{ flex: 1, minHeight: 24 }} />
         <Button title="Add money" onPress={() => { router.replace('/home'); router.push('/receive'); }} />
         <Button title="Go to home" kind="text" onPress={() => router.replace('/home')} style={{ marginBottom: 4 }} />
       </Screen>
@@ -129,7 +129,7 @@ export default function Create() {
           {phoneDisplay(verified.phone)} is verified. Approve with your passkey and people can pay you there. Your old number stops working for Ender.
         </T>
         {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
-        <View style={{ flex: 1 }} />
+        <View style={{ flex: 1, minHeight: 24 }} />
         <Button
           title="Use my passkey"
           icon={<Fingerprint size={22} color={c.accentInk} />}
@@ -155,7 +155,7 @@ export default function Create() {
         Now we'll make a passkey on this phone. No seed phrase, nothing to write down. It's saved to your Google account as “Ender”, so a new phone can get your wallet back.
       </T>
       {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
-      <View style={{ flex: 1 }} />
+      <View style={{ flex: 1, minHeight: 24 }} />
       <Button title="Create passkey" busy={busy} onPress={() => withPasskey(createWalletKey, false)} />
       {mode === 'new' ? (
         <Button title="I already have an Ender passkey" kind="text" onPress={() => withPasskey(() => unlockWallet(), true)} style={{ marginBottom: 4 }} />

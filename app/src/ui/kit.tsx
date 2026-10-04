@@ -50,13 +50,15 @@ export const Screen = ({
   edges?: ('top' | 'bottom')[];
 }) => (
   <SafeAreaView edges={edges} style={s.screen}>
-    {scroll ? (
-      <ScrollView contentContainerStyle={[s.body, style]} keyboardShouldPersistTaps="handled">
-        {children}
-      </ScrollView>
-    ) : (
-      <View style={[s.body, { flex: 1 }, style]}>{children}</View>
-    )}
+    {/* Fixed screens still scroll when they don't fit (large font or display size); flexGrow keeps their spacers working. */}
+    <ScrollView
+      contentContainerStyle={[s.body, !scroll && { flexGrow: 1 }, style]}
+      keyboardShouldPersistTaps="handled"
+      bounces={!!scroll}
+      overScrollMode={scroll ? 'auto' : 'never'}
+    >
+      {children}
+    </ScrollView>
   </SafeAreaView>
 );
 

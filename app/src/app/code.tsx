@@ -111,7 +111,7 @@ export default function CodeScreen() {
           <Pressable onPress={() => router.back()} hitSlop={10}><T v="meta" style={{ color: c.accent, fontFamily: f.uiMedium }}>Wrong number?</T></Pressable>
         </View>
         {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
-        <View style={{ flex: 1 }} />
+        <View style={{ flex: 1, minHeight: 24 }} />
         <Button title="Verify" onPress={() => verify()} busy={busy} disabled={code.length !== 6} style={{ marginBottom: 12 }} />
       </Screen>
     </KeyboardAvoidingView>

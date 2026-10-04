@@ -21,7 +21,7 @@ export default function Welcome() {
         <Feature icon={<Signal size={22} color={c.accent} />} text="Works with mobile data off" />
         <Feature icon={<Message size={22} color={c.accent} />} text="Pay any phone number" />
       </View>
-      <View style={{ flex: 1 }} />
+      <View style={{ flex: 1, minHeight: 24 }} />
       <Button title="Log in" onPress={() => router.push('/phone')} />
       <View style={{ alignItems: 'center', marginTop: 16, marginBottom: 12 }}>
         <Chip label="Setup needs internet once. After that, just signal." />

@@ -26,7 +26,7 @@ export default function Lost() {
         <KV k="Old wallet" v={`Keeps $${usd(balance)}`} />
         <KV k="Number" v="Moves to new wallet" last />
       </Card>
-      <View style={{ flex: 1 }} />
+      <View style={{ flex: 1, minHeight: 24 }} />
       <Button title="Start a new wallet" onPress={() => router.replace({ pathname: '/create', params: { mode: 'relink' } })} />
       <Button title="Try my passkey again" kind="text" onPress={() => router.back()} style={{ marginBottom: 4 }} />
     </Screen>

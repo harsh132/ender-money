@@ -28,11 +28,24 @@ const ETH_PATH = "m/44'/60'/0'/0/0";
  * client instead (and only works on ender.money itself, the passkeys' RP ID);
  * the native module is required lazily so the web bundle never evaluates it.
  */
-const webAuthnClient =
+const nativeClient =
   Platform.OS === 'web'
     ? undefined
     : // eslint-disable-next-line @typescript-eslint/no-require-imports
       (require('@category-labs/mera/react-native-webauthn-client') as typeof import('@category-labs/mera/react-native-webauthn-client')).reactNativeWebAuthnClient;
+
+/**
+ * Some providers (Bitwarden) don't report `prf.enabled` when they create a
+ * passkey, yet evaluate PRF on the next assertion. Claiming it makes Mera run
+ * that assertion, which still fails with PRF_UNAVAILABLE if no output comes back.
+ */
+const webAuthnClient = nativeClient && {
+  ...nativeClient,
+  createCredential: async (request: Parameters<typeof nativeClient.createCredential>[0]) => ({
+    ...(await nativeClient.createCredential(request)),
+    prfEnabled: true,
+  }),
+};
 
 const sessionFromPrf = (prfOutput: Uint8Array): Secp256k1SigningSession => {
   const seed = mnemonicToSeedSync(entropyToMnemonic(prfOutput, wordlist));

@@ -41,7 +41,7 @@ export default function Scan() {
           <Pressable accessibilityLabel="Close" onPress={() => router.back()} hitSlop={12} style={st.round}>
             <Close size={24} />
           </Pressable>
-          <View style={{ flex: 1 }} />
+          <View style={{ flex: 1, minHeight: 24 }} />
           {permission?.granted ? (
             <Pressable accessibilityLabel="Torch" onPress={() => setTorch((t) => !t)} hitSlop={12} style={[st.round, torch && { backgroundColor: c.accent }]}>
               <Torch size={22} color={torch ? c.accentInk : c.fg} />

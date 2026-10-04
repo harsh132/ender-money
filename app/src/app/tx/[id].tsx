@@ -32,7 +32,7 @@ export default function TxDetail() {
         {tx.txHash ? <KV k="Tx" v={short(tx.txHash)} mono /> : null}
         <KV k="Network" v={tx.network === 'mainnet' ? 'Monad' : 'Monad testnet'} last />
       </Card>
-      <View style={{ flex: 1 }} />
+      <View style={{ flex: 1, minHeight: 24 }} />
       <View style={{ gap: 4, marginBottom: 24 }}>
         {dead && !incoming ? (
           <Button
