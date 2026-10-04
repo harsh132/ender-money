@@ -122,7 +122,8 @@ signing up needs the app online.
 
 Errors: `expired`, `low-balance`, `bad-sig`, `not-on-ender`, `not-registered`,
 `rate-limited`. Duplicates are handled by the session rules above. Every outbound message is checked to fit one GSM-7
-segment; every reply appends the SMS Retriever hash (`SMS_RETRIEVER_HASH`) on its own line.
+segment; every text the gateway sends (replies, `Q`, `Sent`, `Shielded`, `ERR`, `Got`,
+incoming-payment alerts, OTPs) appends the SMS Retriever hash (`SMS_RETRIEVER_HASH`) on its own line.
 
 OTP text: `Ender code: 481926. Don't share it.` plus the Retriever hash.
 
@@ -285,9 +286,15 @@ retry) is recorded but not texted about.
 - With `ALCHEMY_AUTH_TOKEN` unset (or `ALCHEMY_WEBHOOK_URL` /
   `SHIELDED_KEY_SECRET`), no webhooks are made and incoming transfers go
   unrecorded.
-- Alert text: `Received 10 AUSD from +9198…/0x12...cd. Balance 45.20 AUSD.`,
-  prefixed `[Test] ` on testnet. Folding several alerts into one (30 s) is
-  not built.
+- Alert text (`protocol/sms.ts`, a `received` reply):
+  `[Test] Received 10 AUSD from 0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5. Balance 10 AUSD. Tx 0xab12...ef`
+  plus the SMS Retriever hash line; `[Test] ` on testnet only. The sender is
+  always the full EIP-55 address, never a number, even when the sender is on
+  Ender: a text never tells one user another's number. `Tx` is the short hash
+  the app uses to match the alert with the same transfer from `/activity`.
+  Longest case 124 characters (126 septets: `[` and `]` cost two), 138 with
+  the hash. Folding several alerts into
+  one (30 s) is not built.
 
 **Turning the webhook on** after deploying (`0006_alchemy.sql` applied
 with `bun run gateway:migrate:remote`): copy the Notify auth token from the
@@ -396,7 +403,7 @@ transports), `pool.ts` (index and Merkle tree), `prover.ts` (container).
 | `pool_nullifiers` | every `NewNullifier` |
 | `pool_cursors` | the catch-up scan's last block and whether it reached the pool's leaf count |
 | `shielded_notes` | `network · pos · phone · amount · blinding · nullifier · spent`: each user's notes, found by trial decryption |
-| `shielded_quotes` | `id · phone · network · kind · to_phone · to_address · amount · fee · exp · state · ins · tx_hash · p · error`. Claimed like `sessions` (`open → sending → sent`); `ins` reserves the notes being spent while a SIG is proved; `exp` (10 minutes) is also the signed on-chain deadline |
+| `shielded_quotes` | `id · phone · network · kind · to_phone · to_address · amount · fee · exp · state · ins · tx_hash · p · error`. `to_address` is a withdrawal's 0x address, or the `ender1…` address a payment was made to (then `to_phone` is its owner, used only for `Got`). Claimed like `sessions` (`open → sending → sent`); `ins` reserves the notes being spent while a SIG is proved; `exp` (10 minutes) is also the signed on-chain deadline |
 
 **Indexing.** Every pool transaction goes through the gateway (deposits and
 transfers are gateway-only on-chain, and open exits aren't supported yet), so
@@ -426,9 +433,19 @@ in queue order, so the nonce stays serialized with the sponsored batches.
 The relayer in every transaction is `FEE_RECIPIENT` (the gateway key's
 address on testnet) and the fee is `FEE_AUSD`.
 
+**Private address** (`protocol/recipient.ts`): bech32m (BIP-350), HRP
+`ender`, over the 64-byte packed shielded address (`owner_key || enc_pk`):
+115 lowercase characters, e.g.
+`ender1rreg3epk4xpk3zmh7sujagu783a06av4andq2dq8x37ye6z6gfe7r3xyxafcr5ggzcaag53fumarcwpcvmy62nc4lc823ktn46kkq2g7q6dx9`.
+Decoding is case-insensitive and checks the checksum and the length. The
+app shows it on Receive (testnet) and `parseRecipient` reads it wherever a
+recipient is typed, pasted or scanned (also as `ender:ender1…[?amount=]`).
+
 **Quote** (`/shielded/quote`, `PAY` / `SHIELD` / `MERGE`): the sender must
 be registered (`NOUSER`); a payment's recipient must be a registered number
-(`NOUSER`), a withdrawal's any 0x address; a deposit needs the AUSD in the
+or the private address of a registered user (`NOUSER`; looked up by
+`owner_key`, unique per network, and its `enc_pk` must match), a
+withdrawal's any 0x address; a deposit needs the AUSD in the
 linked wallet (`FUNDS`). For payments, withdrawals and merges the selection
 rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
 `FUNDS` / `MERGE` come before the quote.
@@ -451,9 +468,12 @@ rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
    `GATEWAY_SHIELDED_SEED`); every non-null output belongs to a registered
    user; deposits only from a registered wallet.
 5. Prove, send as a `direct` item, wait for the receipt, index its logs.
-6. A payment to another number texts them
-   `Got <amt> AUSD from <number> p=<pos> b=<blinding>` (alerts switch on,
-   `canText`, once per transaction through `alerts_sent`).
+6. A payment to another user texts them
+   `Got <amt> AUSD (private) p=<pos> b=<blinding>` (alerts switch on,
+   `canText`, once per transaction through `alerts_sent`). No sender: the
+   phone needs only `p` and `b`. A payment to a private address texts the
+   address's owner; their number is looked up internally and never reaches
+   the payer (`Sent … to ender1abcd...wxyz`).
 
 **HTTPS** (JWT like every other route; `network` defaults to `testnet`):
 
@@ -461,7 +481,7 @@ rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
 | --- | --- |
 | `POST /shielded/register {network, keys: {Ax, Ay, nk, viewSk}}` | decimal strings; `viewSk` is the 32 key bytes as a big-endian integer. Returns `{owner}`, the 64-byte packed shielded address in unpadded base64 (`protocol/sms.ts` `b64`). `eoa` = the number's linked wallet. Idempotent; other keys for the same number are `key-changed` (409), the same keys under another number `key-in-use` (409) |
 | `GET /shielded/notes?network=` | `{notes: [{pos, amount, blinding, spent}], root}`: the number's whole index, spent included (amount, blinding and root as decimal strings) |
-| `POST /shielded/quote {network, kind, to?, amount}` | `kind`: `pay` (to a number), `withdraw` (to a 0x address), `shield`, `merge` (amount ignored). Returns `{id, exp, fee, to?}`: `to` is the recipient's packed address (base64) for `pay`, the address for `withdraw`, absent otherwise |
+| `POST /shielded/quote {network, kind, to?, amount}` | `kind`: `pay` (to a number or an `ender1…` private address), `withdraw` (to a 0x address), `shield`, `merge` (amount ignored). Returns `{id, exp, fee, to?}`: `to` is the recipient's packed address (base64) for `pay`, the address for `withdraw`, absent otherwise |
 | `POST /shielded/submit {id, refs?, sig?, signature?}` | `refs` (tree positions) + `sig` (64-byte EdDSA, base64, padded or not) for pay / withdraw / merge; `signature` (0x, 65-byte EIP-3009) for shield. Returns `{tx, p?}` after the receipt (`p` = position of output 0; absent for a change-free withdrawal); `{tx, pending: true}` if the receipt didn't come within 30 s, and a repeated submit settles it |
 | `GET /shielded/address?network=&phone=` | `{owner}` of a registered number, so the app can pin a contact's key online; `NOUSER` (404) otherwise |
 
@@ -474,10 +494,11 @@ Errors are the usual `{error}` with the SMS codes: `NOUSER`, `FUNDS`,
 | In | Out |
 | --- | --- |
 | `PAY <+number>, <amount> AUSD` | `Q <id> exp=<unix> fee=0.01 to=<86-char shielded address>` |
+| `PAY <ender1… private address>, <amount> AUSD` (up to 139 characters) | `Q <id> exp=<unix> fee=0.01` (no `to=`: the phone already has the key) |
 | `PAY <0x address>, <amount> AUSD` (withdrawal) | `Q <id> exp=<unix> fee=0.01 to=0x<40>` |
 | `MERGE` | `Q <id> exp=<unix> fee=0.01` |
 | `SHIELD <amount> AUSD` | `Q <id> exp=<unix> fee=0.01` |
-| `SIG <id> <refs> <86-char signature>` | `Sent 20 AUSD to +91…. Tx 0xab…ef p=2` (no `p=` for a change-free withdrawal) |
+| `SIG <id> <refs> <86-char signature>` | `Sent 20 AUSD to +91…. Tx 0xab…ef p=2` (`to ender1abcd...wxyz` for a private address; no `p=` for a change-free withdrawal) |
 | `SIG <id> <88-char signature>` for a `SHIELD` quote | `Shielded 50 AUSD. Tx 0xab…ef p=0` |
 
 A public-shaped `SIG` is a deposit's if its id is the number's `SHIELD`

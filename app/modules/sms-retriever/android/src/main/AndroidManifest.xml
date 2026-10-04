@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Texts from the gateway's own numbers only (SmsInbox.allowed); everything else is dropped unread. -->
+  <uses-permission android:name="android.permission.RECEIVE_SMS" />
+  <application>
+    <!-- BROADCAST_SMS: only the system can deliver to it. Manifest-registered, so it runs while the app is closed. -->
+    <receiver
+      android:name="money.ender.smsretriever.SmsReceiver"
+      android:exported="true"
+      android:permission="android.permission.BROADCAST_SMS">
+      <intent-filter>
+        <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+      </intent-filter>
+    </receiver>
+  </application>
+</manifest>

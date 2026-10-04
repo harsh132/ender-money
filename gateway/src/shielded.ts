@@ -50,7 +50,9 @@ import {
   type ProvingKeys,
   type Recipient,
   type Tx,
+  unpackAddress,
 } from '../../protocol/shielded';
+import { decodePrivateAddress, encodePrivateAddress } from '../../protocol/recipient';
 import { b64, formatReply, isPhone, REF_MOD, SESSION_ID_ALPHABET, unb64, withRetrieverHash } from '../../protocol/sms';
 import { publicClient } from './chain';
 import { GatewayError } from './core';
@@ -118,6 +120,13 @@ export const usersFor = async (env: Env, network: NetworkName) => {
 
 const userRow = (env: Env, phone: string, network: NetworkName) =>
   env.DB.prepare('SELECT * FROM shielded_users WHERE phone = ? AND network = ?').bind(phone, network).first<UserRow>();
+
+/** The registered user a private address belongs to: owner key (unique per network) and encryption key must both match. */
+const userByAddress = async (env: Env, network: NetworkName, packed: Uint8Array) => {
+  const { ownerKey, encPk } = unpackAddress(packed);
+  const r = await env.DB.prepare('SELECT * FROM shielded_users WHERE network = ? AND owner_key = ?').bind(network, ownerKey.toString()).first<UserRow>();
+  return r && r.enc_pk === bytesToHex(encPk) ? r : null;
+};
 
 const userFor = async (env: Env, phone: string, network: NetworkName) => {
   const r = await userRow(env, phone, network);
@@ -281,7 +290,8 @@ type QuoteRow = {
   network: NetworkName;
   kind: ShieldedKind;
   to_phone: string | null;
-  to_address: Address | null;
+  /** withdraw: the 0x address; pay: the ender1 address, when paid to one. */
+  to_address: string | null;
   amount: string;
   fee: string;
   exp: number;
@@ -336,17 +346,21 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
   const fee = parseUnits(env.FEE_AUSD, AUSD_DECIMALS);
 
   let toPhone: string | null = null;
-  let toAddress: Address | null = null;
+  /** The 0x address of a withdrawal, or the ender1 address a payment was made to. */
+  let toAddress: string | null = null;
   let to: string | undefined;
   if (kind === 'pay') {
-    if (typeof req.to !== 'string' || !isPhone(req.to)) throw new GatewayError('bad-recipient');
-    const r = await userRow(env, req.to, network);
+    const packed = typeof req.to === 'string' ? decodePrivateAddress(req.to) : null;
+    if (typeof req.to !== 'string' || (!isPhone(req.to) && !packed)) throw new GatewayError('bad-recipient');
+    const r = packed ? await userByAddress(env, network, packed) : await userRow(env, req.to, network);
     if (!r) throw new GatewayError('NOUSER', 404);
-    toPhone = req.to;
+    // To a private address: its owner's number is used internally (the Got text) and never shown to the payer.
+    toPhone = r.phone;
+    if (packed) toAddress = encodePrivateAddress(packed);
     to = packedOwner(r);
   } else if (kind === 'withdraw') {
     if (typeof req.to !== 'string' || !isAddress(req.to)) throw new GatewayError('bad-recipient');
-    toAddress = req.to.toLowerCase() as Address;
+    toAddress = req.to.toLowerCase();
     to = toAddress;
   } else if (kind !== 'shield' && kind !== 'merge') throw new GatewayError('bad-request');
 
@@ -394,7 +408,8 @@ const resultOf = (q: QuoteRow): SubmitResult => ({
   ...(q.state !== 'sent' ? { pending: true as const } : {}),
   kind: q.kind,
   amount: formatUnits(BigInt(q.amount), AUSD_DECIMALS),
-  to: q.to_phone ?? q.to_address ?? q.phone,
+  // Paid to a private address: that address, never its owner's number.
+  to: q.to_address ?? q.to_phone ?? q.phone,
 });
 
 const firstLeaf = (network: NetworkName, logs: Log[]) => {
@@ -499,7 +514,7 @@ const transfer = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
     const s = settle(sum(ins), amount, fee);
     const change = { amount: s.change, to: user.me };
     const common = { me: user.me, nIns, inputs: ins, fee: s.fee, relayer: FEE_RECIPIENT, deadline: q.exp, domain };
-    if (q.kind === 'withdraw') return buildTx({ ...common, outputs: withdrawOutputs(change), extAmount: -amount, recipient: q.to_address! });
+    if (q.kind === 'withdraw') return buildTx({ ...common, outputs: withdrawOutputs(change), extAmount: -amount, recipient: q.to_address as Address });
     return buildTx({ ...common, outputs: [{ amount, to: recipient ?? user.me }, change] });
   };
   const r = resolveRefs(await eligibleNotes(env, q.phone, network, q.id), refs, amount + fee, build, (msg) => verifySig(sig, msg, user.keys));
@@ -513,7 +528,7 @@ const transfer = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
   const sent = await relay(env, q, data);
 
   if (q.kind === 'pay' && q.to_phone !== q.phone && sent.state === 'sent' && sent.p !== null) {
-    await gotAlert(env, q.to_phone!, sent.tx_hash!, { amount: formatUnits(amount, AUSD_DECIMALS), from: q.phone, p: sent.p, blinding: r.tx.outs[0]!.blinding }).catch((e) =>
+    await gotAlert(env, q.to_phone!, sent.tx_hash!, { amount: formatUnits(amount, AUSD_DECIMALS), p: sent.p, blinding: r.tx.outs[0]!.blinding }).catch((e) =>
       console.error('got alert failed', e instanceof Error ? e.message : e),
     );
   }
@@ -571,7 +586,7 @@ const deposit = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
 };
 
 /** `Got …` to the recipient of a private payment the gateway relayed, if they take texts (one per tx, alerts_sent). */
-const gotAlert = async (env: Env, to: string, txHash: Hex, got: { amount: string; from: string; p: number; blinding: bigint }) => {
+const gotAlert = async (env: Env, to: string, txHash: Hex, got: { amount: string; p: number; blinding: bigint }) => {
   const link = await env.DB.prepare('SELECT alerts FROM links WHERE phone = ?').bind(to).first<{ alerts: number }>();
   if (!link?.alerts || !canText(to)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to).run();

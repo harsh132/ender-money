@@ -25,6 +25,8 @@ export type Tx = {
   counterparty?: Address;
   /** The number paid, for a private payment (to retry it). */
   phone?: string;
+  /** The private address (ender1…) paid, for a payment to one (to retry it). */
+  to?: string;
   /** Through the private balance (shielded pool). */
   private?: true;
   /** Moved from the public to the private balance. */
@@ -38,7 +40,8 @@ export type Tx = {
   deadline?: number;
 };
 
-export type Recipient = { address: Address; phone?: string; name?: string; lastUsed: number };
+/** address: a 0x address (lowercase), or a private address (ender1…) paid directly. */
+export type Recipient = { address: string; phone?: string; name?: string; lastUsed: number };
 
 export type Wallet = {
   phone: string;
@@ -71,6 +74,8 @@ export type State = {
   awaiting: Partial<Record<NetworkName, Awaiting[]>>;
   /** phone -> shielded address (base64) seen on the first private payment; a different one later is refused. */
   shieldedPins: Record<string, string>;
+  /** Asked once for RECEIVE_SMS (Activity), whatever the answer. */
+  smsAsked?: boolean;
 };
 
 const initial: State = {
@@ -161,12 +166,12 @@ export const upsertTx = (tx: Partial<Tx> & Pick<Tx, 'id'>) =>
 
 export const rememberRecipient = (r: Omit<Recipient, 'lastUsed'>) =>
   setState((s) => {
-    const address = r.address.toLowerCase() as Address;
+    const address = r.address.toLowerCase();
     const prev = s.recents.find((x) => x.address === address);
     const merged: Recipient = { ...prev, ...r, address, lastUsed: Date.now() };
     return {
       recents: [merged, ...s.recents.filter((x) => x.address !== address)].slice(0, 20),
-      pins: r.phone && !s.pins[r.phone] ? { ...s.pins, [r.phone]: address } : s.pins,
+      pins: r.phone && !s.pins[r.phone] ? { ...s.pins, [r.phone]: address as Address } : s.pins,
     };
   });
 

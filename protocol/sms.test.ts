@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test';
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   fitsOneSegment,
-  formatAlert,
   formatCommand,
   formatOtp,
   formatReply,
@@ -68,15 +67,28 @@ test('replies round-trip and fit one segment, even at their longest', () => {
 });
 
 test('alerts and OTPs fit, with the Retriever hash appended', () => {
-  expect(fitsOneSegment(withRetrieverHash(formatAlert('99999.999999', '0x1234...cd', '99999.999999'), 'FA+9qCX9VSu'))).toBe(true);
+  const alert: Reply = { kind: 'received', amount: '99999.999999', from: address, balance: '99999.999999', tx: '0xab12...ef', test: true };
+  const text = withRetrieverHash(formatReply(alert), 'FA+9qCX9VSu');
+  expect(text).toBe(`[Test] Received 99999.999999 AUSD from ${address}. Balance 99999.999999 AUSD. Tx 0xab12...ef${'\n'}FA+9qCX9VSu`);
+  expect(fitsOneSegment(text)).toBe(true);
+  expect(parseReply(text)).toEqual(alert); // the hash line is ignored
+  expect(parseReply(formatReply({ ...alert, from: address.toLowerCase() as typeof address, test: false }))).toEqual({ ...alert, test: false }); // EIP-55 out
   expect(fitsOneSegment(withRetrieverHash(formatOtp('481926'), 'FA+9qCX9VSu'))).toBe(true);
+});
+
+test('Got carries no sender; the older "from" form still parses', () => {
+  const got: Reply = { kind: 'got', amount: '20', p: 2, blinding: 123456789n };
+  const text = formatReply(got);
+  expect(text).toBe('Got 20 AUSD (private) p=2 b=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAdbzRU');
+  expect(parseReply(`${text}\nFA+9qCX9VSu`)).toEqual(got);
+  expect(parseReply(text.replace('(private)', 'from +919800000001'))).toEqual(got);
 });
 
 test('non-GSM characters are refused, extended ones cost two', () => {
   expect(septets('Sent 10…')).toBeNull();
   expect(septets('₹10')).toBeNull();
   expect(septets('{}')).toBe(4);
-  expect(() => formatAlert('1', '0x12…cd', '1')).toThrow();
+  expect(() => formatReply({ kind: 'sent', amount: '1', to: '0x12…cd', tx: '0xab' })).toThrow();
 });
 
 test('sender numbers normalise to E.164; non-personal senders are refused', () => {

@@ -1,7 +1,9 @@
 import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { Share, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, Share, View } from 'react-native';
+import { encodePrivateAddress } from '../../../protocol/recipient';
+import { unb64 } from '../../../protocol/sms';
 import { MAX_FEE } from '../lib/config';
 import { phoneDisplay } from '../lib/format';
 import { useStore } from '../lib/store';
@@ -11,16 +13,29 @@ import { Copy, Share as ShareIcon } from '../ui/icons';
 import { Button, T, TestnetPill } from '../ui/kit';
 import { QR } from '../ui/QR';
 
-/** Sheet: QR of the plain address (any wallet can read it), plus copy and share. */
+type Mode = 'public' | 'private';
+
+/**
+ * Sheet: QR of the plain address (any wallet can read it), plus copy and share. On a network with a pool, a
+ * Public / Private toggle shows the private address (ender1…) too, which takes private payments only.
+ */
 export default function Receive() {
   const wallet = useStore((s) => s.wallet);
   const network = useStore((s) => s.network);
+  const owner = useStore((s) => (isRegistered(s.network, s) ? s.shielded?.owner : undefined));
   const canShield = useStore((s) => isRegistered(s.network, s) && Number(s.account[s.network]?.balance ?? 0) > Number(MAX_FEE));
+  const [mode, setMode] = useState<Mode>('public');
   const [copied, setCopied] = useState(false);
+  const privateAddress = useMemo(() => {
+    const packed = owner ? unb64(owner.replace(/=+$/, ''), 64) : null;
+    return packed ? encodePrivateAddress(packed) : undefined;
+  }, [owner]);
   if (!wallet) return null;
 
+  const priv = mode === 'private' && !!privateAddress;
+  const shown = (priv && privateAddress) || wallet.address;
   const copy = async () => {
-    await Clipboard.setStringAsync(wallet.address);
+    await Clipboard.setStringAsync(shown);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -32,16 +47,35 @@ export default function Receive() {
         <T v="title" style={{ flex: 1 }}>Receive</T>
         {network === 'testnet' ? <TestnetPill /> : null}
       </View>
-      <T v="meta" style={{ marginTop: 6 }}>Your AUSD address on Monad{network === 'testnet' ? ' testnet' : ''}</T>
-      <View style={{ alignSelf: 'center', marginTop: 28, marginBottom: 20, padding: 22, borderRadius: 28, backgroundColor: c.fg }}>
-        <QR value={wallet.address} size={216} />
+      {privateAddress ? (
+        <View style={{ flexDirection: 'row', alignSelf: 'flex-start', marginTop: 14, backgroundColor: c.surface, borderRadius: 999, borderWidth: 1, borderColor: c.line, padding: 4 }}>
+          {(['public', 'private'] as const).map((m) => (
+            <Pressable
+              key={m}
+              accessibilityRole="button"
+              accessibilityState={{ selected: mode === m }}
+              onPress={() => setMode(m)}
+              style={{ height: 40, paddingHorizontal: 18, borderRadius: 999, justifyContent: 'center', backgroundColor: mode === m ? c.surface2 : 'transparent' }}
+            >
+              <T style={{ fontFamily: f.uiSemi, fontSize: 15, color: mode === m ? c.accent : c.fg2 }}>{m === 'public' ? 'Public' : 'Private'}</T>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      <T v="meta" style={{ marginTop: 10 }}>
+        {priv ? 'Your private address. Takes private payments from Ender only' : `Your AUSD address on Monad${network === 'testnet' ? ' testnet' : ''}`}
+      </T>
+      <View style={{ alignSelf: 'center', marginTop: 24, marginBottom: 18, padding: 22, borderRadius: 28, backgroundColor: c.fg }}>
+        <QR value={shown} size={216} />
       </View>
-      <T style={{ fontFamily: f.mono, fontSize: 16, lineHeight: 24, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
-        {wallet.address}
+      <T style={{ fontFamily: f.mono, fontSize: priv ? 13 : 16, lineHeight: priv ? 19 : 24, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
+        {shown}
       </T>
-      <T v="meta" style={{ textAlign: 'center', marginTop: 12 }}>
-        Or just your number: {phoneDisplay(wallet.phone)}. We'll text you when money arrives.
-      </T>
+      {priv ? null : (
+        <T v="meta" style={{ textAlign: 'center', marginTop: 12 }}>
+          Or just your number: {phoneDisplay(wallet.phone)}. We'll text you when money arrives.
+        </T>
+      )}
       <View style={{ flex: 1, minHeight: 24 }} />
       {canShield ? (
         <Button
@@ -58,7 +92,13 @@ export default function Receive() {
         <Button
           title="Share"
           icon={<ShareIcon size={20} color={c.accentInk} />}
-          onPress={() => Share.share({ message: `Pay me on Ender: ${phoneDisplay(wallet.phone)}\nOr send AUSD on Monad to ${wallet.address}` })}
+          onPress={() =>
+            Share.share({
+              message: priv
+                ? `Pay me privately on Ender: ${shown}`
+                : `Pay me on Ender: ${phoneDisplay(wallet.phone)}\nOr send AUSD on Monad to ${wallet.address}`,
+            })
+          }
           style={{ flex: 1 }}
         />
       </View>

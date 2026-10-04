@@ -4,12 +4,12 @@ import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { parseCode } from '../lib/codes';
+import { encodePrivateAddress, parseRecipient } from '../../../protocol/recipient';
 import { c, f } from '../lib/theme';
 import { Close, Torch } from '../ui/icons';
 import { Banner, Button, T } from '../ui/kit';
 
-/** Full-screen scanner. Reads an Ender code or any wallet-address QR, then opens Send. */
+/** Full-screen scanner. Reads a wallet address, ethereum: or ender: link, private address or number, then opens Send. */
 export default function Scan() {
   const [permission, request] = useCameraPermissions();
   const [torch, setTorch] = useState(false);
@@ -17,10 +17,11 @@ export default function Scan() {
   const handled = useRef(false);
 
   const go = (raw: string) => {
-    const code = parseCode(raw);
-    if (!code) return setError("That isn't a wallet address or Ender code.");
+    const r = parseRecipient(raw);
+    if (!r) return setError("That isn't a wallet address, private address or Ender code.");
     handled.current = true;
-    router.dismissTo({ pathname: '/send', params: code.amount ? { to: code.to, amount: code.amount } : { to: code.to } });
+    const to = r.kind === 'address' ? r.address : r.kind === 'phone' ? r.phone : encodePrivateAddress(r.packed);
+    router.dismissTo({ pathname: '/send', params: r.amount ? { to, amount: r.amount } : { to } });
   };
 
   const paste = async () => go(await Clipboard.getStringAsync());

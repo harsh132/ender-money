@@ -23,6 +23,7 @@ import {
   type Note,
   type User,
 } from '../../../protocol/shielded';
+import { decodePrivateAddress } from '../../../protocol/recipient';
 import { b64, type Reply } from '../../../protocol/sms';
 import { MAX_FEE } from './config';
 
@@ -151,6 +152,7 @@ export const chooseRoute = ({
 
 // ---------------------------------------------------------------- quotes
 
+/** to: a 0x address (withdraw), the number or the private address (ender1…) paid (pay). */
 export type PrivateDraft = { kind: 'pay' | 'withdraw' | 'shield'; amount: string; to?: string; phone?: string };
 /** to: the recipient's 64-byte shielded address (pay), a 0x address (withdraw), none (shield). */
 export type ShieldedQuote = { id: string; exp: number; fee: string; to?: Address | Uint8Array };
@@ -166,6 +168,9 @@ export const checkShieldedQuote = (d: PrivateDraft, q: ShieldedQuote, pinned?: s
   if (d.kind === 'shield') return q.to === undefined ? undefined : mismatch;
   if (d.kind === 'withdraw') return typeof q.to === 'string' && q.to.toLowerCase() === d.to?.toLowerCase() ? undefined : mismatch;
   if (!(q.to instanceof Uint8Array) || q.to.length !== 64) return mismatch;
+  // Paid to a private address: the quote must name exactly that key.
+  const named = d.to ? decodePrivateAddress(d.to) : null;
+  if (named && b64(named) !== b64(q.to)) return mismatch;
   if (pinned && pinned !== b64(q.to))
     return { code: 'KEY CHANGED', message: "This contact's private address changed since you last paid them. Nothing was sent." };
   return undefined;

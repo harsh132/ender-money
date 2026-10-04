@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { bytesToBigInt, bytesToHex, type Address } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { LEVELS, NULL_OWNER, ZERO_VALUE, buildTx, newUser, owner, packAddress, poseidon, provingKeys, sign, verifySig, type Note } from '../../protocol/shielded';
+import { encodePrivateAddress } from '../../protocol/recipient';
 import { b64, encodeRefs, REF_MOD, signatureToBase64 } from '../../protocol/sms';
 import { d1, mockWorkers, relayStub, type Sent } from './test-env';
 
@@ -189,6 +190,18 @@ describe('register and SMS routing', () => {
 
   test('PAY to a number without a shielded key', async () => {
     expect(await sms(ALICE, `PAY ${BOB}, 1 AUSD`)).toBe('ERR NOUSER');
+  });
+
+  test('PAY to a private address nobody registered, or with another encryption key', async () => {
+    expect(await sms(ALICE, `PAY ${encodePrivateAddress(packAddress(owner(provingKeys(newUser()))))}, 1 AUSD`)).toBe('ERR NOUSER');
+    const swapped = packAddress({ ownerKey: owner(pk).ownerKey, encPk: new Uint8Array(32).fill(9) });
+    expect(await sms(ALICE, `PAY ${encodePrivateAddress(swapped)}, 1 AUSD`)).toBe('ERR NOUSER');
+    expect(await sms(ALICE, `PAY ${encodePrivateAddress(swapped).slice(0, -1)}q, 1 AUSD`)).toBe('ERR bad-command'); // typo: not a command
+  });
+
+  test('every reply ends with the SMS Retriever hash', async () => {
+    const withHash = { ...env, SMS_RETRIEVER_HASH: 'FA+9qCX9VSu' } as Env;
+    expect((await handleInbound(withHash, { from: ALICE, body: `PAY ${BOB}, 1 AUSD` }))?.body).toBe('ERR NOUSER\nFA+9qCX9VSu');
   });
 
   test('PAY / MERGE / SHIELD from a number without a shielded key', async () => {

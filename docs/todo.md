@@ -11,8 +11,6 @@ Deliberately deferred. Newest first.
     settle a waiting private payment. Add the quote id or a short tag.
   - `registerShielded` swallows `key-changed`/`key-in-use` silently (see the
     re-link item below).
-  - Replies carry the SMS Retriever hash, but the app only listens on the
-    sign-in code screen; `Got` and quotes still arrive by clipboard or paste.
   - Nothing cleans up old `shielded_quotes` rows.
   - The sender low-balance warning isn't built.
 - **New passkey, same number.** The gateway refuses a re-registration with

@@ -9,7 +9,7 @@
 import { formatUnits, type Address, type Hex } from 'viem';
 import { erc20Abi } from '../../protocol/calibur';
 import { AUSD_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../protocol/networks';
-import { formatAlert, shortHex } from '../../protocol/sms';
+import { formatReply, shortHex, withRetrieverHash } from '../../protocol/sms';
 import { publicClient } from './chain';
 import { GatewayError } from './core';
 import type { Env } from './env';
@@ -56,19 +56,28 @@ export const alertAll = async (env: Env, { network, ours, links }: Awaited<Retur
   for (const x of ours) {
     const recipient = links.get(x.to);
     if (!recipient?.alerts || t - x.at > ALERT_MAX_AGE) continue;
-    await alert(env, network, recipient, x.txHash, x.from, x.value, links).catch((e) => console.error('alert failed', e instanceof Error ? e.message : e));
+    await alert(env, network, recipient, x.txHash, x.from, x.value).catch((e) => console.error('alert failed', e instanceof Error ? e.message : e));
   }
 };
 
-/** One alert per transaction per number; alerts_sent makes a repeated delivery harmless. */
-const alert = async (env: Env, network: NetworkName, to: LinkRow, txHash: Hex, from: Address, value: bigint, links: Map<string, LinkRow>) => {
+/**
+ * One alert per transaction per number; alerts_sent makes a repeated delivery harmless. The sender is shown by
+ * full address, never by number (even an Ender user's): a text must not tell one user another's number.
+ */
+const alert = async (env: Env, network: NetworkName, to: LinkRow, txHash: Hex, from: Address, value: bigint) => {
   if (!canText(to.phone)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to.phone).run();
   if (fresh.meta.changes !== 1) return;
   const balance = await publicClient(env, network).readContract({ address: NETWORKS[network].ausd, abi: erc20Abi, functionName: 'balanceOf', args: [to.address as Address] });
-  const sender = links.get(from.toLowerCase())?.phone ?? shortHex(from);
-  const text = formatAlert(formatUnits(value, AUSD_DECIMALS), sender, formatUnits(balance, AUSD_DECIMALS));
-  await sendSms(env, to.phone, network === 'testnet' ? `[Test] ${text}` : text);
+  const text = formatReply({
+    kind: 'received',
+    amount: formatUnits(value, AUSD_DECIMALS),
+    from,
+    balance: formatUnits(balance, AUSD_DECIMALS),
+    tx: shortHex(txHash),
+    test: network === 'testnet',
+  });
+  await sendSms(env, to.phone, withRetrieverHash(text, env.SMS_RETRIEVER_HASH));
 };
 
 // ---------------------------------------------------------------- GET /activity

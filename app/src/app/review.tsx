@@ -6,6 +6,7 @@ import { ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Address, Hex } from 'viem';
 import { NETWORKS } from '../../../protocol/networks';
+import { decodePrivateAddress, isPrivateAddress } from '../../../protocol/recipient';
 import { unb64, type Command, type Reply, type ShieldedCommand } from '../../../protocol/sms';
 import { api, ApiError, OfflineError } from '../lib/api';
 import { MAX_FEE } from '../lib/config';
@@ -68,10 +69,14 @@ export default function Review() {
     ? { network, to: wallet.address, amount: p.amount, deliver }
     : { network, to: p.to, toAddress: p.toAddress as Address | undefined, phone: p.phone, label: p.label, amount: p.amount, deliver };
   const kind: PrivateDraft['kind'] = shield ? 'shield' : draft.toAddress ? 'withdraw' : 'pay';
-  const pdraft: PrivateDraft = { kind, amount: draft.amount, to: draft.toAddress ?? draft.phone, phone: draft.phone };
+  /** To a private address (ender1…): private only, never public. */
+  const privAddr = !shield && isPrivateAddress(draft.to);
+  const pdraft: PrivateDraft = { kind, amount: draft.amount, to: draft.toAddress ?? draft.phone ?? draft.to, phone: draft.phone };
   // Private or public is decided once, on arrival (it may ask the gateway whether the number takes private payments).
   const [route, setRoute] = useState<'private' | 'public' | undefined>(shield ? 'private' : undefined);
   const priv = route === 'private';
+  /** A private address the private balance can't pay (or no private balance on this network yet). */
+  const blocked = privAddr && route === 'public';
   const [pq, setPq] = useState<PQuote>();
 
   const [phase, setPhase] = useState<Phase>({ k: 'review' });
@@ -97,7 +102,10 @@ export default function Review() {
   const mark = (step: Step) => setTimes((t) => ({ ...t, [step]: stamp() }));
   const recipientAddress = (quote?.to ?? draft.toAddress)?.toLowerCase();
   const isRecent =
-    shield || (!!recipientAddress && recents.some((r) => r.address === recipientAddress)) || (priv && !!draft.phone && recents.some((r) => r.phone === draft.phone));
+    shield ||
+    (!!recipientAddress && recents.some((r) => r.address === recipientAddress)) ||
+    (priv && !!draft.phone && recents.some((r) => r.phone === draft.phone)) ||
+    (privAddr && recents.some((r) => r.address === draft.to));
   const quick = quickSend.covers(Number(draft.amount), isRecent);
   const name = draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : short(draft.to));
 
@@ -253,7 +261,8 @@ export default function Review() {
 
   const failPrivate = (step: Step, e: unknown) => {
     const code = e instanceof ApiError ? e.code : typeof e === 'string' ? e : undefined;
-    if (!shield && code && PUBLIC_INSTEAD.has(code)) setRoute('public');
+    if (!shield && !privAddr && code && PUBLIC_INSTEAD.has(code)) setRoute('public');
+    if (privAddr && code === 'NOUSER') return fail(step, new TransferError(code, "That private address isn't on Ender (or isn't on this network). Nothing was sent."));
     fail(step, e);
   };
 
@@ -280,7 +289,9 @@ export default function Review() {
     }
   };
 
-  const afterPrivateQuote = (q: PQuote) => {
+  const afterPrivateQuote = (quoted: PQuote) => {
+    // A PAY to a private address comes back by text without to=: the key is the one the user gave.
+    const q = privAddr && quoted.to === undefined ? { ...quoted, to: decodePrivateAddress(draft.to) ?? undefined } : quoted;
     setPq(q);
     const refused = checkShieldedQuote(pdraft, q, draft.phone ? getState().shieldedPins[draft.phone] : undefined);
     if (refused) return fail('quote', new TransferError(refused.code, refused.message));
@@ -313,7 +324,7 @@ export default function Review() {
     mark('approve');
     holdNotes(network, signed.awaiting);
     const address = draft.toAddress ?? (draft.phone ? getState().pins[draft.phone] : undefined);
-    if (!shield && address) rememberRecipient({ address, phone: draft.phone, name: draft.label });
+    if (!shield && (address || privAddr)) rememberRecipient({ address: address ?? draft.to, phone: draft.phone, name: draft.label });
     upsertTx({
       id: q.id,
       network,
@@ -322,6 +333,7 @@ export default function Review() {
       fee: q.fee,
       counterparty: shield ? NETWORKS[network].pool : address,
       phone: draft.phone,
+      ...(privAddr ? { to: draft.to } : {}),
       label: shield ? 'Private balance' : (draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : undefined)),
       status: 'sending',
       at: stamp(),
@@ -404,7 +416,8 @@ export default function Review() {
     setPasteNote(acceptReply(text) ? undefined : "That doesn't look like a reply from Ender. Copy the whole text and try again.");
   };
 
-  const begin = () => void (priv ? startPrivate() : start());
+  // Never public to a private address, whatever the route says.
+  const begin = () => void (priv ? startPrivate() : privAddr ? undefined : start());
 
   const retry = () => {
     if (phase.k !== 'failed') return;
@@ -469,6 +482,7 @@ export default function Review() {
               <KV k="To" v={name} />
               {draft.label && draft.phone ? <KV k="Number" v={phoneDisplay(draft.phone)} /> : null}
               {recipientAddress ? <KV k="Wallet" v={short(recipientAddress)} mono /> : null}
+              {privAddr && draft.label ? <KV k="Address" v={short(draft.to)} mono /> : null}
               {priv ? (
                 <KV
                   k="Payment"
@@ -487,7 +501,13 @@ export default function Review() {
           <KV k="Total" v={`$${usd(total(draft.amount, fee))}`} last={deliver !== 'CTK'} />
           {deliver === 'CTK' ? <KV k="They get" v={quote?.out ? `${Number(quote.out).toLocaleString('en-US', { maximumFractionDigits: 2 })} CTK` : 'CTK, quoted next'} last /> : null}
         </Card>
-        {hasPool(network) && route === 'public' ? (
+        {blocked ? (
+          <View style={{ marginTop: 12 }}>
+            <Banner icon={<Shield size={20} color={c.warning} />} tone="warning">
+              Private addresses take private payments only, and your private balance doesn't cover ${usd(total(draft.amount, MAX_FEE))} with the fee. Make private first.
+            </Banner>
+          </View>
+        ) : hasPool(network) && route === 'public' ? (
           <T v="meta" style={{ marginTop: 10, marginHorizontal: 4 }}>Public payment: amount and wallets are visible on Monad.</T>
         ) : null}
 
@@ -518,7 +538,12 @@ export default function Review() {
       </ScrollView>
 
       <View style={{ paddingHorizontal: 20, paddingBottom: 12, gap: 4 }}>
-        {phase.k === 'review' || busy ? (
+        {blocked && phase.k === 'review' ? (
+          <>
+            <Button title="Make private" onPress={() => router.replace({ pathname: '/send', params: { shield: '1' } })} />
+            <Button title="Cancel" kind="text" onPress={() => router.back()} />
+          </>
+        ) : phase.k === 'review' || busy ? (
           <Button title={shield ? (quick ? 'Make private with Quick send' : 'Approve & make private') : quick ? 'Send with Quick send' : 'Approve & send'} onPress={begin} busy={busy || route === undefined} />
         ) : null}
         {phase.k === 'wait-quote' || phase.k === 'wait-sent' ? (

@@ -26,6 +26,7 @@ export default function TxDetail() {
       <Card style={{ marginTop: 24 }}>
         <KV k={incoming ? 'From' : 'To'} v={who(tx)} />
         {tx.label && tx.counterparty ? <KV k="Wallet" v={short(tx.counterparty)} mono /> : null}
+        {tx.label && tx.to ? <KV k="Address" v={short(tx.to)} mono /> : null}
         {tx.private ? <KV k="Privacy" v="Private" /> : null}
         {tx.fee ? <KV k="Fee" v={`$${usd(tx.fee)}`} /> : null}
         <KV k="When" v={`${dayLabel(tx.at)}, ${time(tx.at)}`} />
@@ -35,7 +36,7 @@ export default function TxDetail() {
       </Card>
       <View style={{ flex: 1, minHeight: 24 }} />
       <View style={{ gap: 4, marginBottom: 24 }}>
-        {dead && !incoming && (tx.shield || tx.phone || tx.counterparty) ? (
+        {dead && !incoming && (tx.shield || tx.phone || tx.to || tx.counterparty) ? (
           <Button
             title="Try again"
             onPress={() => {
@@ -46,6 +47,8 @@ export default function TxDetail() {
                   ? { shield: '1', amount: tx.amount }
                   : tx.phone
                     ? { to: tx.phone, phone: tx.phone, amount: tx.amount, ...(tx.label ? { label: tx.label } : {}) }
+                    : tx.to
+                      ? { to: tx.to, amount: tx.amount, ...(tx.label ? { label: tx.label } : {}) }
                     : { to: tx.counterparty!, toAddress: tx.counterparty!, amount: tx.amount, ...(tx.label ? { label: tx.label } : {}) },
               });
             }}

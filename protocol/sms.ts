@@ -5,12 +5,20 @@
  * Gateway → app: `OK …`, `Q …`, `Sent …`, `ERR …`, plus alerts and OTPs.
  *
  * Private payments (shielded pool, testnet only; see protocol/shielded.ts):
- *   `SEND` is always public. A private payment is `PAY <+number|0x…>, <amount> AUSD`
- *   (to a number: a shielded transfer; to an address: a withdrawal from the pool).
- *   `SHIELD <amount> AUSD` deposits from the user's own account; `MERGE` folds
- *   many notes into one. Replies: `Q <id> exp=… fee=…[ to=…]` (no `n=`, which
- *   is how it differs from the public quote), `Sent … p=<pos>`,
- *   `Shielded <amt> AUSD. Tx … p=<pos>`, `Got <amt> AUSD from <who> p=<pos> b=<blinding>`.
+ *   `SEND` is always public. A private payment is `PAY <+number|ender1…|0x…>, <amount> AUSD`
+ *   (to a number or a private address: a shielded transfer; to a 0x address: a
+ *   withdrawal from the pool). `SHIELD <amount> AUSD` deposits from the user's
+ *   own account; `MERGE` folds many notes into one. Replies:
+ *   `Q <id> exp=… fee=…[ to=…]` (no `n=`, which is how it differs from the
+ *   public quote; `to=` is the recipient's packed address for a PAY to a number,
+ *   the 0x address for a withdrawal, and absent for SHIELD, MERGE and a PAY to
+ *   an ender1 address, whose key the phone already has), `Sent … p=<pos>`,
+ *   `Shielded <amt> AUSD. Tx … p=<pos>`, `Got <amt> AUSD (private) p=<pos> b=<blinding>`
+ *   (no sender: the gateway never tells one user another's number).
+ *
+ * Alerts: `[Test] Received <amt> AUSD from 0x<EIP-55>. Balance <amt> AUSD. Tx 0x1234...ef`
+ * (`[Test] ` on testnet only). Every text the gateway sends ends with the SMS
+ * Retriever hash on its own line; parseReply reads the first line only.
  *   The private `SIG <id> <refs> <signature>` has three fields after `SIG`, the
  *   public one two. A deposit's SIG has the public shape (a 65-byte EIP-3009 signature).
  *
@@ -19,7 +27,10 @@
  * cuts the segment to 70 characters, so formatters only ever emit ASCII and
  * `septets` refuses anything else.
  */
-import { bytesToBigInt, bytesToHex, hexToBytes, isAddress, numberToBytes, type Address, type Hex } from 'viem';
+import { bytesToBigInt, bytesToHex, getAddress, hexToBytes, isAddress, numberToBytes, type Address, type Hex } from 'viem';
+import { isPhone, isPrivateAddress } from './recipient';
+
+export { isPhone, normalizePhone } from './recipient';
 
 export type NetworkCode = 'mainnet' | 'testnet';
 export type Deliver = 'AUSD' | 'CTK';
@@ -46,7 +57,9 @@ export type Reply =
   /** to: a 64-byte shielded address (transfer), a 0x address (withdrawal), or absent (deposit, answering SHIELD). */
   | { kind: 'shieldedQuote'; id: string; expires: number; fee: string; to?: Address | Uint8Array }
   | { kind: 'shielded'; amount: string; tx: string; p: number }
-  | { kind: 'got'; amount: string; from: string; p: number; blinding: bigint };
+  | { kind: 'got'; amount: string; p: number; blinding: bigint }
+  /** A public incoming transfer. from: EIP-55; tx: shortHex of the hash (dedupes against the online history). */
+  | { kind: 'received'; amount: string; from: Address; balance: string; tx: string; test: boolean };
 
 export const SEGMENT_SEPTETS = 160;
 
@@ -76,24 +89,6 @@ const oneSegment = (text: string) => {
   return text;
 };
 
-export const isPhone = (s: string) => /^\+[1-9]\d{7,14}$/.test(s);
-
-/**
- * A sender number as a carrier or the relay phone reports it, in E.164, or null
- * for anything that isn't a personal number (alphanumeric senders like
- * "VM-AIRTEL", short codes). Bare national numbers get the default country.
- */
-export const normalizePhone = (raw: string, defaultCountry = '91'): string | null => {
-  const s = raw.replace(/[\s\-()]/g, '');
-  let e164: string;
-  if (s.startsWith('+')) e164 = s;
-  else if (s.startsWith('00')) e164 = `+${s.slice(2)}`;
-  else if (/^0\d{10}$/.test(s)) e164 = `+${defaultCountry}${s.slice(1)}`;
-  else if (/^\d{10}$/.test(s)) e164 = `+${defaultCountry}${s}`;
-  else if (s.startsWith(defaultCountry) && s.length === defaultCountry.length + 10) e164 = `+${s}`;
-  else return null;
-  return isPhone(e164) ? e164 : null;
-};
 /** Session ids: 4 chars, Crockford-ish base32 without look-alikes (no 0/1/I/L/O/U). */
 export const SESSION_ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
 const isSessionId = (s: string) => /^[23456789ABCDEFGHJKMNPQRSTVWXYZ]{4}$/.test(s);
@@ -186,8 +181,8 @@ export const parseShieldedCommand = (raw: string): ShieldedCommand | null => {
     case 'PAY': {
       const m = /^(\S+), ?(\S+) AUSD$/i.exec(rest.join(' '));
       if (!m) return null;
-      const to = isAddress(m[1]!) ? m[1]!.toLowerCase() : m[1]!;
-      if ((!isAddress(to) && !isPhone(to)) || !isAmount(m[2]!)) return null;
+      const to = isAddress(m[1]!) || isPrivateAddress(m[1]!) ? m[1]!.toLowerCase() : m[1]!;
+      if ((!isAddress(to) && !isPhone(to) && !isPrivateAddress(to)) || !isAmount(m[2]!)) return null;
       return { kind: 'pay', to, amount: m[2]! };
     }
     case 'SHIELD': {
@@ -242,16 +237,25 @@ export const formatReply = (r: Reply): string => {
     case 'shielded':
       return oneSegment(`Shielded ${r.amount} AUSD. Tx ${r.tx} p=${r.p}`);
     case 'got':
-      return oneSegment(`Got ${r.amount} AUSD from ${r.from} p=${r.p} b=${b64(numberToBytes(r.blinding, { size: 32 }))}`);
+      return oneSegment(`Got ${r.amount} AUSD (private) p=${r.p} b=${b64(numberToBytes(r.blinding, { size: 32 }))}`);
+    case 'received':
+      return oneSegment(`${r.test ? '[Test] ' : ''}Received ${r.amount} AUSD from ${getAddress(r.from)}. Balance ${r.balance} AUSD. Tx ${r.tx}`);
   }
 };
 
 const fields = (parts: string[]) => Object.fromEntries(parts.map((p) => p.split('=', 2) as [string, string]));
 
+/** One reply, from its first line (the SMS Retriever hash follows on the next). */
 export const parseReply = (raw: string): Reply | null => {
-  const text = raw.trim();
+  const text = raw.trim().split(/\r?\n/)[0]!.trim();
   const parts = text.split(/\s+/);
   switch (parts[0]) {
+    case '[Test]':
+    case 'Received': {
+      const m = /^(\[Test\] )?Received (\d+(?:\.\d{1,6})?) AUSD from (0x[0-9a-fA-F]{40})\. Balance (\d+(?:\.\d{1,6})?) AUSD\. Tx (0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2})$/.exec(text);
+      if (!m) return null;
+      return { kind: 'received', amount: m[2]!, from: getAddress(m[3]!), balance: m[4]!, tx: m[5]!.toLowerCase(), test: !!m[1] };
+    }
     case 'OK': {
       const f = fields(parts.slice(1));
       if (f.n === undefined || f.dlg === undefined || f.AUSD === undefined) return null;
@@ -281,9 +285,10 @@ export const parseReply = (raw: string): Reply | null => {
       return m ? { kind: 'shielded', amount: m[1]!, tx: m[2]!, p: Number(m[3]) } : null;
     }
     case 'Got': {
-      const m = /^Got (\d+(?:\.\d{1,6})?) AUSD from (\S+) p=(\d{1,8}) b=([A-Za-z0-9+/]{43})$/.exec(text);
-      const b = m && unb64(m[4]!, 32);
-      return m && b ? { kind: 'got', amount: m[1]!, from: m[2]!, p: Number(m[3]), blinding: bytesToBigInt(b) } : null;
+      // `from <who>`: the older format (and the spike's); the sender is dropped.
+      const m = /^Got (\d+(?:\.\d{1,6})?) AUSD (?:\(private\)|from \S+) p=(\d{1,8}) b=([A-Za-z0-9+/]{43})$/.exec(text);
+      const b = m && unb64(m[3]!, 32);
+      return m && b ? { kind: 'got', amount: m[1]!, p: Number(m[2]), blinding: bytesToBigInt(b) } : null;
     }
     case 'ERR':
       return parts.length === 3
@@ -297,9 +302,6 @@ export const parseReply = (raw: string): Reply | null => {
 };
 
 // ---------- gateway → anyone
-
-export const formatAlert = (amount: string, from: string, balance: string) =>
-  oneSegment(`Received ${amount} AUSD from ${from}. Balance ${balance} AUSD.`);
 
 export const formatOtp = (code: string) => oneSegment(`Ender code: ${code}. Don't share it.`);
 

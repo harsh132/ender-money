@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { hkdfSync } from 'node:crypto';
 import { parseUnits } from 'viem';
 import { buildTx, newUser, owner, packAddress, provingKeys, shieldedKeysFromSeed, unpackAddress, verifySig } from '../../../protocol/shielded';
+import { encodePrivateAddress } from '../../../protocol/recipient';
 import { b64, formatReply, parseReply, type Reply } from '../../../protocol/sms';
 import {
   applyReply,
@@ -68,7 +69,7 @@ test('note cache: Shielded p= adds the deposit; Got adds a received note once', 
   expect(a.cache.notes).toEqual([{ pos: 4, amount: u('50'), blinding: '99', spent: false }]);
   expect(a.cache.awaiting.map((x) => x.id)).toEqual(['AB23']);
 
-  const got = formatReply({ kind: 'got', amount: '20', from: '+919800000001', p: 9, blinding: 123456789n });
+  const got = formatReply({ kind: 'got', amount: '20', p: 9, blinding: 123456789n });
   const b = applyReply(a.cache, reply(got));
   expect(b.cache.notes.at(-1)).toEqual({ pos: 9, amount: u('20'), blinding: '123456789', spent: false });
   expect(applyReply(b.cache, reply(got)).cache.notes.length).toBe(2);
@@ -112,6 +113,12 @@ test('quote checks: expired, fee too high, key changed, wrong withdrawal address
   const withdraw = { kind: 'withdraw' as const, amount: '5', to: '0x00000000000000000000000000000000000000AA' };
   expect(checkShieldedQuote(withdraw, { id: 'AB23', exp: t + 300, fee: '0.01', to: '0x00000000000000000000000000000000000000aa' }, undefined, now)).toBeUndefined();
   expect(checkShieldedQuote(withdraw, { id: 'AB23', exp: t + 300, fee: '0.01', to: '0x00000000000000000000000000000000000000bb' }, undefined, now)?.code).toBe('recipient-mismatch');
+
+  // To a private address: the quote must carry exactly that key.
+  const toAddr = { kind: 'pay' as const, amount: '20', to: encodePrivateAddress(addr) };
+  expect(checkShieldedQuote(toAddr, { id: 'AB23', exp: t + 300, fee: '0.01', to: addr }, undefined, now)).toBeUndefined();
+  expect(checkShieldedQuote(toAddr, { id: 'AB23', exp: t + 300, fee: '0.01', to: new Uint8Array(64).fill(8) }, undefined, now)?.code).toBe('recipient-mismatch');
+  expect(checkShieldedQuote(toAddr, { id: 'AB23', exp: t + 300, fee: '0.01' }, undefined, now)?.code).toBe('recipient-mismatch');
 
   const shield = { kind: 'shield' as const, amount: '50' };
   expect(checkShieldedQuote(shield, { id: 'AB23', exp: t + 300, fee: '0.01' }, undefined, now)).toBeUndefined();

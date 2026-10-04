@@ -19,8 +19,8 @@ const metaText = (tx: Tx) => {
 export const meta = (tx: Tx) =>
   tx.shield && tx.status === 'sent' ? `Made private · ${time(tx.at)}` : tx.private ? `Private · ${metaText(tx)}` : metaText(tx);
 
-/** Name of the other side: contact, number, address, or (a private payment to a number we don't know) "Private". */
-export const who = (tx: Tx) => tx.label ?? (tx.counterparty ? short(tx.counterparty) : 'Private');
+/** Name of the other side: contact, number, address, private address, or (a private payment to a number we don't know) "Private". */
+export const who = (tx: Tx) => tx.label ?? (tx.counterparty ? short(tx.counterparty) : tx.to ? short(tx.to) : 'Private');
 
 export const TxRow = ({ tx }: { tx: Tx }) => {
   const incoming = tx.direction === 'in';
@@ -28,7 +28,7 @@ export const TxRow = ({ tx }: { tx: Tx }) => {
   return (
     <Pressable onPress={() => router.push({ pathname: '/tx/[id]', params: { id: tx.id } })} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, opacity: pressed ? 0.7 : 1 })}>
       <View>
-        <Sigil address={tx.counterparty} fallback={tx.label ?? '#'} />
+        <Sigil address={tx.counterparty ?? tx.to} fallback={tx.label ?? '#'} />
         <View style={{ position: 'absolute', right: -4, bottom: -4, width: 22, height: 22, borderRadius: 11, backgroundColor: c.bg, alignItems: 'center', justifyContent: 'center' }}>
           {incoming ? <ArrowDown size={14} color={c.positive} width={2.4} /> : <ArrowUp size={14} color={dead ? c.negative : c.fg2} width={2.4} />}
         </View>

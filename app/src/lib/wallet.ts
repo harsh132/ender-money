@@ -2,11 +2,12 @@
 import { bytesToBigInt, createPublicClient, http, parseUnits, type Address, type Hex, type LocalAccount } from 'viem';
 import { signedBatchTypedData, swapWithFee, transferWithFee } from '../../../protocol/calibur';
 import { AUSD_DECIMALS, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../../protocol/networks';
+import { isPrivateAddress } from '../../../protocol/recipient';
 import { owner, packAddress, provingKeys, type User } from '../../../protocol/shielded';
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
 import { api, ApiError, OfflineError, type ActivityItem, type AuthorizationJson } from './api';
 import { MAX_FEE } from './config';
-import { phoneDisplay } from './format';
+import { alertNetwork, receivedRow, smsTwin, type Received } from './inbox';
 import type { Unlocked } from './keys';
 import { applyReply, chooseRoute, hasPool, POOL_NETWORKS, resync, settleAwaiting, type Awaiting, type Cache } from './private';
 import { getState, labelFor, setState, upsertTx, type State, type TxStatus } from './store';
@@ -71,6 +72,9 @@ const pullActivity = async () => {
     return; // Older gateways have no /activity; outgoing history is local anyway.
   }
   for (const it of items) {
+    // A Received text got here first: the full row replaces it.
+    const twin = smsTwin(getState().activity, network, it);
+    if (twin) setState((s) => ({ activity: s.activity.filter((t) => t !== twin) }));
     const local = getState().activity;
     if (local.some((t) => t.txHash?.toLowerCase() === it.txHash.toLowerCase() && t.counterparty === it.counterparty)) continue;
     // A shield moves amount + fee to the pool.
@@ -174,18 +178,34 @@ export const applyShieldedReply = (r: Reply) => {
   saveCache(network, next);
   if (settled) upsertTx({ id: settled.id, status: 'sent' });
   if (r.kind === 'got')
-    upsertTx({ id: `got:${network}:${r.p}`, network, direction: 'in', amount: r.amount, label: phoneDisplay(r.from), private: true, status: 'sent', at: Date.now() });
+    upsertTx({ id: `got:${network}:${r.p}`, network, direction: 'in', amount: r.amount, label: 'Private payment', private: true, status: 'sent', at: Date.now() });
+};
+
+/**
+ * A public `Received` alert by text: an incoming row (replaced by the online history later) and the balance it
+ * reports. A transfer Activity already has changes nothing: its balance may be older than the synced one.
+ */
+export const applyReceived = (r: Received) => {
+  const row = receivedRow(getState().activity, r, Date.now());
+  if (!row) return;
+  upsertTx({ ...row, label: labelFor(r.from) });
+  const network = alertNetwork(r);
+  setState((s) => {
+    const a = s.account[network];
+    return a ? { account: { ...s.account, [network]: { ...a, balance: r.balance, syncedAt: Date.now() } } } : {};
+  });
 };
 
 /**
  * Private or public for this payment. A number can take a private payment once
  * we've paid it privately (pinned) or the gateway knows its shielded address;
- * offline and unpinned means public.
+ * offline and unpinned means public. A private address (ender1…) takes private
+ * payments only: 'public' for one means the private balance can't pay it.
  */
 export const decideRoute = async (d: Draft): Promise<'private' | 'public'> => {
   const s = getState();
   if (!isRegistered(d.network, s) || d.deliver === 'CTK') return 'public';
-  let recipientPrivate = !!d.toAddress;
+  let recipientPrivate = !!d.toAddress || isPrivateAddress(d.to);
   if (d.phone)
     recipientPrivate =
       !!s.shieldedPins[d.phone] ||
@@ -230,7 +250,7 @@ export const createWallet = async (u: Unlocked, token: string, relink = false) =
 
 export type Draft = {
   network: NetworkName;
-  /** What the user typed or picked: an address or an E.164 number. */
+  /** What the user typed or picked: a 0x address, an E.164 number or a private address (ender1…). */
   to: string;
   /** Known up front for address recipients; for numbers the quote supplies it. */
   toAddress?: Address;
@@ -283,7 +303,7 @@ const ERRORS: Record<string, string> = {
   'not-on-ender': "This number isn't on Ender yet. Invite them, then pay once they've signed up.",
   'low-balance': "Not enough balance for this amount plus the fee.",
   'self-transfer': "That's your own wallet.",
-  'bad-recipient': "That isn't a phone number or wallet address.",
+  'bad-recipient': "That isn't a phone number, wallet address or private address.",
   'bad-amount': 'Check the amount.',
   'not-delegated': 'Your wallet is still being set up on this network. Try again in a minute.',
   'not-registered': 'This number has no wallet. Log in again.',

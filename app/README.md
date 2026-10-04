@@ -15,10 +15,12 @@ src/lib/
   keys.ts       passkey -> PRF -> secp256k1 key (Mera), Quick send sessions
   wallet.ts     sync, signup (7702 authorizations), quote checks, signing
   private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing
-  transport.ts  internet first; SMS composer + clipboard replies when offline
+  transport.ts  internet first; SMS composer when offline; replies by SMS, clipboard or paste
+  inbox.ts      Received alerts by text -> Activity rows, deduped against the online history
+modules/sms-retriever/   Android: gateway texts by RECEIVE_SMS (queued while closed) or the SMS Retriever
   api.ts        gateway HTTPS client (5 s timeout, then SMS)
   store.ts      persisted state (AsyncStorage; JWT in SecureStore)
-../protocol/    shared with the gateway: networks, Calibur typed data, SMS format
+../protocol/    shared with the gateway: networks, Calibur typed data, SMS format, recipients (0x, numbers, ender1…)
 ```
 
 ## Keys
@@ -36,6 +38,23 @@ The private balance's keys (testnet only) come from the same PRF output under
 HKDF label `ender/shielded/v1/seed` (`lib/private.ts`). The app registers the
 proving keys with the gateway (`/shielded/register`); the spending key never
 leaves the phone. Mainnet shows no private balance.
+
+## Texts from the gateway
+
+On Android the app reads the gateway's replies and alerts (`Received`,
+`Got`, `Sent`, `Shielded`, `Q`, `ERR`) by itself. With
+`RECEIVE_SMS` (asked once, from Activity), a manifest receiver in
+`modules/sms-retriever` keeps texts from the gateway's numbers only
+(`EXPO_PUBLIC_GATEWAY_SMS_IN` / `_INTL`, passed in at startup), queues
+them while the app is closed and hands them over on startup and every
+foreground; other senders are dropped unread. Without the permission it
+falls back to the SMS Retriever (no permission; every gateway text ends with
+the app's hash), re-armed on every foreground and after each text. Copy or
+Paste reply works everywhere.
+
+Play Store builds need the SMS permissions declaration form (core use:
+SMS-based money transactions) before `RECEIVE_SMS` is allowed; sideloaded
+APKs are unaffected.
 
 ## Passkeys need the signing key
 

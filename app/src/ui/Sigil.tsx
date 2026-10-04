@@ -1,6 +1,6 @@
 /**
  * Urbit sigil as the wallet's avatar (ported from wallet2). The address's first
- * 32 bits name an Urbit planet, and @urbit/sigil-js draws that name. Same
+ * 32 bits (a private address's: its owner key's) name an Urbit planet, and @urbit/sigil-js draws that name. Same
  * address, same picture, on every device. Decoration over public data, not a
  * checksum: four bytes collide long before an address does, so screens that
  * confirm a recipient always show the address text too.
@@ -10,14 +10,22 @@ import { useMemo } from 'react';
 import { View } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 import { patp } from 'urbit-ob';
+import { bytesToHex } from 'viem';
+import { decodePrivateAddress } from '../../../protocol/recipient';
 import { c } from '../lib/theme';
 import { Avatar } from './kit';
 
 /** Galaxies and stars draw one or two glyphs; force everything into the four-glyph planet range. */
 const PLANET_FLOOR = 0x10000;
 
+/** A private address (ender1…) draws from its owner key's first four bytes. */
+const head = (address: string) => {
+  const packed = address.startsWith('ender1') ? decodePrivateAddress(address) : null;
+  return packed ? bytesToHex(packed.subarray(0, 4)).slice(2) : /^0x([0-9a-fA-F]{8})/.exec(address)?.[1];
+};
+
 const pointFor = (address: string): string | null => {
-  const hex = /^0x([0-9a-fA-F]{8})/.exec(address)?.[1];
+  const hex = head(address);
   if (!hex) return null;
   const n = Number.parseInt(hex, 16);
   try {

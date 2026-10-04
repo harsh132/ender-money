@@ -11,6 +11,7 @@
 import { isAddress } from 'viem';
 import { parseCommand, parseShieldedCommand, formatReply, normalizePhone, shortHex, unb64, withRetrieverHash, type Reply, type ShieldedCommand } from '../../protocol/sms';
 import type { NetworkName } from '../../protocol/networks';
+import { isPrivateAddress, shortPrivateAddress } from '../../protocol/recipient';
 import { account, GatewayError, quote, sign } from './core';
 import type { Env } from './env';
 import * as shielded from './shielded';
@@ -70,7 +71,7 @@ const handleShielded = async (env: Env, from: string, command: ShieldedCommand):
       const r = await shielded.submit(env, from, { id: command.id, refs: command.refs, sig: command.signature });
       // Sent but unconfirmed: a Sent now would carry no change position. A repeated SIG answers once it lands.
       if (r.pending) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' });
-      const to = isAddress(r.to) ? shortHex(r.to) : r.to;
+      const to = isAddress(r.to) ? shortHex(r.to) : isPrivateAddress(r.to) ? shortPrivateAddress(r.to) : r.to;
       return reply(env, from, { kind: 'sent', amount: r.amount, to, tx: shortHex(r.tx), p: r.p });
     }
     const req: shielded.ShieldedQuoteRequest =
@@ -80,7 +81,9 @@ const handleShielded = async (env: Env, from: string, command: ShieldedCommand):
           ? { network, kind: 'shield', amount: command.amount }
           : { network, kind: 'merge' };
     const q = await shielded.quote(env, from, req); // warms the prover; the Relay object stays up while it runs
-    return reply(env, from, { kind: 'shieldedQuote', id: q.id, expires: q.exp, fee: q.fee, to: q.to === undefined ? undefined : isAddress(q.to) ? q.to : unb64(q.to, 64)! });
+    // A PAY to an ender1 address gets no to=: the phone already has that key, and checks the payment against it.
+    const to = q.to === undefined || (command.kind === 'pay' && isPrivateAddress(command.to)) ? undefined : isAddress(q.to) ? q.to : unb64(q.to, 64)!;
+    return reply(env, from, { kind: 'shieldedQuote', id: q.id, expires: q.exp, fee: q.fee, to });
   } catch (error) {
     const id = command.kind === 'shieldedSig' ? command.id : undefined;
     if (error instanceof GatewayError) return reply(env, from, { kind: 'error', id, code: error.code });

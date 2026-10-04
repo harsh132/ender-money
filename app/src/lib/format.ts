@@ -12,7 +12,8 @@ export const usd = (amount: string | number) => {
 export const inr = (amountUsd: string, rate: number) =>
   Math.round(Number(amountUsd) * rate).toLocaleString('en-IN');
 
-export const short = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+/** `0x1234…abcd`; a private address keeps its prefix: `ender1abcd…wxyz`. */
+export const short = (address: string) => `${address.slice(0, address.startsWith('ender1') ? 10 : 6)}…${address.slice(-4)}`;
 
 /** "+919876543210" -> "+91 98765 43210"; other countries just get the code split off. */
 export const phoneDisplay = (phone: string) => {
