@@ -46,8 +46,9 @@ single atomic SQL statement, so concurrent requests can't double-act.
 | D1 `otps` | `phone · code_hash · attempts · expires_at`. A try is `UPDATE … SET attempts = attempts + 1 WHERE phone = ? AND expires_at > ? AND attempts < 5 RETURNING *` |
 | D1 `sessions` | pending quotes, i.e. exactly what the user is asked to sign (below). Signing claims one with `UPDATE … SET state = 'sending' WHERE id = ? AND state = 'open' RETURNING *`; a racing duplicate gets nothing back and reads the tx hash instead |
 | D1 `alerts_sent` | `tx_hash · phone`, so a re-scan (or a second source later) never alerts twice |
-| D1 `transfers` | AUSD `Transfer` logs touching a linked address (`network · tx_hash · log_index · from · to · amount · block · at`), written by the cron's log scan; serves `GET /activity` and alerts |
-| D1 `cursors` | last block the log scan covered, per network |
+| D1 `transfers` | AUSD `Transfer` logs touching a linked address (`network · tx_hash · log_index · from · to · amount · block · at`), written by the Alchemy webhook (`INSERT OR IGNORE`, so a repeated delivery writes nothing); serves `GET /activity` and alerts |
+| D1 `alchemy_webhooks` | `id · network · signing_key · addresses · created_at`: the Address Activity webhooks the gateway made itself (`0006_alchemy.sql`); `signing_key` sealed under `SHIELDED_KEY_SECRET` |
+| D1 `alchemy_addresses` | `network · address`: linked addresses already pushed to that network's webhook |
 | `Sponsor` DO, one per network | the gateway key's nonce and the transfer queue; sends one Multicall3 batch at a time (see "Sending many transfers") |
 | `Relay` DO, singleton | the Android relay's WebSocket (hibernation API), outbound queue, delivery reports |
 
@@ -99,7 +100,7 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 | `GET ender.money/.well-known/assetlinks.json` | Android passkey association: package `money.ender.app` and the SHA-256 of the app's signing key (a Worker route on that one path) |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
 | `POST /webhooks/twilio` | inbound SMS; checks `X-Twilio-Signature` |
-| `POST /webhooks/alchemy` | address activity; checks `X-Alchemy-Signature` (port from `ender-backend`) |
+| `POST /webhooks/alchemy` | Alchemy Address Activity deliveries; `X-Alchemy-Signature` must be the hex HMAC-SHA256 of the raw body under the key of the webhook the body names (else 401). Records AUSD transfers and alerts, below |
 
 ## SMS commands
 
@@ -251,17 +252,50 @@ number.
 
 ## Incoming-payment alerts
 
-- **Both networks (built 2 Oct)**: every minute the cron reads AUSD
-  `Transfer` logs from the last block it saw (`cursors`), 100 blocks per
-  `eth_getLogs` call (Monad's public RPC limit; ~150 new blocks a minute, up
-  to 1,000 per run to catch up), keeps the ones touching a linked address in
-  `transfers`, and texts each recipient with alerts on. `alerts_sent` keeps
-  it to one text per transaction per number.
+Both networks, from Alchemy Address Activity webhooks only (`alchemy.ts`,
+ported from ender-backend; the per-minute log scan and its `cursors` table
+are gone, `0006_alchemy.sql`). AUSD transfers touching a linked address go
+into `transfers` (`activity.ts` `record`), and each recipient with alerts on
+gets a text (`alertAll`). `transfers`' primary key and `alerts_sent` make a
+repeated delivery harmless: one row, one text per transaction per number. A
+transfer more than 10 minutes old (by the delivery's `createdAt`, e.g. a late
+retry) is recorded but not texted about.
+
+- **Webhooks.** The gateway makes its own Address Activity webhooks through
+  Alchemy's Notify API (`https://dashboard.alchemy.com/api`, header
+  `X-Alchemy-Token`), networks `MONAD_MAINNET` and `MONAD_TESTNET`,
+  delivering to `ALCHEMY_WEBHOOK_URL`
+  (`https://api.ender.money/webhooks/alchemy`). A webhook reports only
+  addresses it held when the block was made and there is no backfill, so
+  every linked address goes onto each network's webhook before it is handed
+  out: `/wallet/create` pushes right after writing `links`, and the cron
+  (still every minute, with reconcile) pushes anything not yet in
+  `alchemy_addresses` (a failed push, links made another way). A network's
+  first webhook is created with every address already linked; a webhook
+  that reaches 100,000 addresses is left full and the next push creates a
+  new one. `create-webhook` returns the signing key, stored sealed (AES-GCM
+  under `SHIELDED_KEY_SECRET`, associated data `alchemy|<id>`), so nobody
+  copies it by hand.
+- **Deliveries** (`POST /webhooks/alchemy`): 401 unless the signature
+  checks out. Keeps `category: "token"` activity whose
+  `rawContract.address` is the network's AUSD, skips `removed` logs, takes
+  `log.logIndex` / `log.blockNumber`, writes the rows, answers 200 (also
+  when nothing matched) and sends the alerts after responding. A failed
+  write answers 500 so Alchemy retries.
+- With `ALCHEMY_AUTH_TOKEN` unset (or `ALCHEMY_WEBHOOK_URL` /
+  `SHIELDED_KEY_SECRET`), no webhooks are made and incoming transfers go
+  unrecorded.
 - Alert text: `Received 10 AUSD from +9198…/0x12...cd. Balance 45.20 AUSD.`,
   prefixed `[Test] ` on testnet. Folding several alerts into one (30 s) is
   not built.
-- **Later**: an Alchemy Address Activity webhook on mainnet would cut the
-  delay from up to a minute to seconds; the cron stays as the backstop.
+
+**Turning the webhook on** after deploying (`0006_alchemy.sql` applied
+with `bun run gateway:migrate:remote`): copy the Notify auth token from the
+Alchemy dashboard (Webhooks page, "Auth token") and run
+`wrangler secret put ALCHEMY_AUTH_TOKEN -c gateway/wrangler.jsonc`. The
+next cron minute creates both webhooks with every linked address (or the
+next `/wallet/create`, whichever comes first); `wrangler tail` shows
+`alchemy: created webhook <id> for <network>`. Nothing else to configure.
 
 ## Security
 
@@ -277,8 +311,10 @@ number.
 - Phone numbers masked in logs (`+91 98•••••210`).
 - Secrets: `GATEWAY_PRIVATE_KEY`, `JWT_SECRET`, `RELAY_TOKEN`,
   `SHIELDED_KEY_SECRET`, `GATEWAY_SHIELDED_SEED`,
-  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `ALCHEMY_AUTH_TOKEN`, Alchemy
-  webhook signing key, `SMS_RETRIEVER_HASH`.
+  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `ALCHEMY_AUTH_TOKEN`,
+  `SMS_RETRIEVER_HASH`. Alchemy webhook signing keys are not secrets to
+  set: the gateway receives them when it creates a webhook and keeps them
+  sealed in D1 (`alchemy_webhooks`).
 
 ## Testing
 
@@ -290,7 +326,11 @@ number.
   (`shielded.test.ts`); the shielded flow end to end on anvil with the
   pool, MockAUSD, the real `Sponsor` and the prover container
   (`shielded.e2e.test.ts`; needs anvil, the spike's forge build and the
-  `ender-prover` docker image, else skipped).
+  `ender-prover` docker image, else skipped); Alchemy webhook creation,
+  address pushes (including from `/wallet/create`) and the 100k rollover,
+  signed deliveries, AUSD-only recording, one alert per transfer and the
+  stale-alert rule, against a mocked Notify API and JSON-RPC
+  (`alchemy.test.ts`).
 - `wrangler dev` plus `scripts/play.ts`: plays the app with the demo key
   through both pipes, HTTPS and a dev-only `POST /dev/sms` that injects an
   inbound text as if the relay delivered it.
@@ -308,8 +348,9 @@ number.
    cron that finalises stuck sessions, `/wallet/create` with
    delegation on both networks, D1 `links`; deploy; first transfer from a fresh demo
    wallet over HTTPS and over SMS.
-4. **9 Oct** — Twilio transport, Alchemy webhook. (Log scan, alerts and
-   `GET /activity` landed early, on 2 Oct, for the app.)
+4. **9 Oct** — Twilio transport. (Alerts and `GET /activity` landed on
+   2 Oct from a cron log scan; the Alchemy webhook replaced that scan on
+   4 Oct.)
 
 ## Shielded pool (testnet, built 4 Oct)
 

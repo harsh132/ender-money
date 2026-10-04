@@ -24,6 +24,10 @@ export type Env = {
   SHIELDED_KEY_SECRET?: string;
   /** Hex, 32+ bytes: seed of the gateway's own shielded authority key, which owns the dummy inputs of deposits. */
   GATEWAY_SHIELDED_SEED?: string;
+  /** Alchemy Notify auth token (dashboard → Webhooks). Unset, no webhooks are made and incoming transfers go unrecorded. */
+  ALCHEMY_AUTH_TOKEN?: string;
+  /** Where Alchemy delivers: this Worker's POST /webhooks/alchemy. */
+  ALCHEMY_WEBHOOK_URL?: string;
   /** "1" enables the /dev/* routes. Only ever set in .dev.vars. */
   DEV?: string;
 };

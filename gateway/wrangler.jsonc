@@ -14,11 +14,14 @@
 
   "vars": {
     "FEE_AUSD": "0.01",
-    "SMS_RETRIEVER_HASH": "IaTP8lLJOvM"
+    "SMS_RETRIEVER_HASH": "IaTP8lLJOvM",
+    // Where Alchemy's Address Activity webhooks deliver. Webhooks are made only once the ALCHEMY_AUTH_TOKEN secret is set.
+    "ALCHEMY_WEBHOOK_URL": "https://api.ender.money/webhooks/alchemy"
   },
 
   "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } }],
 
+  // Every minute: reconcile stuck sessions, push newly linked addresses to Alchemy (creating each network's first webhook).
   "triggers": { "crons": ["* * * * *"] },
 
   "d1_databases": [

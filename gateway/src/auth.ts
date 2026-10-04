@@ -5,6 +5,7 @@
 import { isAddress, isHex, type Address, type SignedAuthorization } from 'viem';
 import { formatOtp, isPhone, withRetrieverHash } from '../../protocol/sms';
 import type { NetworkName } from '../../protocol/networks';
+import { syncAlchemy } from './alchemy';
 import { account, delegate, GatewayError } from './core';
 import type { Env } from './env';
 import { signJwt } from './jwt';
@@ -127,6 +128,8 @@ export const createWallet = async (
     env.DB.prepare('DELETE FROM links WHERE phone = ? OR address = ?').bind(phone, address),
     env.DB.prepare('INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, ?)').bind(phone, address, networks[0], now()),
   ]);
+  // Onto Alchemy's webhooks before the address is handed out. Never throws; the cron retries a miss.
+  await syncAlchemy(env);
   const token = await signJwt(env.JWT_SECRET, { phone, address }, TOKEN_TTL_SECONDS);
   return { token, address, delegations };
 };

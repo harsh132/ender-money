@@ -1,7 +1,8 @@
 import { isAddress, isHex, type Hex, type SignedAuthorization } from 'viem';
 import { isPhone } from '../../protocol/sms';
 import { isNetwork } from './chain';
-import { activity, scan, setAlerts } from './activity';
+import { activity, setAlerts } from './activity';
+import { alchemyWebhook, syncAlchemy } from './alchemy';
 import { createWallet, startAuth, verifyAuth, TOKEN_TTL_SECONDS } from './auth';
 import { account, delegate, GatewayError, quote, reconcile, sign, txStatus } from './core';
 import type { Env } from './env';
@@ -180,6 +181,10 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       return json(await shielded.shieldedAddress(env, shieldedNetwork(url.searchParams.get('network') ?? undefined), phone));
     }
 
+    // Address activity from Alchemy; proves itself by signature.
+    case 'POST /webhooks/alchemy':
+      return alchemyWebhook(request, env, ctx);
+
     // The Android relay phone's WebSocket.
     case 'GET /relay': {
       if (request.headers.get('upgrade') !== 'websocket') throw new GatewayError('upgrade-required', 426);
@@ -241,7 +246,11 @@ export default {
   async scheduled(_controller, env, ctx) {
     const log = (what: string) => (e: unknown) => console.error(`cron: ${what} failed`, e instanceof Error ? e.message : e);
     ctx.waitUntil(
-      Promise.all([reconcile(env).catch(log('reconcile')), scan(env, 'mainnet').catch(log('scan mainnet')), scan(env, 'testnet').catch(log('scan testnet'))]),
+      Promise.all([
+        reconcile(env).catch(log('reconcile')),
+        // Pushes what /wallet/create couldn't, and makes each network's first webhook.
+        syncAlchemy(env),
+      ]),
     );
   },
 } satisfies ExportedHandler<Env>;

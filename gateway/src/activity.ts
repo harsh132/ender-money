@@ -1,13 +1,12 @@
 /**
- * Incoming money: every minute the cron reads AUSD Transfer logs since the last
- * block it saw, keeps the ones touching a linked address, and texts recipients
- * an alert. GET /activity serves the same table, so an online recipient sees
- * money arrive without the SMS, and a fresh device gets its history back.
- *
- * Monad's public RPCs cap eth_getLogs at 100 blocks; at ~0.4 s a block that is
- * two calls a minute per network, with room to catch up after a gap.
+ * Incoming money: AUSD transfers touching a linked address land in `transfers`
+ * and text the recipient an alert. Alchemy's Address Activity webhook
+ * (alchemy.ts) is the only source; the primary key and alerts_sent make a
+ * repeated delivery harmless. GET /activity serves the same table, so an
+ * online recipient sees money arrive without the SMS, and a fresh device gets
+ * its history back.
  */
-import { formatUnits, parseAbiItem, type Address, type Hex } from 'viem';
+import { formatUnits, type Address, type Hex } from 'viem';
 import { erc20Abi } from '../../protocol/calibur';
 import { AUSD_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../protocol/networks';
 import { formatAlert, shortHex } from '../../protocol/sms';
@@ -16,12 +15,14 @@ import { GatewayError } from './core';
 import type { Env } from './env';
 import { canText, sendSms } from './outbound';
 
-const RANGE = 100n;
-/** Blocks per run at most (cron is every minute, ~150 new blocks). */
-const MAX_CHUNKS = 10n;
-const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+/** Older than this, a transfer is recorded but not texted about: a late (retried) delivery doesn't send a stale alert. */
+export const ALERT_MAX_AGE = 600;
+const now = () => Math.floor(Date.now() / 1000);
 
 type LinkRow = { phone: string; address: string; alerts: number };
+
+/** One AUSD Transfer log, addresses lowercase; `at` is when it happened, or the best estimate of it. */
+export type Transfer = { txHash: Hex; logIndex: number; from: Address; to: Address; value: bigint; block: number; at: number };
 
 const linksFor = async (env: Env, addresses: string[]) => {
   const out = new Map<string, LinkRow>();
@@ -36,43 +37,30 @@ const linksFor = async (env: Env, addresses: string[]) => {
   return out;
 };
 
-export const scan = async (env: Env, network: NetworkName) => {
-  const net = NETWORKS[network];
-  const pub = publicClient(env, network);
-  const head = await pub.getBlockNumber();
-  const cursor = await env.DB.prepare('SELECT block FROM cursors WHERE network = ?').bind(network).first<{ block: number }>();
-  let from = cursor ? BigInt(cursor.block) + 1n : head;
-  const last = from + RANGE * MAX_CHUNKS - 1n < head ? from + RANGE * MAX_CHUNKS - 1n : head;
-  if (from > last) return;
-
-  const logs = [];
-  for (; from <= last; from += RANGE) {
-    const to = from + RANGE - 1n < last ? from + RANGE - 1n : last;
-    logs.push(...(await pub.getLogs({ address: net.ausd, event: transferEvent, fromBlock: from, toBlock: to })));
-  }
-
-  const addresses = [...new Set(logs.flatMap((l) => [l.args.from!.toLowerCase(), l.args.to!.toLowerCase()]))];
-  const links = addresses.length ? await linksFor(env, addresses) : new Map<string, LinkRow>();
-  const now = Math.floor(Date.now() / 1000);
-  const ours = logs.filter((l) => links.has(l.args.from!.toLowerCase()) || links.has(l.args.to!.toLowerCase()));
-
-  const writes = ours.map((l) =>
+/** Insert the transfers that touch a linked address, in one batch. Alerts follow with alertAll. */
+export const record = async (env: Env, network: NetworkName, transfers: Transfer[]) => {
+  const links = transfers.length ? await linksFor(env, [...new Set(transfers.flatMap((t) => [t.from, t.to]))]) : new Map<string, LinkRow>();
+  const ours = transfers.filter((t) => links.has(t.from) || links.has(t.to));
+  const writes = ours.map((t) =>
     env.DB.prepare(
       `INSERT OR IGNORE INTO transfers (network, tx_hash, log_index, from_address, to_address, amount, block, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(network, l.transactionHash, l.logIndex, l.args.from!.toLowerCase(), l.args.to!.toLowerCase(), l.args.value!.toString(), Number(l.blockNumber), now),
+    ).bind(network, t.txHash, t.logIndex, t.from, t.to, t.value.toString(), t.block, t.at),
   );
-  writes.push(
-    env.DB.prepare('INSERT INTO cursors (network, block) VALUES (?, ?) ON CONFLICT (network) DO UPDATE SET block = excluded.block').bind(network, Number(last)),
-  );
-  await env.DB.batch(writes);
+  if (writes.length) await env.DB.batch(writes);
+  return { network, ours, links };
+};
 
-  for (const l of ours) {
-    const recipient = links.get(l.args.to!.toLowerCase());
-    if (recipient?.alerts) await alert(env, network, recipient, l.transactionHash, l.args.from!, l.args.value!, links).catch((e) => console.error('alert failed', e instanceof Error ? e.message : e));
+/** Text each recipient with alerts on, skipping transfers older than ALERT_MAX_AGE. Never throws. */
+export const alertAll = async (env: Env, { network, ours, links }: Awaited<ReturnType<typeof record>>) => {
+  const t = now();
+  for (const x of ours) {
+    const recipient = links.get(x.to);
+    if (!recipient?.alerts || t - x.at > ALERT_MAX_AGE) continue;
+    await alert(env, network, recipient, x.txHash, x.from, x.value, links).catch((e) => console.error('alert failed', e instanceof Error ? e.message : e));
   }
 };
 
-/** One alert per transaction per number; alerts_sent makes a re-scan harmless. */
+/** One alert per transaction per number; alerts_sent makes a repeated delivery harmless. */
 const alert = async (env: Env, network: NetworkName, to: LinkRow, txHash: Hex, from: Address, value: bigint, links: Map<string, LinkRow>) => {
   if (!canText(to.phone)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to.phone).run();
