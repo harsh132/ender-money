@@ -1,25 +1,31 @@
 // The phone: holds the authority private key (never leaves it), nk and the viewing key, a local note cache and
 // pinned contact keys. Offline it only exchanges SMS: SEND -> Q -> SIG -> Sent, plus Got alerts.
 // The phone picks the input notes (src/select.mjs) and names them in its SIG.
+// SHIELD -> Q -> SIG -> Shielded deposits from the user's own EOA: the phone builds the deposit and signs one AUSD
+// EIP-3009 ReceiveWithAuthorization with its secp256k1 root key.
 import { formatUnits, parseUnits, isAddress } from 'viem'
-import { provingKeys, owner, packAddress, unpackAddress, buildTx, sign, commitment, nullifier } from './shielded.mjs'
-import { formatCommand, parseQuote, formatSig, parseSent, parseGot, b64, MERGE } from './sms.mjs'
+import { provingKeys, owner, packAddress, unpackAddress, buildTx, sign, commitment, nullifier, buildDeposit, quoteSeed, receiveAuth, withdrawOutputs } from './shielded.mjs'
+import { formatCommand, parseQuote, formatSig, parseSent, parseGot, b64, MERGE, formatShield, parseShielded } from './sms.mjs'
 import { eligible, selectNotes, settle } from './select.mjs'
 
 const sum = (ns) => ns.reduce((s, n) => s + n.amount, 0n)
 
 export class Phone {
-  /** config: { domain: {chainId, pool}, relayer (pinned gateway address), maxFee (AUSD units) }. rng: for tests (default crypto). */
-  constructor({ number, user, config, rng }) {
+  /**
+   * config: { domain: {chainId, pool}, relayer (pinned gateway address), maxFee (AUSD units), ausd: {address, name, version} }.
+   * account: viem local account of the user's root key (its EOA), needed only for SHIELD. rng: for tests (default crypto).
+   */
+  constructor({ number, user, config, rng, account }) {
     this.number = number
+    this.account = account
     this.authSk = user.authSk
     this.me = owner(provingKeys(user))
     this.config = config
     this.rng = rng
     this.notes = new Map() // pos -> { amount, blinding, spent }
     this.contacts = new Map() // phone number -> pinned shielded address (base64)
-    this.pending = null // SEND waiting for its Q: { to, amount }
-    this.awaiting = [] // signed payments waiting for Sent, oldest first: { to, amount, quote, tx, pin? }
+    this.pending = null // SEND or SHIELD waiting for its Q: { to, amount } | { shield: true, amount }
+    this.awaiting = [] // signed, waiting for Sent / Shielded, oldest first: { to, amount, quote, tx, pin?, shield? }
   }
 
   address() {
@@ -50,6 +56,12 @@ export class Phone {
     return formatCommand({ kind: 'send', to, amount, deliver: 'AUSD' })
   }
 
+  /** Deposit `amount` from this phone's EOA (EIP-3009); the authorization moves amount + fee. */
+  shield(amount) {
+    this.pending = { shield: true, amount: parseUnits(amount, 6) }
+    return formatShield(amount)
+  }
+
   /** Payment to self of 0: T is the fee alone. */
   merge() {
     this.pending = { to: this.number, amount: 0n }
@@ -60,12 +72,14 @@ export class Phone {
     this.pending = null
   }
 
-  /** Returns { out } (a reply SMS to the gateway), { refused } (shown to the user, nothing sent), { error } or {}. */
-  onSms(text) {
+  /** Resolves to { out } (a reply SMS to the gateway), { refused } (shown to the user, nothing sent), { error } or {}. */
+  async onSms(text) {
     const q = parseQuote(text)
-    if (q) return this.onQuote(q)
+    if (q) return this.pending?.shield ? this.onDepositQuote(q) : this.onQuote(q)
     const sent = parseSent(text)
     if (sent) return this.onSent(sent)
+    const shielded = parseShielded(text)
+    if (shielded) return this.onShielded(shielded)
     const got = parseGot(text)
     if (got) {
       this.addNote(got.p, parseUnits(got.amount, 6), got.blinding)
@@ -80,13 +94,42 @@ export class Phone {
     return {}
   }
 
-  onQuote(q) {
-    const p = this.pending
-    if (!p) return { refused: 'no SEND waiting for a quote' }
+  /** Expiry and fee limit, the same for payments and deposits: a reason to refuse, or the fee in base units. */
+  checkQuote(q) {
     const now = Math.floor(Date.now() / 1000)
     if (q.exp <= now || q.exp > now + 3600) return { refused: `quote expiry ${q.exp} out of range` }
     const fee = parseUnits(q.fee, 6)
     if (fee > this.config.maxFee) return { refused: `fee ${q.fee} above limit` }
+    return { fee }
+  }
+
+  /** SHIELD's quote: build the deposit alone and sign ReceiveWithAuthorization{to: pool, value: amount + fee, validBefore: exp, nonce}. */
+  async onDepositQuote(q) {
+    const p = this.pending
+    if (q.to !== undefined) return { refused: 'deposit quote names a recipient' }
+    const { fee, refused } = this.checkQuote(q)
+    if (refused) return { refused }
+    const { domain, relayer, ausd } = this.config
+    const dep = buildDeposit({ me: this.me, outputs: [{ amount: p.amount, to: this.me }, { amount: 0n, to: this.me }], fee, relayer, deadline: q.exp, seed: quoteSeed(q.id, q.exp), domain })
+    const signature = await this.account.signTypedData(receiveAuth(ausd, domain.chainId, { from: this.account.address, to: domain.pool, value: dep.value, validBefore: q.exp, nonce: dep.nonce }))
+    this.awaiting.push({ ...p, quote: q, tx: { ins: [], outs: dep.outs } })
+    this.pending = null
+    return { out: formatCommand({ kind: 'sig', id: q.id, signature }) }
+  }
+
+  onShielded(s) {
+    const i = this.awaiting.findIndex((p) => p.shield)
+    if (i < 0) return {}
+    const [p] = this.awaiting.splice(i, 1)
+    this.addNote(s.p, p.tx.outs[0].amount, p.tx.outs[0].blinding)
+    return {}
+  }
+
+  onQuote(q) {
+    const p = this.pending
+    if (!p) return { refused: 'no SEND waiting for a quote' }
+    const { fee, refused } = this.checkQuote(q)
+    if (refused) return { refused }
     const T = p.amount + fee
     const sel = selectNotes(this.eligible(), T, this.rng)
     if (sel.err) return { refused: `ERR ${sel.err}: notes can't pay ${formatUnits(T, 6)}` }
@@ -98,7 +141,7 @@ export class Phone {
     const common = { me: this.me, nIns: sel.circuit, inputs: ins, fee: s.fee, relayer: this.config.relayer, deadline: q.exp, domain: this.config.domain }
     if (isAddress(p.to)) {
       if (q.to !== p.to.toLowerCase()) return { refused: `quote pays ${q.to}, not ${p.to}` }
-      tx = buildTx({ ...common, outputs: [{ amount: 0n, to: this.me }, change], extAmount: -p.amount, recipient: p.to })
+      tx = buildTx({ ...common, outputs: withdrawOutputs(change), extAmount: -p.amount, recipient: p.to })
     } else if (p.to === this.number) {
       if (!Buffer.isBuffer(q.to) || !q.to.equals(this.address())) return { refused: 'merge quote pays someone else' }
       tx = buildTx({ ...common, outputs: [{ amount: p.amount, to: this.me }, change] })
@@ -117,8 +160,9 @@ export class Phone {
   }
 
   onSent(s) {
-    const p = this.awaiting.shift()
-    if (!p) return {}
+    const i = this.awaiting.findIndex((p) => !p.shield)
+    if (i < 0) return {}
+    const [p] = this.awaiting.splice(i, 1)
     for (const i of p.tx.ins) if (this.notes.has(i.pos) && i.amount > 0n) this.notes.get(i.pos).spent = true
     p.tx.outs.forEach((o, i) => {
       if (o.to === this.me && o.amount > 0n) this.addNote(s.p + i, o.amount, o.blinding)

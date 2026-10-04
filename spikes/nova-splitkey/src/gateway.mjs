@@ -1,12 +1,14 @@
 // The gateway: holds each user's proving keys (nk, viewing key, authority PUBLIC key), indexes their notes by
 // trial decryption, quotes a fee, resolves the notes the phone names in its SIG, rebuilds the same deterministic
 // transaction as the phone, proves it once the signature checks out, relays it (paying gas) and keeps the fee in AUSD.
+// Deposits (SHIELD): the user's EIP-3009 authorization pins extData and both output commitments; the dummy inputs are
+// the gateway's own, signed in-circuit with its own EdDSA authority key. Only this gateway may call the pool.
 import crypto from 'node:crypto'
 import MerkleTreeMod from 'fixed-merkle-tree'
-import { formatUnits, parseUnits, isAddress, parseEventLogs } from 'viem'
+import { formatUnits, parseUnits, isAddress, parseEventLogs, recoverTypedDataAddress, isAddressEqual } from 'viem'
 import { poseidonHash2, ZERO_VALUE, toBuffer } from './utils.mjs'
-import { owner, packAddress, buildTx, verifySig, witnessInput, prove, commitment, nullifier, decryptNote, LEVELS } from './shielded.mjs'
-import { parseCommand, formatReply, formatQuote, parseSig, formatSent, formatGot, SESSION_ID_ALPHABET, MERGE, REF_MOD } from './sms.mjs'
+import { newUser, provingKeys, owner, packAddress, buildTx, verifySig, witnessInput, prove, commitment, nullifier, decryptNote, LEVELS, sign, buildDeposit, depositTx, quoteSeed, receiveAuth, withdrawOutputs, NULL_OWNER } from './shielded.mjs'
+import { parseCommand, formatReply, formatQuote, parseSig, formatSent, formatGot, SESSION_ID_ALPHABET, MERGE, REF_MOD, parseShield, formatShielded } from './sms.mjs'
 import { eligible, planCircuit, settle, CIRCUITS } from './select.mjs'
 
 const { MerkleTree } = MerkleTreeMod
@@ -16,17 +18,24 @@ const MAX_COMBOS = 64
 const LOG_RANGE = 100n
 
 export class Gateway {
-  /** fromBlock: the pool's deploy block. Public RPCs cap eth_getLogs ranges, so logs are read in LOG_RANGE chunks. */
-  constructor({ client, wallet, pool, poolAbi, domain, fee, fromBlock = 0n }) {
-    Object.assign(this, { client, wallet, pool, poolAbi, domain, fee, fromBlock: BigInt(fromBlock) })
-    this.users = new Map() // number -> { keys, me, notes: Map pos -> { amount, blinding, nullifier, spent } }
+  /**
+   * fromBlock: the pool's deploy block. Public RPCs cap eth_getLogs ranges, so logs are read in LOG_RANGE chunks.
+   * ausd: { address, name, version } (EIP-712 domain of the token). authority: the gateway's own shielded keys, which
+   * own the dummy inputs of deposits.
+   */
+  constructor({ client, wallet, pool, poolAbi, domain, fee, fromBlock = 0n, ausd, authority = newUser() }) {
+    Object.assign(this, { client, wallet, pool, poolAbi, domain, fee, ausd, fromBlock: BigInt(fromBlock) })
+    this.authSk = authority.authSk
+    this.keys = provingKeys(authority)
+    this.self = owner(this.keys)
+    this.users = new Map() // number -> { keys, me, eoa, notes: Map pos -> { amount, blinding, nullifier, spent } }
     this.quotes = new Map() // id -> quote
     this.gas = []
   }
 
   /** Online onboarding: the app hands over nk, the viewing key and the authority public key. Never the authority private key. */
-  register(number, keys) {
-    this.users.set(number, { keys, me: owner(keys), notes: new Map() })
+  register(number, keys, eoa) {
+    this.users.set(number, { keys, me: owner(keys), eoa, notes: new Map() })
   }
 
   // ponytail: rescans every log on each call; an indexer would keep a cursor and an incremental tree
@@ -79,9 +88,57 @@ export class Gateway {
     const s = parseSig(text)
     if (s) return this.onSig(from, s, err)
     if (text === MERGE) return this.onSend(from, { to: from, amount: '0' }, err)
+    const shield = parseShield(text)
+    if (shield) return this.onShield(from, shield, err)
     const cmd = parseCommand(text)
     if (cmd?.kind === 'send') return this.onSend(from, cmd, err)
+    if (cmd?.kind === 'sig') return this.onDepositSig(from, cmd, err)
     return err('SYNTAX')
+  }
+
+  newQuote(q) {
+    const id = Array.from(crypto.randomBytes(4), (b) => SESSION_ID_ALPHABET[b % SESSION_ID_ALPHABET.length]).join('')
+    const exp = Math.floor(Date.now() / 1000) + 600
+    this.quotes.set(id, { ...q, id, exp })
+    return { id, exp }
+  }
+
+  onShield(from, { amount }, err) {
+    if (!this.users.get(from).eoa) return err('NOEOA')
+    const { id, exp } = this.newQuote({ from, deposit: true, amount: parseUnits(amount, 6) })
+    return [{ to: from, text: formatQuote({ id, exp, fee: fmt(this.fee) }) }]
+  }
+
+  /** The deposit the phone built for quote q (same inputs, same bytes). */
+  depositFor(q) {
+    const me = this.users.get(q.from).me
+    const outputs = [{ amount: q.amount, to: me }, { amount: 0n, to: me }]
+    return buildDeposit({ me, outputs, fee: this.fee, relayer: this.wallet.account.address, deadline: q.exp, seed: quoteSeed(q.id, q.exp), domain: this.domain })
+  }
+
+  async onDepositSig(from, { id, signature }, err) {
+    const q = this.quotes.get(id)
+    if (!q || q.from !== from || !q.deposit) return err('UNKNOWN', id)
+    if (q.exp <= Math.floor(Date.now() / 1000)) return err('EXPIRED', id)
+    const { eoa } = this.users.get(from)
+    const dep = this.depositFor(q)
+    // cheap pre-check before proving: the key that signed is the EOA's own key (also true for a 7702 account's root key)
+    const auth = receiveAuth(this.ausd, this.domain.chainId, { from: eoa, to: this.pool, value: dep.value, validBefore: q.exp, nonce: dep.nonce })
+    const signer = await recoverTypedDataAddress({ ...auth, signature }).catch(() => null)
+    if (!signer || !isAddressEqual(signer, eoa)) return err('BADSIG', id)
+    const res = await this.deposit(dep, eoa, signature, `SHIELD ${fmt(q.amount)} (${from}, deposit)`)
+    this.quotes.delete(id)
+    const p = Number(parseEventLogs({ abi: this.poolAbi, logs: res.logs, eventName: 'NewCommitment' })[0].args.index)
+    return [{ to: from, text: formatShielded({ amount: fmt(q.amount), tx: res.transactionHash, p }) }]
+  }
+
+  /** Proves and submits a deposit (buildDeposit output) that `from` authorized with EIP-3009 `signature`. */
+  async deposit(dep, from, signature, label) {
+    if (![...this.users.values()].some((u) => u.eoa && isAddressEqual(u.eoa, from))) throw new Error('policy: deposit from an unregistered account')
+    const tx = depositTx(this.self, dep)
+    const args = await this.proveTx(null, tx, sign(this.authSk, tx.msg), this.keys)
+    this.lastDeposit = { args, tx, from, signature }
+    return this.submit('depositWithAuthorization', [args, tx.extData, from, signature], label)
   }
 
   async onSend(from, cmd, err) {
@@ -92,9 +149,7 @@ export class Gateway {
     if (!withdraw && !recipient) return err('NOUSER')
     const plan = planCircuit(this.eligible(from), amount + this.fee) // FUNDS / MERGE before quoting
     if (plan.err) return err(plan.err)
-    const id = Array.from(crypto.randomBytes(4), (b) => SESSION_ID_ALPHABET[b % SESSION_ID_ALPHABET.length]).join('')
-    const exp = Math.floor(Date.now() / 1000) + 600
-    this.quotes.set(id, { id, from, to: cmd.to, amount, exp })
+    const { id, exp } = this.newQuote({ from, to: cmd.to, amount })
     const to = withdraw ? cmd.to : packAddress(recipient.me)
     return [{ to: from, text: formatQuote({ id, exp, fee: fmt(this.fee), to }) }]
   }
@@ -106,7 +161,7 @@ export class Gateway {
     const change = { amount: s.change, to: me }
     const common = { me, nIns, inputs: ins, fee: s.fee, relayer: this.wallet.account.address, deadline: q.exp, domain: this.domain }
     return isAddress(q.to)
-      ? buildTx({ ...common, outputs: [{ amount: 0n, to: me }, change], extAmount: -q.amount, recipient: q.to })
+      ? buildTx({ ...common, outputs: withdrawOutputs(change), extAmount: -q.amount, recipient: q.to })
       : buildTx({ ...common, outputs: [{ amount: q.amount, to: this.users.get(q.to).me }, change] })
   }
 
@@ -141,16 +196,17 @@ export class Gateway {
 
   async onSig(from, { id, sig, refs }, err) {
     const q = this.quotes.get(id)
-    if (!q || q.from !== from) return err('UNKNOWN', id)
+    if (!q || q.from !== from || q.deposit) return err('UNKNOWN', id)
     if (q.exp <= Math.floor(Date.now() / 1000)) return err('EXPIRED', id)
     await this.sync()
     const r = this.resolve(q, sig, refs) // cheap checks before 1-6 s of proving
     if (r.err) return err(r.err, id)
     q.ins = r.ins
     const args = await this.proveTx(from, r.tx, sig)
-    const res = await this.submit(args, r.tx.extData, `${from} -> ${q.to} [${r.nIns}-in]`)
+    const res = await this.submit('transact', [args, r.tx.extData], `${from} -> ${q.to} [${r.nIns}-in]`)
     this.quotes.delete(id)
-    const p = Number(parseEventLogs({ abi: this.poolAbi, logs: res.logs, eventName: 'NewCommitment' })[0].args.index)
+    const leaf = parseEventLogs({ abi: this.poolAbi, logs: res.logs, eventName: 'NewCommitment' })[0] // none for null outputs
+    const p = leaf && Number(leaf.args.index)
     this.last = { args, extData: r.tx.extData, hash: res.transactionHash, input: this.lastInput, nIns: r.nIns, real: r.ins.length, tried: r.tried }
     const out = [{ to: from, text: formatSent({ amount: fmt(q.amount), to: q.to, tx: res.transactionHash, p }) }]
     if (q.to !== from && this.users.has(q.to)) {
@@ -160,18 +216,31 @@ export class Gateway {
     return out
   }
 
-  /** Proves a transaction for a registered user given the phone's signature (also used online, e.g. for deposits). */
-  async proveTx(number, tx, sig) {
+  /** Proves a transaction for a registered user given the phone's signature (keys: the owner's, if not a user's). */
+  async proveTx(number, tx, sig, keys = this.users.get(number)?.keys) {
+    this.checkOwners(number, tx)
     await this.sync()
-    this.lastInput = witnessInput(tx, this.tree, this.users.get(number).keys, sig)
+    this.lastInput = witnessInput(tx, this.tree, keys, sig)
     return prove(this.lastInput)
   }
 
-  async submit(args, extData, label) {
-    const hash = await this.wallet.writeContract({ address: this.pool, abi: this.poolAbi, functionName: 'transact', args: [args, extData] })
+  /**
+   * Policy, checked before every proof: inputs belong to one registered user (number), or are the gateway's own
+   * zero-value deposit dummies (number null); every output is null or a registered user's note. Value only ever moves
+   * between registered users; withdrawals may still go to any EVM address.
+   */
+  checkOwners(number, tx) {
+    if (number === null ? tx.ins.some((i) => i.amount > 0n) : !this.users.has(number)) throw new Error('policy: inputs of an unregistered user')
+    const registered = new Set([...this.users.values()].map((u) => u.me.ownerKey))
+    if (tx.outs.some((o) => o.to !== NULL_OWNER && !registered.has(o.to.ownerKey))) throw new Error('policy: output to an unregistered key')
+  }
+
+  /** functionName: transact or depositWithAuthorization. */
+  async submit(functionName, args, label) {
+    const hash = await this.wallet.writeContract({ address: this.pool, abi: this.poolAbi, functionName, args })
     const r = await this.client.waitForTransactionReceipt({ hash })
-    if (r.status !== 'success') throw new Error(`transact reverted: ${label}`)
-    this.gas.push({ label, gasUsed: Number(r.gasUsed) })
+    if (r.status !== 'success') throw new Error(`${functionName} reverted: ${label}`)
+    this.gas.push({ label, gasUsed: Number(r.gasUsed), hash: r.transactionHash })
     return r
   }
 }

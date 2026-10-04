@@ -2,6 +2,8 @@
 // PHONE (src/phone.mjs) and GATEWAY (src/gateway.mjs) only talk through literal SMS strings, each checked by
 // checkSms (printable ASCII, one GSM-7 segment). The phone picks the input notes (src/select.mjs) and names them in
 // its SIG; the gateway resolves them, rebuilds, verifies the signature and proves with the 2-, 6- or 12-input circuit.
+// Deposits go SHIELD -> Q -> SIG -> Shielded: the phone signs MockAUSD's EIP-3009 ReceiveWithAuthorization with its
+// EOA key, and the gateway calls depositWithAuthorization (the pool takes deposits no other way).
 // Prereqs: scripts/setup.sh, forge build.
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -12,9 +14,9 @@ import { spawn } from 'node:child_process'
 import { createPublicClient, createWalletClient, http, formatUnits, parseUnits, encodeFunctionData, hexToBytes, parseEventLogs } from 'viem'
 import { mnemonicToAccount, generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { foundry } from 'viem/chains'
-import { newUser, provingKeys, owner, packAddress, buildTx, sign, verifySig, prove, proveTimes, LEVELS } from '../src/shielded.mjs'
+import { newUser, provingKeys, owner, packAddress, buildTx, sign, verifySig, prove, proveTimes, LEVELS, buildDeposit, receiveAuth, NULL_COMMITMENT } from '../src/shielded.mjs'
 import { getExtDataHash, toFixedHex, toBuffer, FIELD_SIZE, randomBN } from '../src/utils.mjs'
-import { checkSms, formatQuote, formatSig, formatSent, formatGot, parseSig, formatCommand, REF_MOD } from '../src/sms.mjs'
+import { checkSms, formatQuote, formatSig, formatSent, formatGot, parseSig, formatCommand, REF_MOD, formatShield, formatShielded } from '../src/sms.mjs'
 import { Phone } from '../src/phone.mjs'
 import { Gateway } from '../src/gateway.mjs'
 
@@ -56,7 +58,7 @@ const hasher = await deploy(hasherJson.abi, hasherJson.bytecode)
 const verifiers = {}
 for (const n of [2, 6, 12]) verifiers[n] = await deploy(V[n].abi, V[n].bytecode.object)
 const token = await deploy(T.abi, T.bytecode.object)
-const pool = await deploy(P.abi, P.bytecode.object, [verifiers[2], verifiers[6], verifiers[12], LEVELS, hasher, token, AUSD(1000)])
+const pool = await deploy(P.abi, P.bytecode.object, [verifiers[2], verifiers[6], verifiers[12], LEVELS, hasher, token, AUSD(1000), gwWallet.account.address, deployer.account.address])
 const domain = { chainId: await client.getChainId(), pool }
 console.log(`deployed pool ${pool} on chain ${domain.chainId}`)
 const balanceOf = (a) => client.readContract({ address: token, abi: T.abi, functionName: 'balanceOf', args: [a] })
@@ -80,13 +82,15 @@ async function expectNoProof(promise, label) {
 
 // ---------- actors
 const FEE = AUSD('0.01')
-const gateway = new Gateway({ client, wallet: gwWallet, pool, poolAbi: P.abi, domain, fee: FEE })
-const config = { domain, relayer: gwWallet.account.address, maxFee: AUSD(1) }
+const ausd = { address: token, name: 'Mock AUSD', version: '1' } // EIP-712 domain of MockAUSD
+const gateway = new Gateway({ client, wallet: gwWallet, pool, poolAbi: P.abi, domain, fee: FEE, ausd })
+const config = { domain, relayer: gwWallet.account.address, maxFee: AUSD(1), ausd }
 const users = { alice: newUser(), bob: newUser(), carol: newUser(), dave: newUser() }
 const numbers = { alice: '+919800000001', bob: '+919800000002', carol: '+919800000003', dave: '+919800000004' }
-const phones = Object.fromEntries(Object.entries(users).map(([k, user]) => [k, new Phone({ number: numbers[k], user, config })]))
+const accounts = { alice: aliceEOA.account, bob: bobEOA.account } // root keys of the users' EOAs (for SHIELD)
+const phones = Object.fromEntries(Object.entries(users).map(([k, user]) => [k, new Phone({ number: numbers[k], user, config, account: accounts[k] })]))
 const byNumber = Object.fromEntries(Object.values(phones).map((p) => [p.number, p]))
-for (const [k, user] of Object.entries(users)) gateway.register(numbers[k], provingKeys(user)) // online onboarding
+for (const [k, user] of Object.entries(users)) gateway.register(numbers[k], provingKeys(user), accounts[k]?.address) // online onboarding
 const { alice, bob, carol, dave } = phones
 
 const smsLog = []
@@ -103,7 +107,7 @@ async function converse(from, text) {
     wire(m.from, m.to, m.text)
     if (m.to === 'GW') for (const r of await gateway.onSms(m.from, m.text)) queue.push({ from: 'GW', ...r })
     else {
-      const res = byNumber[m.to].onSms(m.text)
+      const res = await byNumber[m.to].onSms(m.text)
       if (res.refused || res.error) throw new Error(`${m.to}: ${res.refused ?? res.error}`)
       if (res.out) queue.push({ from: m.to, to: 'GW', text: res.out })
     }
@@ -115,7 +119,7 @@ async function expectErr(phone, text, code, label) {
   const [r] = await gateway.onSms(phone.number, text)
   wire('GW', phone.number, r.text, label)
   assert.match(r.text, new RegExp(`^ERR (\\S{4} )?${code}$`), label)
-  assert.equal(phone.onSms(r.text).error, code)
+  assert.equal((await phone.onSms(r.text)).error, code)
 }
 const cache = (p) => p.unspent().map((n) => `${fmt(n.amount)}@${n.pos}`).join(', ')
 const now = () => Math.floor(Date.now() / 1000)
@@ -139,18 +143,11 @@ async function pay(phone, text, nIns, real, label) {
   console.log(`  -> transaction${nIns}, ${real} real inputs + ${nIns - real} dummies | ${phone.number} cache: ${cache(phone)}`)
 }
 
-// ---------- 1. Alice shields 50 (online)
-console.log('1. Alice shields 50 AUSD from her EOA (online)')
-await send(aliceEOA, token, T.abi, 'mint', [aliceEOA.account.address, AUSD(50)])
-await send(aliceEOA, token, T.abi, 'approve', [pool, AUSD(50)])
-{
-  const tx = buildTx({ me: alice.me, inputs: [], outputs: [{ amount: AUSD(50), to: alice.me }, { amount: 0n, to: alice.me }], extAmount: AUSD(50), deadline: now() + 600, domain })
-  const args = await gateway.proveTx(alice.number, tx, sign(users.alice.authSk, tx.msg)) // phone signs, gateway proves
-  const r = await send(aliceEOA, pool, P.abi, 'transact', [args, tx.extData])
-  gateway.gas.push({ label: 'deposit 50 (Alice EOA) [2-in]', gasUsed: Number(r.gasUsed) })
-  const p = Number(parseEventLogs({ abi: P.abi, logs: r.logs, eventName: 'NewCommitment' })[0].args.index)
-  alice.addNote(p, tx.outs[0].amount, tx.outs[0].blinding)
-}
+// ---------- 1. Alice shields 50 over SMS (EIP-3009 from her EOA)
+console.log('1. OFFLINE: Alice shields 50 AUSD from her EOA (SHIELD -> Q -> SIG -> Shielded)')
+await send(aliceEOA, token, T.abi, 'mint', [aliceEOA.account.address, AUSD('50.01')]) // deposit + fee; no approve
+await converse(alice.number, alice.shield('50'))
+assert.equal(await balanceOf(aliceEOA.account.address), 0n)
 console.log(`  Alice cache: ${cache(alice)}`)
 
 // ---------- 2. Alice pays Bob 20 over SMS
@@ -162,24 +159,29 @@ assert.equal(bob.balance(), AUSD(20))
 
 // ---------- negative checks on the phone (d, f): malicious or wrong quotes are refused, no SIG goes out
 console.log('d/f. phone refuses bad quotes (nothing is signed)')
-function expectRefused(phone, q, why) {
+async function expectRefused(phone, q, why) {
   const text = formatQuote(q)
   wire('GW', phone.number, text, `forged: ${why}`)
-  const res = phone.onSms(text)
+  const res = await phone.onSms(text)
   assert.ok(res.refused && !res.out, why)
   console.log(`  OK refused: ${res.refused}`)
 }
 const mallory = owner(provingKeys(newUser()))
 alice.send(bob.number, '1')
-expectRefused(alice, { id: 'MMMM', exp: now() - 1, fee: '0.01', to: packAddress(bob.me) }, 'expired quote')
-expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '5', to: packAddress(bob.me) }, 'fee above limit')
-expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: packAddress(mallory) }, "(f) Bob's pinned key substituted")
+await expectRefused(alice, { id: 'MMMM', exp: now() - 1, fee: '0.01', to: packAddress(bob.me) }, 'expired quote')
+await expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '5', to: packAddress(bob.me) }, 'fee above limit')
+await expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: packAddress(mallory) }, "(f) Bob's pinned key substituted")
 alice.cancel()
 alice.send(bob.number, '40')
-expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: packAddress(bob.me) }, "(d) notes don't cover amount + fee")
+await expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: packAddress(bob.me) }, "(d) notes don't cover amount + fee")
 alice.cancel()
 alice.send(fresh.address, '10')
-expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: attacker.address }, 'withdrawal address substituted')
+await expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: attacker.address }, 'withdrawal address substituted')
+alice.cancel()
+alice.shield('5')
+await expectRefused(alice, { id: 'MMMM', exp: now() - 1, fee: '0.01' }, 'SHIELD: expired quote')
+await expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '5' }, 'SHIELD: fee above limit')
+await expectRefused(alice, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: packAddress(mallory) }, 'SHIELD: deposit quote names a recipient')
 alice.cancel()
 
 // ---------- 3. Bob pays Carol 5 from the note he just learned by SMS
@@ -194,7 +196,7 @@ const sendText = alice.send(fresh.address, '10')
 wire(alice.number, 'GW', sendText)
 const [qMsg] = await gateway.onSms(alice.number, sendText)
 wire('GW', alice.number, qMsg.text)
-const sigText = alice.onSms(qMsg.text).out
+const sigText = (await alice.onSms(qMsg.text)).out
 wire(alice.number, 'GW', sigText)
 const { id, sig, refs } = parseSig(sigText)
 const quote = gateway.quotes.get(id)
@@ -235,7 +237,7 @@ const quote = gateway.quotes.get(id)
 console.log('4b. the untampered SIG goes through')
 for (const r of await gateway.onSms(alice.number, sigText)) {
   wire('GW', r.to, r.text)
-  byNumber[r.to].onSms(r.text)
+  await byNumber[r.to].onSms(r.text)
 }
 console.log(`  Alice cache: ${cache(alice)}`)
 assert.equal(alice.balance(), AUSD('19.98'))
@@ -260,23 +262,25 @@ console.log('5. balances after steps 1-4')
   console.log(`  pool ${fmt(bal.pool)} | fresh ${fmt(bal.fresh)} (native ${await client.getBalance({ address: fresh.address })}) | gateway fees ${fmt(bal.gateway)}`)
   assert.equal(bal.pool, AUSD('39.97'))
   assert.equal(bal.fresh, AUSD(10))
-  assert.equal(bal.gateway, AUSD('0.03'))
+  assert.equal(bal.gateway, AUSD('0.04')) // 3 SMS payments + the SMS deposit
   assert.equal(await client.getBalance({ address: fresh.address }), 0n)
 }
 
 // ---------- 6. Dave: many small notes, every branch of the selection rule, all three circuits
 console.log('6. Dave receives small payments and pays Carol: 2-, 6- and 12-input circuits')
 await send(bobEOA, token, T.abi, 'mint', [bobEOA.account.address, AUSD(100)])
-await send(bobEOA, token, T.abi, 'approve', [pool, AUSD(100)])
-/** Online: Bob's EOA shields notes straight to Dave (Bob's app signs, the gateway proves); Dave's app syncs them. */
+/**
+ * Online: Bob's EOA shields notes straight to Dave. Bob's app builds the deposit and signs the EIP-3009 authorization;
+ * the gateway proves (its own dummy inputs) and submits. Fee 0 here so the step balances stay as before. Dave's app syncs.
+ */
 async function fund(phone, amounts) {
   for (let i = 0; i < amounts.length; i += 2) {
     const outs = [amounts[i], amounts[i + 1] ?? 0n].map(AUSD)
-    const tx = buildTx({ me: bob.me, inputs: [], outputs: outs.map((amount) => ({ amount, to: phone.me })), extAmount: outs[0] + outs[1], deadline: now() + 600, domain })
-    const args = await gateway.proveTx(bob.number, tx, sign(users.bob.authSk, tx.msg))
-    const r = await send(bobEOA, pool, P.abi, 'transact', [args, tx.extData])
+    const dep = buildDeposit({ me: bob.me, outputs: outs.map((amount) => ({ amount, to: phone.me })), relayer: gwWallet.account.address, deadline: now() + 600, seed: randomBN(), domain })
+    const signature = await bobEOA.account.signTypedData(receiveAuth(ausd, domain.chainId, { from: bobEOA.account.address, to: pool, value: dep.value, validBefore: dep.extData.deadline, nonce: dep.nonce }))
+    const r = await gateway.deposit(dep, bobEOA.account.address, signature, 'fund Dave (deposit)')
     const p = Number(parseEventLogs({ abi: P.abi, logs: r.logs, eventName: 'NewCommitment' })[0].args.index)
-    outs.forEach((a, j) => a > 0n && phone.addNote(p + j, a, tx.outs[j].blinding))
+    outs.forEach((a, j) => a > 0n && phone.addNote(p + j, a, dep.outs[j].blinding))
   }
   console.log(`  Dave receives ${amounts.join(' + ')} | cache: ${cache(phone)} | eligible n = ${phone.eligible().length}`)
 }
@@ -301,7 +305,7 @@ await sameView(dave)
   wire(dave.number, 'GW', sendText)
   const [q] = await gateway.onSms(dave.number, sendText)
   wire('GW', dave.number, q.text)
-  const sigText = dave.onSms(q.text).out
+  const sigText = (await dave.onSms(q.text)).out
   wire(dave.number, 'GW', sigText)
   const { id, sig, refs } = parseSig(sigText)
   const quote = gateway.quotes.get(id)
@@ -332,7 +336,7 @@ await sameView(dave)
   console.log('  the honest SIG goes through')
   for (const m of await gateway.onSms(dave.number, sigText)) {
     wire('GW', m.to, m.text)
-    byNumber[m.to].onSms(m.text)
+    await byNumber[m.to].onSms(m.text)
   }
   assert.equal(gateway.last.nIns, 6)
   assert.equal(gateway.last.real, 6)
@@ -366,20 +370,46 @@ await sameView(dave)
 console.log('6g. n=13: the 12 largest (22.97) are short of 23.01 -> ERR MERGE')
 await expectErr(dave, dave.send(carol.number, '23'), 'MERGE', '12 largest notes short; all 13 would cover')
 dave.send(carol.number, '23')
-expectRefused(dave, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: packAddress(carol.me) }, 'quote the rule says needs a merge')
+await expectRefused(dave, { id: 'MMMM', exp: now() + 600, fee: '0.01', to: packAddress(carol.me) }, 'quote the rule says needs a merge')
 dave.cancel()
 await pay(dave, dave.merge(), 12, 12, '6h. merge to self (T = fee): n=13 -> 12-in, 12 notes become 1')
 assert.equal(dave.balance(), AUSD('23.96'))
 await pay(dave, dave.send(carol.number, '23'), 2, 2, '6i. n=2 after the merge: 2 largest cover 23.01 -> 2-in')
 assert.equal(dave.balance(), AUSD('0.95'))
+{
+  const leaves = Number(await client.readContract({ address: pool, abi: P.abi, functionName: 'nextIndex' }))
+  await pay(dave, dave.send(fresh.address, '0.94'), 2, 1, '6j. Dave withdraws all of his 0.95 note (0.94 + fee): no change, so two null outputs')
+  assert.deepEqual(gateway.last.args.outputCommitments.map(BigInt), [NULL_COMMITMENT, NULL_COMMITMENT])
+  assert.equal(Number(await client.readContract({ address: pool, abi: P.abi, functionName: 'nextIndex' })), leaves, 'no leaves inserted')
+  assert.equal(dave.balance(), 0n)
+  console.log(`  -> no leaves, Sent has no p=, gas ${gateway.gas.at(-1).gasUsed}`)
+}
+
+// ---------- gateway policy: value only moves between registered users (checked before any proof)
+console.log('policy. the gateway refuses to prove for unregistered keys or accounts')
+{
+  const stranger = owner(provingKeys(newUser())) // a valid shielded key the gateway has no number for
+  const [note] = carol.unspent()
+  const base = { relayer: gwWallet.account.address, deadline: now() + 600, domain }
+  const t = buildTx({ ...base, me: carol.me, inputs: [note], outputs: [{ amount: note.amount - FEE, to: stranger }, { amount: 0n, to: carol.me }], fee: FEE })
+  const refused = async (promise, re, label) => {
+    await assert.rejects(promise, re, label)
+    console.log(`  OK refused: ${label}`)
+  }
+  await refused(gateway.proveTx(carol.number, t, sign(users.carol.authSk, t.msg)), /output to an unregistered key/, 'transfer to an unregistered shielded key')
+  await refused(gateway.proveTx('+919899999999', t, sign(users.carol.authSk, t.msg), provingKeys(users.carol)), /inputs of an unregistered user/, 'inputs of an unregistered number')
+  const dep = (to) => buildDeposit({ ...base, me: carol.me, outputs: [{ amount: AUSD(1), to }, { amount: 0n, to: carol.me }], seed: randomBN() })
+  await refused(gateway.deposit(dep(carol.me), attacker.address, '0x', 'x'), /deposit from an unregistered account/, 'deposit from an unregistered EVM account')
+  await refused(gateway.deposit(dep(stranger), bobEOA.account.address, '0x', 'x'), /output to an unregistered key/, 'deposit into an unregistered shielded key')
+}
 
 // ---------- 7. verify
 console.log('7. balances and caches')
 const bal = { pool: await balanceOf(pool), fresh: await balanceOf(fresh.address), gateway: await balanceOf(gwWallet.account.address) }
 console.log(`  pool ${fmt(bal.pool)} | fresh ${fmt(bal.fresh)} | gateway fees ${fmt(bal.gateway)}`)
-assert.equal(bal.pool, AUSD('80.9')) // 39.97 + 41.0005 shielded to Dave - 7 fees (0.0705: one took 0.0005 of change)
-assert.equal(bal.fresh, AUSD(10))
-assert.equal(bal.gateway, AUSD('0.1005'))
+assert.equal(bal.pool, AUSD('79.95')) // 39.97 + 41.0005 shielded to Dave - 8 fees (0.0805: one took 0.0005 of change) - 0.94 withdrawn
+assert.equal(bal.fresh, AUSD('10.94'))
+assert.equal(bal.gateway, AUSD('0.1205')) // 0.1105 in payment fees + 0.01 for the SMS deposit
 assert.equal(carol.balance(), AUSD('44.9795'))
 await gateway.sync()
 for (const p of Object.values(phones)) {
@@ -433,6 +463,10 @@ const worst = {
   SIG: formatSig('ZZZZ', Buffer.alloc(64, 255), Array.from({ length: 12 }, (_, i) => 8388607 - i)),
   Sent: formatSent({ amount: '999999.999999', to: '0x' + 'f'.repeat(40), tx: '0x' + 'f'.repeat(64), p: 8388606 }),
   Got: formatGot({ amount: '999999.999999', from: '+123456789012345', p: 8388607, blinding: toBuffer(FIELD_SIZE - 1n, 32) }),
+  SHIELD: formatShield('999999.999999'),
+  'Q (deposit)': formatQuote({ id: 'ZZZZ', exp: 9999999999, fee: '999.999999' }),
+  'SIG (deposit)': formatCommand({ kind: 'sig', id: 'ZZZZ', signature: '0x' + 'ff'.repeat(65) }),
+  Shielded: formatShielded({ amount: '999999.999999', tx: '0x' + 'f'.repeat(64), p: 8388606 }),
 }
 const smsMaxSeen = {}
 for (const m of smsLog) smsMaxSeen[m.kind] = Math.max(smsMaxSeen[m.kind] ?? 0, m.len)

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import nacl from 'tweetnacl'
 import { buildEddsa } from 'circomlibjs'
 import { groth16 } from 'snarkjs'
-import { keccak256, zeroAddress } from 'viem'
+import { keccak256, zeroAddress, encodeAbiParameters } from 'viem'
 import { CIRCUITS } from './select.mjs'
 import { poseidonHash, getExtDataHash, FIELD_SIZE, toBuffer, toFixedHex, randomBN } from './utils.mjs'
 
@@ -79,9 +79,9 @@ export function decryptNote(data, viewSk) {
 
 /**
  * me: owner(...) of the spender. nIns: circuit size (2, 6 or 12). inputs: 0-nIns notes {amount, blinding, pos}.
- * outputs: exactly 2 {amount, to: {ownerKey, encPk}}.
+ * outputs: exactly 2 {amount, to: {ownerKey, encPk} | NULL_OWNER}.
  * Dummy inputs (amount 0, root check skipped) use the owner's keys; their blinding derives from the first real
- * nullifier (random only when there is no real input, i.e. a deposit, which is built online).
+ * nullifier (random only when there is no real input, i.e. a deposit).
  * Output blinding_i = Poseidon(nk, nullifier0, nullifier1, i).
  * Signed message: Poseidon(nullifier[0..nIns), commitment0, commitment1, extDataHash, publicAmount), at most 16 inputs.
  */
@@ -93,29 +93,91 @@ export function buildTx({ me, nIns = 2, inputs, outputs, extAmount = 0n, fee = 0
       const c = commitment(n.amount, me.ownerKey, n.blinding)
       return { amount: BigInt(n.amount), blinding: n.blinding, pos: n.pos, commitment: c, nullifier: nullifier(me.nk, c, n.pos) }
     })
+  addDummies(me, ins, nIns)
+  const blindingOf = (i) => poseidonHash([me.nk, ins[0].nullifier, ins[1].nullifier, i])
+  return withMsg(ins, seal({ nk: me.nk, outputs, blindingOf, extAmount, fee, recipient, relayer, deadline, domain }))
+}
+
+function addDummies(me, ins, nIns) {
   while (ins.length < nIns) {
     const blinding = ins.length ? poseidonHash([me.nk, ins[0].nullifier, ins.length]) : randomBN()
     const c = commitment(0n, me.ownerKey, blinding)
     ins.push({ amount: 0n, blinding, pos: 0, commitment: c, nullifier: nullifier(me.nk, c, 0) })
   }
+}
+
+/** An empty output: amount 0, owner key 0, blinding 0, no ciphertext. Its commitment is the pool's NULL_COMMITMENT. */
+export const NULL_OWNER = Object.freeze({ ownerKey: 0n, encPk: null })
+export const NULL_COMMITMENT = commitment(0n, 0n, 0n)
+
+/** A withdrawal's outputs: [0 to self, change], or two null outputs when there is no change (no leaves, ~860k less gas). */
+export const withdrawOutputs = (change) =>
+  change.amount > 0n ? [{ amount: 0n, to: change.to }, change] : [{ amount: 0n, to: NULL_OWNER }, { amount: 0n, to: NULL_OWNER }]
+
+/** Output notes, extData, extDataHash, publicAmount. nk keys the deterministic note encryption. */
+function seal({ nk, outputs, blindingOf, extAmount, fee, recipient, relayer, deadline, domain }) {
   const outs = outputs.map((o, i) => {
-    const blinding = poseidonHash([me.nk, ins[0].nullifier, ins[1].nullifier, i])
+    if (o.to === NULL_OWNER && BigInt(o.amount) !== 0n) throw new Error('a null output carries no amount')
+    const blinding = o.to === NULL_OWNER ? 0n : blindingOf(i)
     return { amount: BigInt(o.amount), to: o.to, blinding, commitment: commitment(o.amount, o.to.ownerKey, blinding) }
   })
+  const enc = (o) => (o.to === NULL_OWNER ? '0x' : encryptNote(o, o.to.encPk, nk))
   const extData = {
     recipient,
     extAmount: BigInt(extAmount),
     relayer,
     fee: BigInt(fee),
     deadline: BigInt(deadline),
-    encryptedOutput1: encryptNote(outs[0], outs[0].to.encPk, me.nk),
-    encryptedOutput2: encryptNote(outs[1], outs[1].to.encPk, me.nk),
+    encryptedOutput1: enc(outs[0]),
+    encryptedOutput2: enc(outs[1]),
   }
   const extDataHash = getExtDataHash(extData, domain)
   const publicAmount = (((extData.extAmount - extData.fee) % FIELD_SIZE) + FIELD_SIZE) % FIELD_SIZE
-  const msg = poseidonHash([...ins.map((x) => x.nullifier), outs[0].commitment, outs[1].commitment, extDataHash, publicAmount])
-  return { ins, outs, extData, extDataHash, publicAmount, msg }
+  return { outs, extData, extDataHash, publicAmount }
 }
+
+const withMsg = (ins, s) => ({ ins, ...s, msg: poseidonHash([...ins.map((x) => x.nullifier), s.outs[0].commitment, s.outs[1].commitment, s.extDataHash, s.publicAmount]) })
+
+// ---------- EIP-3009 deposits
+
+/** Per-quote seed for deposit blindings: unique per (quote id, exp), known to the phone and the gateway. */
+export const quoteSeed = (id, exp) => (BigInt(exp) << 32n) | BigInt('0x' + Buffer.from(id).toString('hex'))
+
+/**
+ * A deposit as the depositor builds it alone (no inputs, no gateway keys): outputs, extData (recipient 0,
+ * extAmount = outputs + fee), and the EIP-3009 nonce keccak256(extDataHash, commitment0, commitment1).
+ * Output blinding_i = Poseidon(nk, seed, i). value is what the authorization moves: deposit + fee.
+ */
+export function buildDeposit({ me, outputs, fee = 0n, relayer = zeroAddress, deadline, seed, domain }) {
+  const value = outputs.reduce((s, o) => s + BigInt(o.amount), 0n) + BigInt(fee)
+  const s = seal({ nk: me.nk, outputs, blindingOf: (i) => poseidonHash([me.nk, seed, i]), extAmount: value, fee, recipient: zeroAddress, relayer, deadline, domain })
+  const nonce = keccak256(encodeAbiParameters([{ type: 'bytes32' }, { type: 'bytes32' }, { type: 'bytes32' }], [toFixedHex(s.extDataHash), toFixedHex(s.outs[0].commitment), toFixedHex(s.outs[1].commitment)]))
+  return { ...s, value, nonce }
+}
+
+/** The gateway completes a deposit: dummy inputs under its own keys (gw = owner(...)), and the message its own EdDSA key signs. */
+export const depositTx = (gw, dep, nIns = 2) => {
+  const ins = []
+  addDummies(gw, ins, nIns)
+  return withMsg(ins, dep)
+}
+
+/** EIP-712 typed data of AUSD's ReceiveWithAuthorization. ausd: { address, name, version }. */
+export const receiveAuth = (ausd, chainId, { from, to, value, validBefore, nonce }) => ({
+  domain: { name: ausd.name, version: ausd.version, chainId, verifyingContract: ausd.address },
+  types: {
+    ReceiveWithAuthorization: [
+      { name: 'from', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'validAfter', type: 'uint256' },
+      { name: 'validBefore', type: 'uint256' },
+      { name: 'nonce', type: 'bytes32' },
+    ],
+  },
+  primaryType: 'ReceiveWithAuthorization',
+  message: { from, to, value, validAfter: 0n, validBefore: BigInt(validBefore), nonce },
+})
 
 // ---------- spending authority (phone)
 

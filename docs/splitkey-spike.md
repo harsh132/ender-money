@@ -15,6 +15,11 @@ tree, no proving key and no prover. It picks the input notes itself and names
 them in its `SIG`. The gateway proves in 1 to 4 s and can't spend, redirect or
 reprice a payment, or swap the notes the phone chose.
 
+Deposits now go over SMS too: the phone signs one AUSD EIP-3009 authorization
+that pins the deposit. Tested on a fork of Monad testnet with the real AUSD and
+a Calibur-delegated account. See
+[EIP-3009 deposits and guardrails](#eip-3009-deposits-and-guardrails).
+
 ## Circuit changes
 
 - **Owner key** = Poseidon(Ax, Ay, Poseidon(nk)): the spending-authority public
@@ -99,6 +104,10 @@ The code is in `src/select.mjs`, which both sides import.
 | `SIG` | `SIG <id> <refs> <86-char signature>` | 132 (12 refs) |
 | `Sent` | `Sent 20 AUSD to +91.... Tx 0xd340...50 p=2` (change note at p+1) | 95 |
 | `Got` (to the recipient) | `Got 20 AUSD from +91... p=2 b=<43-char blinding>` | 100 |
+| `SHIELD` (spike only) | `SHIELD 50 AUSD` | 25 |
+| `Q` (deposit) | `Q <id> exp=<unix> fee=0.01` (no `to=`) | 36 (48 with the Retriever hash) |
+| `SIG` (deposit) | today's `SIG <id> <88-char base64 secp256k1 signature>` | 97 |
+| `Shielded` | `Shielded 50 AUSD. Tx 0x36e2...df p=0` | 53 |
 
 All pass printable-ASCII and `fitsOneSegment` from `protocol/sms.ts`.
 
@@ -124,18 +133,20 @@ transaction itself and signs it.
 
 ## Scenario
 
-1. Alice shields 50 AUSD (online deposit).
+1. By SMS, Alice shields 50 AUSD from her EOA (`SHIELD`, `Q`, `SIG`,
+   `Shielded`; she signs an EIP-3009 authorization for 50.01).
 2. By SMS, Alice pays Bob 20 privately; Bob learns the note from the `Got` alert.
 3. By SMS, Bob pays Carol 5 from that note.
 4. By SMS, Alice withdraws 10 to a fresh address with no MON.
-5. Dave gets many 1 AUSD notes (plus one of 0.0005, which is ignored) and pays
+5. Dave gets many 1 AUSD notes (plus one of 0.0005, which is ignored), shielded
+   online from Bob's EOA with EIP-3009, and pays
    Carol by SMS through every branch: 2-in (n = 4); 6-in with all 3 notes
    (n = 3, two largest short; the 0.0005 change goes to the fee); `ERR FUNDS` (nothing eligible); 6-in (n = 8);
    12-in with all 9 notes (n = 9, six largest short); 12-in (n = 24); `ERR MERGE`
    (n = 13, twelve largest short); `MERGE` (12-in); then 2-in (n = 2).
 
 Final state: pool 80.9, fresh address 10 (zero native balance), gateway fees
-0.1005. Each phone's note cache matches the gateway's index, phone and gateway
+0.1105. Each phone's note cache matches the gateway's index, phone and gateway
 counted the same eligible notes before every payment, spent flags match
 on-chain nullifiers, and the gateway's root matches the pool's.
 
@@ -152,6 +163,7 @@ on-chain nullifiers, and the gateway's root matches the pool's.
 | Quote the phone's notes can't pay (or that needs a merge), expired, fee over limit, swapped withdrawal address | phone refuses |
 | Replaying a spent note | `Input is already spent` |
 | Different key for a pinned recipient | refused, `KEY CHANGED` |
+| Deposit quote expired, fee over limit, or with a `to=` | phone refuses |
 
 Selection unit test: 33 checks, every branch (plus the dust-change rule) at n = 1, 2, 5, 6, 11, 12 and 13.
 Witness tests: the same 4 valid cases and 19 bad ones for each circuit (15
@@ -165,6 +177,91 @@ accepted, 57 rejected in all; Nova's original checks plus the split-key logic).
 - **Gateway:** sees all its users' notes, balances, counterparties and timing,
   and when notes are spent. Can censor or delay until the deadline. Cannot spend,
   redirect or reprice.
+
+## EIP-3009 deposits and guardrails
+
+Before, a deposit needed the user's EOA to submit calldata containing the
+gateway's proof, so it couldn't go over SMS. Now:
+
+- **The nonce is the commitment.** The phone builds the deposit alone:
+  outputs `[amount to self, 0 to self]`, blindings from `nk` and the quote,
+  deterministic ciphertexts, `extData` with `extAmount` = amount + fee. It
+  signs AUSD's `ReceiveWithAuthorization{from: its EOA, to: pool, value:
+  amount + fee, validAfter: 0, validBefore: exp, nonce}`, with
+  `nonce = keccak256(extDataHash, outputCommitment0, outputCommitment1)`.
+- **`depositWithAuthorization(proof, extData, from, signature)`**, gateway
+  only. The pool computes the nonce itself, calls
+  `AUSD.receiveWithAuthorization`, then the normal transact.
+- **No shielded signature from the user.** The dummy inputs belong to the
+  gateway, which signs the in-circuit message with its own EdDSA key. The
+  circuit is unchanged: all inputs share one owner, outputs go to anyone. The
+  user's signature pins `extDataHash` and both outputs, so the gateway can't
+  redirect.
+- **Guardrails:** deposits only through `depositWithAuthorization`; transfers
+  and merges from the gateway only; withdrawals from anyone only when both
+  outputs are the null commitment Poseidon(0, 0, 0), otherwise gateway only;
+  `admin` (a multisig in production) rotates the gateway. A withdrawal with two
+  null outputs inserts no leaves; the gateway's tree still matches the pool's
+  root.
+
+**How AUSD checks a Calibur-delegated `from`:** `ecrecover` first, ERC-1271
+only if that fails. A raw 65-byte root-key signature works (both the `bytes`
+and the `v, r, s` overloads), with no `isValidSignature` call in the trace.
+A wrong key falls through to Calibur's `isValidSignature`, which rejects it.
+Calibur's wrapped format `(keyHash, sig, hookData)` fails: it expects an
+ERC-7739 signature. That only matters for non-root keys such as passkeys.
+
+**Fork test** (`npm run fork`; anvil forking Monad testnet, Prague, the real
+AUSD and Calibur v1.1.0): a fresh EOA delegated with a viem 7702
+authorization and funded from the testnet faucet contract (impersonated on the
+fork) shields 1 AUSD by SMS. Then an SMS payment, an SMS withdrawal and a
+null-output withdrawal sent by a random EOA. All 15 negative checks are
+rejected:
+
+| Attack | Result |
+| --- | --- |
+| Gateway changes either output commitment, the amount, the fee (same total), the deadline or the recipient | AUSD `InvalidSignature()` ×6 |
+| Replay, as mined or with fresh dummy nullifiers | AUSD `UsedOrCanceledAuthorization()` ×2 |
+| Deposit or transfer from a non-gateway EOA | `only gateway` ×2 |
+| Non-gateway withdrawal with one real output | `only gateway` |
+| Plain `transact` deposit | `deposits: depositWithAuthorization` |
+| Old gateway after rotation | `only gateway` (the new one works) |
+| `setGateway` by non-admins | `only admin` ×2 |
+
+The anvil sim uses the same path with MockAUSD and passes every check.
+
+| Gas (anvil) | Gas | Monad estimate |
+| --- | --- | --- |
+| Deposit before (`transact` + `transferFrom`, mock) | 1,229,038 | ~2.12M |
+| `depositWithAuthorization` (mock / real AUSD) | 1,267,613 / 1,276,796 | ~2.16–2.17M |
+| Withdrawal, normal | 1,226,086 | ~2.12M |
+| Withdrawal, two null outputs | 365,707 | ~1.26M |
+
+The deposit costs about 3% more, mostly AUSD storing the used nonce. Skipping
+the insert saves the 23 Poseidon hashes, about 70% of a withdrawal.
+
+**Problems:**
+
+1. Rotating the gateway means updating every phone: the relayer address is in
+   the signed `extData`.
+2. The deposit seed comes from the quote's id and `exp`. A gateway that repeats
+   them for the same amount only gets the second deposit refused.
+3. The null-output exit needs a prover, so it's for an online wallet.
+
+**Also done:**
+
+- **SMS withdrawals with no change use two null outputs** (`withdrawOutputs`
+  in `src/shielded.mjs`): no leaves, and `Sent` carries no `p=`. In the sim
+  that withdrawal cost 354,559 gas instead of about 1.2M.
+- **Gateway policy before every proof** (`checkOwners` in `src/gateway.mjs`):
+  inputs belong to one registered number (or are the gateway's zero-value
+  deposit dummies), and every output is null or a registered user's note.
+  Deposits must come from a registered user's EVM account. So value only moves
+  between registered users; withdrawals still go to any address. The sim checks
+  four refusals: a transfer to an unregistered shielded key, inputs of an
+  unregistered number, a deposit from an unregistered account, and a deposit
+  into an unregistered key. On-chain this holds because only the gateway can
+  submit deposits and transfers.
 
 ## Monad testnet deployment (4 Oct 2026)
 
@@ -186,8 +283,31 @@ estimate). Caches, the gateway index and the on-chain root all matched.
 - **Keep the zkeys.** The deployed verifiers only accept proofs from the local
   `build/transaction{2,6,12}.zkey` (gitignored). Losing them strands every
   note in this pool.
+- The deployed pool predates EIP-3009 deposits and the guardrails.
 - The gateway reads logs from the deploy block in 100-block chunks (public RPC
   limits); it rescans everything on each sync, so an indexer is next.
+
+## Guarded testnet pool (4 Oct 2026)
+
+`0xbe34bb676ba6d40098e8aaa36b4599400c9810ff` (deploy block 68154262) has
+EIP-3009 deposits and the guardrails; gateway and admin are the gateway key. It
+reuses the first deployment's hasher and verifiers (same zkeys) and cost 0.33
+MON. Addresses in
+[`deployments/monad-testnet-guarded.json`](../spikes/nova-splitkey/deployments/monad-testnet-guarded.json).
+
+`scripts/smoke-testnet.mjs` against it, with the Calibur-delegated demo
+account as the depositor:
+
+| Step | Gas |
+| --- | --- |
+| SMS `SHIELD 0.3` (EIP-3009 from the demo account) | 2,374,931 |
+| SMS payment of 0.1 | 2,319,349 |
+| SMS withdrawal of a whole note (two null outputs, no leaves) | 1,322,835 |
+| Open exit sent by a fresh EOA, not the gateway | 1,335,560 |
+
+Everything the run put in came out; caches, the gateway index and the root
+matched. An earlier run that crashed after its deposit left 0.3 AUSD in the
+pool under throwaway keys.
 
 ## Problems and open items
 

@@ -8,6 +8,10 @@
 // Split-key spike (vs ../nova-circom2): Verifier2/6/12 instead of Verifier2/16, picked by the number of nullifiers;
 // ExtData gains `deadline` (the SMS quote's expiry, enforced here); extDataHash also hashes block.chainid and
 // address(this), binding signature and proof to one deployment.
+// EIP-3009 deposits and guardrails: deposits only through depositWithAuthorization (AUSD receiveWithAuthorization,
+// nonce = keccak256(extDataHash, outputCommitment0, outputCommitment1), computed here); transfers and deposits only
+// from the gateway; withdrawals open to anyone only when both outputs are the null commitment (then no leaves are
+// inserted); admin rotates the gateway.
 pragma solidity ^0.8.24;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -15,6 +19,11 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { IVerifier2, IVerifier6, IVerifier12 } from "./IVerifier.sol";
 import { MerkleTreeWithHistory } from "./MerkleTreeWithHistory.sol";
+
+/// AUSD's EIP-3009 receive (bytes-signature overload; AUSD also has the v, r, s one).
+interface IERC3009 {
+  function receiveWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, bytes calldata signature) external;
+}
 
 contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
   using SafeERC20 for IERC20;
@@ -27,6 +36,11 @@ contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
   IVerifier12 public immutable verifier12;
   IERC20 public immutable token;
   uint256 public immutable maximumDepositAmount;
+  // Poseidon(0, 0, 0) (circomlibjs): the commitment of an empty output (amount 0, owner key 0, blinding 0).
+  bytes32 public constant NULL_COMMITMENT = 0x0bc188d27dcceadc1dcfb6af0a7af08fe2864eecec96c5ae7cee6db31ba599aa;
+
+  address public immutable admin; // production: a multisig
+  address public gateway;
 
   mapping(bytes32 => bool) public nullifierHashes;
 
@@ -59,22 +73,50 @@ contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
     uint32 _levels,
     address _hasher,
     IERC20 _token,
-    uint256 _maximumDepositAmount
+    uint256 _maximumDepositAmount,
+    address _gateway,
+    address _admin
   ) MerkleTreeWithHistory(_levels, _hasher) {
     verifier2 = _verifier2;
     verifier6 = _verifier6;
     verifier12 = _verifier12;
     token = _token;
     maximumDepositAmount = _maximumDepositAmount;
+    gateway = _gateway;
+    admin = _admin;
   }
 
-  /** @dev Main function that allows deposits, transfers and withdrawal. */
+  function setGateway(address _gateway) external {
+    require(msg.sender == admin, "only admin");
+    gateway = _gateway;
+  }
+
+  /**
+   * @dev Transfers and withdrawals. Gateway only, except a withdrawal whose two outputs are both the null commitment
+   * (it creates no note, so anyone may submit it: the exit that doesn't need the gateway).
+   */
   function transact(Proof memory _args, ExtData memory _extData) public {
-    if (_extData.extAmount > 0) {
-      require(uint256(_extData.extAmount) <= maximumDepositAmount, "amount is larger than maximumDepositAmount");
-      token.safeTransferFrom(msg.sender, address(this), uint256(_extData.extAmount));
-    }
+    require(_extData.extAmount <= 0, "deposits: depositWithAuthorization");
+    require(msg.sender == gateway || (_extData.extAmount < 0 && _nullOutputs(_args)), "only gateway");
     _transact(_args, _extData);
+  }
+
+  /**
+   * @dev Deposit pulled from `_from` with its EIP-3009 ReceiveWithAuthorization{to: this, value: extAmount,
+   * validAfter: 0, validBefore: deadline, nonce}. The nonce is computed here, never passed in, so the authorization
+   * pins extData (through extDataHash, which _transact checks against _extData) and both output commitments.
+   */
+  function depositWithAuthorization(Proof memory _args, ExtData memory _extData, address _from, bytes memory _signature) public {
+    require(msg.sender == gateway, "only gateway");
+    require(_extData.extAmount > 0, "not a deposit");
+    require(uint256(_extData.extAmount) <= maximumDepositAmount, "amount is larger than maximumDepositAmount");
+    bytes32 nonce = keccak256(abi.encode(_args.extDataHash, _args.outputCommitments[0], _args.outputCommitments[1]));
+    IERC3009(address(token)).receiveWithAuthorization(_from, address(this), uint256(_extData.extAmount), 0, _extData.deadline, nonce, _signature);
+    _transact(_args, _extData);
+  }
+
+  function _nullOutputs(Proof memory _args) internal pure returns (bool) {
+    return _args.outputCommitments[0] == NULL_COMMITMENT && _args.outputCommitments[1] == NULL_COMMITMENT;
   }
 
   function calculatePublicAmount(int256 _extAmount, uint256 _fee) public pure returns (uint256) {
@@ -138,9 +180,12 @@ contract ShieldedPool is MerkleTreeWithHistory, ReentrancyGuard {
       token.safeTransfer(_extData.relayer, _extData.fee);
     }
 
-    _insert(_args.outputCommitments[0], _args.outputCommitments[1]);
-    emit NewCommitment(_args.outputCommitments[0], nextIndex - 2, _extData.encryptedOutput1);
-    emit NewCommitment(_args.outputCommitments[1], nextIndex - 1, _extData.encryptedOutput2);
+    // Two null outputs are not notes: skip the leaves (and their events), the tree stays as it was.
+    if (!_nullOutputs(_args)) {
+      _insert(_args.outputCommitments[0], _args.outputCommitments[1]);
+      emit NewCommitment(_args.outputCommitments[0], nextIndex - 2, _extData.encryptedOutput1);
+      emit NewCommitment(_args.outputCommitments[1], nextIndex - 1, _extData.encryptedOutput2);
+    }
     for (uint256 i = 0; i < _args.inputNullifiers.length; i++) {
       emit NewNullifier(_args.inputNullifiers[i]);
     }

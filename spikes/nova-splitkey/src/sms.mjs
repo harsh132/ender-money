@@ -23,11 +23,29 @@ export function checkSms(text) {
 export const MERGE = 'MERGE'
 
 // Q <id> exp=<unix> fee=<AUSD> to=<64-byte shielded address, base64 | 0x EVM address>  (the phone picks the notes)
-export const formatQuote = ({ id, exp, fee, to }) => checkSms(`Q ${id} exp=${exp} fee=${fee} to=${typeof to === 'string' ? to : b64(to)}`)
+// Deposit quote (answers SHIELD): Q <id> exp=<unix> fee=<AUSD>, no to=.
+const toField = (to) => (to === undefined ? '' : ` to=${typeof to === 'string' ? to : b64(to)}`)
+export const formatQuote = ({ id, exp, fee, to }) => checkSms(`Q ${id} exp=${exp} fee=${fee}${toField(to)}`)
 export function parseQuote(text) {
-  const m = new RegExp(`^Q ${ID} exp=(\\d{1,12}) fee=${AMT} to=(0x[0-9a-fA-F]{40}|[A-Za-z0-9+/]{86})$`).exec(text)
+  const m = new RegExp(`^Q ${ID} exp=(\\d{1,12}) fee=${AMT}(?: to=(0x[0-9a-fA-F]{40}|[A-Za-z0-9+/]{86}))?$`).exec(text)
   if (!m) return null
-  return { id: m[1], exp: Number(m[2]), fee: m[3], to: m[4].startsWith('0x') ? m[4].toLowerCase() : unb64(m[4], 64) }
+  const to = m[4] === undefined ? undefined : m[4].startsWith('0x') ? m[4].toLowerCase() : unb64(m[4], 64)
+  return { id: m[1], exp: Number(m[2]), fee: m[3], to }
+}
+
+// SHIELD <amount> AUSD: deposit from the phone's own EOA. The reply SIG has today's shape, SIG <id> <88-char base64
+// of a 65-byte secp256k1 signature> (protocol/sms.ts formatCommand/parseCommand), here an EIP-3009 authorization.
+export const formatShield = (amount) => checkSms(`SHIELD ${amount} AUSD`)
+export function parseShield(text) {
+  const m = new RegExp(`^SHIELD ${AMT} AUSD$`).exec(text)
+  return m && Number(m[1]) > 0 ? { amount: m[1] } : null
+}
+
+// Shielded <amt> AUSD. Tx <short hash> p=<tree position of the new note>
+export const formatShielded = ({ amount, tx, p }) => checkSms(`Shielded ${amount} AUSD. Tx ${shortHex(tx)} p=${p}`)
+export function parseShielded(text) {
+  const m = new RegExp(`^Shielded ${AMT} AUSD\\. Tx (\\S+) p=(\\d{1,8})$`).exec(text)
+  return m ? { amount: m[1], tx: m[2], p: Number(m[3]) } : null
 }
 
 // Note refs: 3 base64 characters per input = tree position mod 2^18 (262,144), concatenated. Positions past that can
@@ -46,10 +64,10 @@ export function parseSig(text) {
 }
 
 // Sent <amt> AUSD to <who>. Tx <short hash> p=<tree position of output 0; change is p+1>
-export const formatSent = ({ amount, to, tx, p }) => checkSms(`Sent ${amount} AUSD to ${to}. Tx ${shortHex(tx)} p=${p}`)
+export const formatSent = ({ amount, to, tx, p }) => checkSms(`Sent ${amount} AUSD to ${to}. Tx ${shortHex(tx)}${p === undefined ? '' : ` p=${p}`}`)
 export function parseSent(text) {
-  const m = /^Sent (\S+) AUSD to (\S+)\. Tx (\S+) p=(\d{1,8})$/.exec(text)
-  return m ? { amount: m[1], to: m[2], tx: m[3], p: Number(m[4]) } : null
+  const m = /^Sent (\S+) AUSD to (\S+)\. Tx (\S+)(?: p=(\d{1,8}))?$/.exec(text)
+  return m ? { amount: m[1], to: m[2], tx: m[3], p: m[4] === undefined ? undefined : Number(m[4]) } : null
 }
 
 // Got <amt> AUSD from <who> p=<tree position> b=<blinding, 32 bytes base64>: an offline phone learns a note

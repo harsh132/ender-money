@@ -1,0 +1,14 @@
+{
+  "chainId": 10143,
+  "token": "0xa9012a055bd4e0eDfF8Ce09f960291C09D5322dC",
+  "levels": 23,
+  "deployer": "0x458E8F51EC2B833209b5C71372376eeb1e40af08",
+  "gateway": "0x458E8F51EC2B833209b5C71372376eeb1e40af08",
+  "admin": "0x458E8F51EC2B833209b5C71372376eeb1e40af08",
+  "hasher": "0xb414989d9358298f530c5a0325ed0853511e816d",
+  "verifier2": "0xa6cf9b84cfce0f558aeb1f1443f9a6750bbc5450",
+  "verifier6": "0xd6a5bffa8351a21ec27f8f37ec43b8cfd98f5941",
+  "verifier12": "0x55bc77aae504845b9e7e7804ab1a2da44fa5fda2",
+  "pool": "0xbe34bb676ba6d40098e8aaa36b4599400c9810ff",
+  "deployBlock": 68154262
+}
