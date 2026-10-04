@@ -60,5 +60,6 @@ export const Bolt = icon(() => <Path d="M13 3 5 13h6l-1 8 8-10h-6z" />);
 export const Torch = icon(() => <Path d="M8 3h8v4l-2 3v11h-4V10L8 7zM8 7h8" />);
 export const Alert = icon(() => <Path d="M12 9v4M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />);
 export const Signal = icon(() => <Path d="M4 20v-3M9 20v-6M14 20V9M19 20V4" />);
+export const Shield = icon(() => <Path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" />);
 export const Plus = icon(() => <Path d="M12 5v14M5 12h14" />);
 export const Chevron = icon(() => <Path d="M9 6l6 6-6 6" />);
