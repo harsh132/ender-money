@@ -9,7 +9,7 @@ export const RP_ID = 'ender.money';
  * international (Twilio) number lands on 9 Oct.
  */
 export const GATEWAY_SMS: Record<'india' | 'international', string | undefined> = {
-  india: process.env.EXPO_PUBLIC_GATEWAY_SMS_IN,
+  india: process.env.EXPO_PUBLIC_GATEWAY_SMS_IN ?? '+917004543035',
   international: process.env.EXPO_PUBLIC_GATEWAY_SMS_INTL,
 };
 

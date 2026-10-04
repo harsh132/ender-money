@@ -67,7 +67,7 @@ Environment (build time):
 | Variable | Default | Use |
 | --- | --- | --- |
 | `EXPO_PUBLIC_GATEWAY_URL` | `https://api.ender.money` | `http://10.0.2.2:8787` for a local gateway from the emulator |
-| `EXPO_PUBLIC_GATEWAY_SMS_IN` | unset | relay phone number the app texts when offline (India) |
+| `EXPO_PUBLIC_GATEWAY_SMS_IN` | `+917004543035` | relay phone number the app texts when offline (India) |
 | `EXPO_PUBLIC_GATEWAY_SMS_INTL` | unset | Twilio number (international) |
 
 Without a gateway number the SMS fallback says so instead of opening the composer.
