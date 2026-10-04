@@ -14,6 +14,13 @@ export type Network = {
   whitelister?: Address;
   /** Testnet-only AUSD faucet (`requestFunds(address)`). */
   ausdFaucet?: Address;
+  /**
+   * Split-key ShieldedPool (protocol/pool.ts) and the block it was deployed in
+   * (where log scans start). Testnet only: single-contributor trusted setup,
+   * no audit. Its gateway (the only relayer it accepts) is FEE_RECIPIENT.
+   */
+  pool?: Address;
+  poolDeployBlock?: bigint;
 };
 
 /** Calibur v1.1.0, Uniswap's EIP-7702 account. Same address on both networks. */
@@ -28,6 +35,9 @@ export const MULTICALL3: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
  * is the gateway key's address.
  */
 export const FEE_RECIPIENT: Address = '0x458E8F51EC2B833209b5C71372376eeb1e40af08';
+
+/** AUSD's EIP-712 domain name and version (EIP-3009 deposits); checked on testnet. */
+export const AUSD_EIP712 = { name: 'Agora Dollar', version: '1' } as const;
 
 /** AUSD has 6 decimals on both networks. */
 export const AUSD_DECIMALS = 6;
@@ -48,5 +58,7 @@ export const NETWORKS: Record<NetworkName, Network> = {
     ctk: '0x7BEb5D9DB0d85cBEa543C04f0dE8c23c2176cd9D',
     whitelister: '0x7c10F56d6f04a51376393a1C3670e966863F6BD5',
     ausdFaucet: '0xd236c18D274E54FAccC3dd9DDA4b27965a73ee6C',
+    pool: '0xbe34bb676ba6d40098e8aaa36b4599400c9810ff',
+    poolDeployBlock: 68154262n,
   },
 };

@@ -18,6 +18,10 @@
     "ctk-check": "bun --env-file=.env scripts/ctk-check.ts"
   },
   "dependencies": {
+    "@noble/ciphers": "^1.3.0",
+    "@noble/curves": "^1.9.1",
+    "@noble/hashes": "^1.8.0",
+    "poseidon-lite": "^0.3.0",
     "viem": "^2.57.2"
   },
   "devDependencies": {
