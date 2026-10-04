@@ -166,6 +166,29 @@ accepted, 57 rejected in all; Nova's original checks plus the split-key logic).
   and when notes are spent. Can censor or delay until the deadline. Cannot spend,
   redirect or reprice.
 
+## Monad testnet deployment (4 Oct 2026)
+
+Deployed from the gateway key with `scripts/deploy-testnet.mjs`; addresses in
+[`deployments/monad-testnet.json`](../spikes/nova-splitkey/deployments/monad-testnet.json).
+
+| Contract | Address | Gas |
+| --- | --- | --- |
+| ShieldedPool (testnet AUSD, cap 1,000) | `0x1bedcebdf1d026f7f807ec5c69f06bccf2f8621c` | 2,946,983 |
+| Poseidon hasher | `0xb414989d9358298f530c5a0325ed0853511e816d` | 2,174,462 |
+| Verifier2 / 6 / 12 | `0xa6cf…5450` / `0xd6a5…5941` / `0x55bc…fda2` | 470,593 / 553,028 / 677,067 |
+
+Deploying cost about 0.7 MON. `scripts/smoke-testnet.mjs` then ran the same
+phone and gateway code against it: a 0.3 AUSD deposit, an SMS payment of 0.1
+and an SMS withdrawal of 0.05, about 2.32–2.37M gas each (close to the Monad
+estimate). Caches, the gateway index and the on-chain root all matched.
+
+- **Testnet only.** The trusted setup is single-contributor.
+- **Keep the zkeys.** The deployed verifiers only accept proofs from the local
+  `build/transaction{2,6,12}.zkey` (gitignored). Losing them strands every
+  note in this pool.
+- The gateway reads logs from the deploy block in 100-block chunks (public RPC
+  limits); it rescans everything on each sync, so an indexer is next.
+
 ## Problems and open items
 
 1. **First payment to a new contact trusts the gateway's directory.** The phone

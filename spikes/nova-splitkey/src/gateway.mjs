@@ -13,10 +13,12 @@ const { MerkleTree } = MerkleTreeMod
 const fmt = (x) => formatUnits(x, 6)
 const sum = (ns) => ns.reduce((s, n) => s + n.amount, 0n)
 const MAX_COMBOS = 64
+const LOG_RANGE = 100n
 
 export class Gateway {
-  constructor({ client, wallet, pool, poolAbi, domain, fee }) {
-    Object.assign(this, { client, wallet, pool, poolAbi, domain, fee })
+  /** fromBlock: the pool's deploy block. Public RPCs cap eth_getLogs ranges, so logs are read in LOG_RANGE chunks. */
+  constructor({ client, wallet, pool, poolAbi, domain, fee, fromBlock = 0n }) {
+    Object.assign(this, { client, wallet, pool, poolAbi, domain, fee, fromBlock: BigInt(fromBlock) })
     this.users = new Map() // number -> { keys, me, notes: Map pos -> { amount, blinding, nullifier, spent } }
     this.quotes = new Map() // id -> quote
     this.gas = []
@@ -28,12 +30,22 @@ export class Gateway {
   }
 
   // ponytail: rescans every log on each call; an indexer would keep a cursor and an incremental tree
+  async events(eventName) {
+    const to = await this.client.getBlockNumber({ cacheTime: 0 })
+    const out = []
+    for (let from = this.fromBlock; from <= to; from += LOG_RANGE) {
+      const end = from + LOG_RANGE - 1n < to ? from + LOG_RANGE - 1n : to
+      out.push(...(await this.client.getContractEvents({ address: this.pool, abi: this.poolAbi, eventName, fromBlock: from, toBlock: end })))
+    }
+    return out
+  }
+
   async sync() {
-    const logs = await this.client.getContractEvents({ address: this.pool, abi: this.poolAbi, eventName: 'NewCommitment', fromBlock: 0n })
+    const logs = await this.events('NewCommitment')
     const leaves = logs.map((l) => l.args).sort((a, b) => Number(a.index - b.index))
     this.tree = new MerkleTree(LEVELS, leaves.map((e) => BigInt(e.commitment)), { hashFunction: poseidonHash2, zeroElement: ZERO_VALUE })
     const spent = new Set(
-      (await this.client.getContractEvents({ address: this.pool, abi: this.poolAbi, eventName: 'NewNullifier', fromBlock: 0n })).map((l) => BigInt(l.args.nullifier)),
+      (await this.events('NewNullifier')).map((l) => BigInt(l.args.nullifier)),
     )
     for (const u of this.users.values()) {
       for (const e of leaves) {
