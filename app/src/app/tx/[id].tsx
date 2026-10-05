@@ -1,5 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { Linking, View } from 'react-native';
+import { Linking, ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NETWORKS } from '../../../../protocol/networks';
 import { dayLabel, short, time, usd } from '../../lib/format';
 import { useStore } from '../../lib/store';
@@ -11,13 +12,22 @@ import { meta, who } from '../../ui/TxRow';
 export default function TxDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const tx = useStore((s) => s.activity.find((t) => t.id === id));
+  const me = useStore((s) => s.wallet?.address);
+  const { bottom } = useSafeAreaInsets();
   if (!tx) return null;
   const incoming = tx.direction === 'in';
   const dead = tx.status === 'failed' || tx.status === 'expired';
-  const explorer = tx.txHash ? `${NETWORKS[tx.network].explorer}/tx/${tx.txHash}` : undefined;
+  // A row built from a text only knows the short hash (the full one doesn't fit the SMS): link to the wallet's page,
+  // which lists the transfer, until an online sync fills in the full hash.
+  const smsTx = !tx.txHash && tx.id.startsWith('sms:') ? tx.id.split(':')[2] : undefined;
+  const explorer = tx.txHash
+    ? `${NETWORKS[tx.network].explorer}/tx/${tx.txHash}`
+    : smsTx && me
+      ? `${NETWORKS[tx.network].explorer}/address/${me}`
+      : undefined;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.bg, paddingHorizontal: 20, paddingTop: 20 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 20, paddingBottom: bottom }}>
       <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: c.surface2, marginBottom: 20 }} />
       <T v="hero" style={{ textAlign: 'center', fontSize: 52, lineHeight: 60, color: incoming ? c.positive : dead ? c.fg3 : c.fg }}>
         {incoming ? '+' : '−'}${usd(tx.amount)}
@@ -31,7 +41,7 @@ export default function TxDetail() {
         {tx.fee ? <KV k="Fee" v={`$${usd(tx.fee)}`} /> : null}
         <KV k="When" v={`${dayLabel(tx.at)}, ${time(tx.at)}`} />
         {tx.error ? <KV k="Error" v={tx.error} /> : null}
-        {tx.txHash ? <KV k="Tx" v={short(tx.txHash)} mono /> : null}
+        {tx.txHash ? <KV k="Tx" v={short(tx.txHash)} mono /> : smsTx ? <KV k="Tx" v={smsTx} mono /> : null}
         <KV k="Network" v={tx.network === 'mainnet' ? 'Monad' : 'Monad testnet'} last />
       </Card>
       <View style={{ flex: 1, minHeight: 24 }} />
@@ -56,6 +66,6 @@ export default function TxDetail() {
         ) : null}
         {explorer ? <Button title="View on explorer" kind={dead ? 'text' : 'ghost'} onPress={() => Linking.openURL(explorer)} /> : null}
       </View>
-    </View>
+    </ScrollView>
   );
 }

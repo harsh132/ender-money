@@ -1,7 +1,8 @@
 import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, Share, View } from 'react-native';
+import { Pressable, ScrollView, Share, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { encodePrivateAddress } from '../../../protocol/recipient';
 import { unb64 } from '../../../protocol/sms';
 import { MAX_FEE } from '../lib/config';
@@ -26,6 +27,7 @@ export default function Receive() {
   const canShield = useStore((s) => isRegistered(s.network, s) && Number(s.account[s.network]?.balance ?? 0) > Number(MAX_FEE));
   const [mode, setMode] = useState<Mode>('public');
   const [copied, setCopied] = useState(false);
+  const { bottom } = useSafeAreaInsets();
   const privateAddress = useMemo(() => {
     const packed = owner ? unb64(owner.replace(/=+$/, ''), 64) : null;
     return packed ? encodePrivateAddress(packed) : undefined;
@@ -41,7 +43,7 @@ export default function Receive() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.bg, paddingHorizontal: 20, paddingTop: 20 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 20, paddingBottom: bottom }}>
       <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: c.surface2, marginBottom: 16 }} />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
         <T v="title" style={{ flex: 1 }}>Receive</T>
@@ -102,6 +104,6 @@ export default function Receive() {
           style={{ flex: 1 }}
         />
       </View>
-    </View>
+    </ScrollView>
   );
 }
