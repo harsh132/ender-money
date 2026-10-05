@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["protocol", "gateway/src", "scripts"]
+  "include": ["protocol", "gateway/src", "scripts", "site/src"]
 }

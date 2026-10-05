@@ -15,7 +15,11 @@
     "signup": "bun --env-file=.env scripts/signup.ts",
     "gateway:migrate:remote": "wrangler d1 migrations apply ender-money --remote -c gateway/wrangler.jsonc",
     "gateway:deploy": "wrangler deploy -c gateway/wrangler.jsonc",
-    "ctk-check": "bun --env-file=.env scripts/ctk-check.ts"
+    "ctk-check": "bun --env-file=.env scripts/ctk-check.ts",
+    "site:dev": "wrangler dev -c site/wrangler.jsonc",
+    "site:migrate:local": "wrangler d1 migrations apply ender-waitlist --local -c site/wrangler.jsonc",
+    "site:migrate:remote": "wrangler d1 migrations apply ender-waitlist --remote -c site/wrangler.jsonc",
+    "site:deploy": "wrangler deploy -c site/wrangler.jsonc"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
@@ -24,6 +28,7 @@
     "@noble/hashes": "^1.8.0",
     "@scure/base": "^1.2.6",
     "poseidon-lite": "^0.3.0",
+    "qrcode-generator": "^2.0.4",
     "viem": "^2.57.2"
   },
   "devDependencies": {

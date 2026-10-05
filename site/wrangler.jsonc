@@ -1,0 +1,26 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ender-site",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+
+  // ender.money and www → this Worker. ender.money/.well-known/assetlinks.json stays with the gateway
+  // (ender-money-gateway): both are zone routes and the most specific pattern wins. api.ender.money is the gateway's custom domain.
+  "routes": [
+    { "pattern": "ender.money/*", "zone_name": "ender.money" },
+    { "pattern": "www.ender.money/*", "zone_name": "ender.money" }
+  ],
+
+  // The page is static; only /api/* reaches the Worker code.
+  "assets": { "directory": "./public", "run_worker_first": ["/api/*"] },
+
+  // 5 sign-ups a minute per IP. namespace_id must be unique in the account (the gateway uses 4101).
+  "ratelimits": [{ "name": "WAITLIST_LIMITER", "namespace_id": "4102", "simple": { "limit": 5, "period": 60 } }],
+
+  // Turnstile is off until the TURNSTILE_SECRET secret is set (see README).
+  "d1_databases": [
+    // Replace database_id with the id `wrangler d1 create ender-waitlist` prints.
+    { "binding": "WAITLIST", "database_name": "ender-waitlist", "database_id": "REPLACE_WITH_ENDER_WAITLIST_ID", "migrations_dir": "migrations" }
+  ]
+}
