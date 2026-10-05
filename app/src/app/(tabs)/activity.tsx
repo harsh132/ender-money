@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { RefreshControl, SectionList, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { dayLabel } from '../../lib/format';
-import { useStore, type Tx } from '../../lib/store';
+import { listed, useStore, type Tx } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { refresh } from '../../lib/wallet';
 import { T, TestnetPill } from '../../ui/kit';
@@ -26,7 +26,7 @@ export default function Activity() {
 
   const sections = useMemo(() => {
     const groups = new Map<string, Tx[]>();
-    for (const tx of activity.filter((t) => t.network === network).sort((a, b) => b.at - a.at)) {
+    for (const tx of activity.filter((t) => t.network === network && listed(t)).sort((a, b) => b.at - a.at)) {
       const day = dayLabel(tx.at);
       groups.set(day, [...(groups.get(day) ?? []), tx]);
     }

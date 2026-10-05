@@ -363,6 +363,8 @@ export default function Review() {
       deadline: q.exp,
       private: true,
       ...(shield ? { shield: true as const } : {}),
+      // A merge, or a withdrawal to our own wallet, moves money between our own balances: not listed.
+      ...(merge || (address && address.toLowerCase() === getState().wallet?.address.toLowerCase()) ? { internal: true as const } : {}),
     });
     await submitPrivate(q.id, signed.body, signed.sms);
   };

@@ -31,6 +31,8 @@ export type Tx = {
   private?: true;
   /** Moved from the public to the private balance. */
   shield?: true;
+  /** Between our own balances (a merge, a withdrawal to our own wallet, the pool side of a shield): kept to settle, never listed. */
+  internal?: true;
   /** Contact name, Ender ID, ENS name or phone number, when we know one. */
   label?: string;
   status: TxStatus;
@@ -43,6 +45,9 @@ export type Tx = {
   at: number;
   deadline?: number;
 };
+
+/** Activity lists only payments to and from others: shields and other moves between our own balances stay hidden. */
+export const listed = (t: Tx) => !t.shield && !t.internal;
 
 /** address: a 0x address (lowercase), or a private address (ender1…) paid directly. name: a contact name; enderId: label.ender.my. */
 export type Recipient = { address: string; phone?: string; name?: string; enderId?: string; lastUsed: number };

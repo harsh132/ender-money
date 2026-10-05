@@ -116,9 +116,16 @@ const pullActivity = async () => {
       direction: it.direction,
       amount: it.amount,
       counterparty: it.counterparty,
-      // The pool's transfers are shields (out) and private withdrawals to us (in).
+      // The pool's transfers are shields (out) and private withdrawals to us (in). Shields and our own withdrawals
+      // (one of our private payments has the same hash) aren't listed.
       ...(it.counterparty.toLowerCase() === pool
-        ? { label: it.direction === 'out' ? 'Private balance' : 'Private payment', private: true as const }
+        ? {
+            label: it.direction === 'out' ? 'Private balance' : 'Private payment',
+            private: true as const,
+            ...(it.direction === 'out' || local.some((t) => t.private && t.direction === 'out' && t.txHash?.toLowerCase() === it.txHash.toLowerCase())
+              ? { internal: true as const }
+              : {}),
+          }
         : { label: labelFor(it.counterparty) }),
       status: 'sent',
       txHash: it.txHash,
@@ -292,7 +299,7 @@ export const autoMerge = async (network: NetworkName = getState().network): Prom
     const r = signPrivate(session.unlocked.shielded, cacheOf(getState(), network), draft, quote, network);
     if ('err' in r) throw new Error(r.err);
     holdNotes(network, r.awaiting);
-    upsertTx({ id: q.id, network, direction: 'out', amount: '0', fee: q.fee, label: 'Merged private notes', status: 'sending', at: Date.now(), deadline: q.exp, private: true });
+    upsertTx({ id: q.id, network, direction: 'out', amount: '0', fee: q.fee, label: 'Merged private notes', status: 'sending', at: Date.now(), deadline: q.exp, private: true, internal: true });
     try {
       const res = await api.shieldedSubmit({ id: q.id, refs: r.refs, sig: btoa(String.fromCharCode(...r.sig)) });
       // Still landing: its notes stay held until a resync sees it.

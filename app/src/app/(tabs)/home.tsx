@@ -7,7 +7,7 @@ import { MAX_FEE } from '../../lib/config';
 import { ago, inr, usd } from '../../lib/format';
 import { quickSend } from '../../lib/keys';
 import { autoShieldOn, canMerge, privateBalance } from '../../lib/private';
-import { useStore } from '../../lib/store';
+import { listed, useStore } from '../../lib/store';
 import { c, f } from '../../lib/theme';
 import { useOnline } from '../../lib/transport';
 import { isRegistered, refresh } from '../../lib/wallet';
@@ -64,7 +64,7 @@ export default function Home() {
     router.push('/name');
   }, [needsName]);
 
-  const recent = useMemo(() => activity.filter((t) => t.network === network).sort((a, b) => b.at - a.at).slice(0, 5), [activity, network]);
+  const recent = useMemo(() => activity.filter((t) => t.network === network && listed(t)).sort((a, b) => b.at - a.at).slice(0, 5), [activity, network]);
   const publicBalance = snapshot?.balance ?? '0';
   const balance = priv ? (Number(publicBalance) + Number(priv)).toFixed(6) : publicBalance;
   const [whole, cents] = usd(balance).split('.');

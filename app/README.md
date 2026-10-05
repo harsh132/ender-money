@@ -54,6 +54,11 @@ never by text, never on mainnet (no pool). One of Auto-merge and Auto Shield
 runs at a time. With it on, Home shows one balance (public + private) and no
 Make private; with it off, the split and Make private come back.
 
+Activity lists only payments to and from others. Shields, merges and
+withdrawals to our own wallet (and the pool transfers the online history shows
+for them) are kept to settle but never listed (`listed` in store.ts), so their
+$0.01 fees have no row.
+
 Payments come from the private balance whenever the notes cover amount + fee:
 to a private address or a number / Ender ID with one, a private payment; to a
 0x address, or a number / Ender ID whose owner has no private address, a
