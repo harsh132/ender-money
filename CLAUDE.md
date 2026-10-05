@@ -1,3 +1,7 @@
+## Working with the user
+
+- **Don't build until the user says go.** While a change is being discussed (questions, options, "what do you think?"), only answer: explain, recommend, ask. Don't edit files, start agents, deploy or send transactions. Start building only after an explicit go-ahead ("go ahead", "build it", "do it", "yes, implement"). Agreeing with a proposal ("I agree", "makes sense") is not a go-ahead; ask "Shall I build it?" and wait.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
