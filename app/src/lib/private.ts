@@ -179,6 +179,34 @@ export const shouldAutoMerge = (o: {
   cache: Pick<Cache, 'notes' | 'awaiting'>;
 }) => o.on && o.online && o.unlocked && o.registered && o.cache.awaiting.length === 0 && canMerge(o.network, o.cache);
 
+/** Auto Shield moves the public balance once it holds at least this much (AUSD). */
+export const AUTO_SHIELD_MIN = '1';
+
+/** Settings' Auto Shield: on unless turned off (installs from before it have no value: on). */
+export const autoShieldOn = (s: Pick<State, 'autoShield'>) => s.autoShield !== false;
+
+/**
+ * Auto Shield (Settings) shields the public balance when it's on, the app is
+ * online, the spending key is in memory, the network's private balance is
+ * registered (never on mainnet: no pool), nothing is waiting to settle, no
+ * public payment is in flight (busy) and the public balance is at least
+ * AUTO_SHIELD_MIN.
+ */
+export const shouldAutoShield = (o: {
+  on: boolean;
+  online: boolean;
+  unlocked: boolean;
+  registered: boolean;
+  network: NetworkName;
+  cache: Pick<Cache, 'awaiting'>;
+  publicBalance: string;
+  busy: boolean;
+}) =>
+  o.on && o.online && o.unlocked && o.registered && hasPool(o.network) && o.cache.awaiting.length === 0 && !o.busy && units(o.publicBalance) >= units(AUTO_SHIELD_MIN);
+
+/** The deposit that shields the whole public balance: deposit + fee is all of it. */
+export const shieldAmount = (publicBalance: string, fee: string) => formatUnits(units(publicBalance) - units(fee), AUSD_DECIMALS);
+
 /**
  * Online resync: the gateway's index replaces the cache. A waiting payment
  * whose inputs are now spent (or whose output appeared) settled; one past its
@@ -221,6 +249,27 @@ export const chooseRoute = ({
 }): 'private' | 'public' => {
   if (!recipientPrivate || deliver === 'CTK') return 'public';
   return planCircuit(usable(cache), units(amount) + units(MAX_FEE)).err ? 'public' : 'private';
+};
+
+/**
+ * A number or Ender ID with no shielded address still gets paid from the
+ * private balance, as a withdrawal to their wallet, when the notes cover it
+ * and that wallet is the one pinned for them (if any; a changed one goes
+ * public, where Review flags it). Otherwise public.
+ */
+export const withdrawRoute = ({
+  wallet,
+  pinned,
+  cache,
+  amount,
+}: {
+  wallet?: Address;
+  pinned?: Address;
+  cache: Pick<Cache, 'notes' | 'awaiting'>;
+  amount: string;
+}): { route: 'private' | 'public'; withdrawTo?: Address } => {
+  if (!wallet || (pinned && pinned.toLowerCase() !== wallet.toLowerCase())) return { route: 'public' };
+  return chooseRoute({ recipientPrivate: true, cache, amount }) === 'private' ? { route: 'private', withdrawTo: wallet } : { route: 'public' };
 };
 
 // ---------------------------------------------------------------- quotes

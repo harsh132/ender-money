@@ -6,7 +6,7 @@ import Svg, { Circle, Defs, Mask, Pattern, RadialGradient, Rect, Stop } from 're
 import { MAX_FEE } from '../../lib/config';
 import { ago, inr, usd } from '../../lib/format';
 import { quickSend } from '../../lib/keys';
-import { canMerge, privateBalance } from '../../lib/private';
+import { autoShieldOn, canMerge, privateBalance } from '../../lib/private';
 import { useStore } from '../../lib/store';
 import { c, f } from '../../lib/theme';
 import { useOnline } from '../../lib/transport';
@@ -52,6 +52,9 @@ export default function Home() {
   const priv = useStore((s) => (isRegistered(s.network, s) ? privateBalance(s.notes[s.network] ?? []) : undefined));
   // More notes than one payment can spend: offer to fold 12 into one.
   const merge = useStore((s) => isRegistered(s.network, s) && canMerge(s.network, { notes: s.notes[s.network] ?? [], awaiting: s.awaiting[s.network] ?? [] }));
+  // Auto Shield on: one balance, no split and no Make private (the public part is on its way in).
+  const shieldOn = useStore(autoShieldOn);
+  const splittable = priv !== undefined && !shieldOn;
   const [split, setSplit] = useState(false);
   const needsName = useStore((s) => s.wallet?.enderId === null);
 
@@ -65,7 +68,7 @@ export default function Home() {
   const publicBalance = snapshot?.balance ?? '0';
   const balance = priv ? (Number(publicBalance) + Number(priv)).toFixed(6) : publicBalance;
   const [whole, cents] = usd(balance).split('.');
-  const makePrivate = priv !== undefined && Number(publicBalance) > Number(MAX_FEE);
+  const makePrivate = splittable && Number(publicBalance) > Number(MAX_FEE);
 
   const pull = useCallback(async () => {
     setRefreshing(true);
@@ -105,10 +108,10 @@ export default function Home() {
         <View style={{ alignItems: 'center', paddingTop: 40, paddingBottom: 36 }}>
           <DotGrid />
           <Pressable
-            disabled={priv === undefined}
+            disabled={!splittable}
             onPress={() => setSplit((x) => !x)}
-            accessibilityRole={priv === undefined ? undefined : 'button'}
-            accessibilityHint={priv === undefined ? undefined : 'Shows private and public balances'}
+            accessibilityRole={splittable ? 'button' : undefined}
+            accessibilityHint={splittable ? 'Shows private and public balances' : undefined}
             style={{ alignItems: 'center' }}
           >
             <T v="hero" accessibilityLabel={`Balance ${usd(balance)} dollars`}>
@@ -116,7 +119,7 @@ export default function Home() {
               <T style={{ fontFamily: f.display, fontSize: 36, color: c.fg2 }}>.{cents}</T>
             </T>
             <T v="meta" style={{ fontSize: 18, marginTop: 12 }}>
-              {split && priv !== undefined ? (
+              {split && splittable ? (
                 `Private $${usd(priv)} · Public $${usd(publicBalance)}`
               ) : (
                 <>

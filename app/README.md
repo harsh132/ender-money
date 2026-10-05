@@ -16,7 +16,7 @@ src/app/          routes (expo-router)
 src/lib/
   keys.ts       passkey -> PRF -> secp256k1 key (Mera), Quick send sessions
   wallet.ts     sync, signup (7702 authorizations), quote checks, signing
-  private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge rule
+  private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge and auto-shield rules
   transport.ts  internet first; SMS composer when offline ([Test] prefix for testnet); replies by SMS, clipboard or paste
   inbox.ts      public Received alerts by text -> Activity rows, deduped against the online history (private ones: private.ts)
   names.ts      the Ender ID screen's hints and rules (live check: GET /names/check)
@@ -43,6 +43,25 @@ proving keys with the gateway (`/shielded/register`); the spending key never
 leaves the phone. Mainnet shows no private balance. Settings' Auto-merge
 (off by default) folds the 12 largest notes into one while the app is online
 and a Quick send session holds the key; it never keeps a key for this.
+
+Settings' Auto Shield (on by default, also for installs from before it)
+moves the whole public balance into the private one in a single deposit
+(deposit + $0.01 fee = the balance) once it holds $1 or more, under the same
+conditions as Auto-merge, and only when nothing private is waiting to settle
+and no public payment is still sending. It runs after a refresh, a resync, a
+settled private payment, on coming to the foreground and when switched on;
+never by text, never on mainnet (no pool). One of Auto-merge and Auto Shield
+runs at a time. With it on, Home shows one balance (public + private) and no
+Make private; with it off, the split and Make private come back.
+
+Payments come from the private balance whenever the notes cover amount + fee:
+to a private address or a number / Ender ID with one, a private payment; to a
+0x address, or a number / Ender ID whose owner has no private address, a
+private withdrawal to that wallet (the gateway's lookup, checked against the
+pinned wallet if any). Otherwise (notes short, `ERR MERGE`, a changed pinned
+wallet) it's public. A private payment refused at the quote or by the notes
+(`NOUSER`, `FUNDS`, `MERGE`), or at submit/proving when the public balance
+covers it, switches Review to public, so Try again pays publicly.
 
 ## Ender IDs
 

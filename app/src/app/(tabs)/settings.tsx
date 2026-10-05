@@ -7,11 +7,11 @@ import type { NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
 import { ago, phoneMasked, short } from '../../lib/format';
 import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
-import { hasPool } from '../../lib/private';
+import { AUTO_SHIELD_MIN, autoShieldOn, hasPool } from '../../lib/private';
 import { getState, setState, signOut, useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { online } from '../../lib/transport';
-import { autoMerge, ensureRegistered, errorText, refresh, syncByText } from '../../lib/wallet';
+import { autoMerge, autoShield, ensureRegistered, errorText, refresh, syncByText } from '../../lib/wallet';
 import { Chevron } from '../../ui/icons';
 import { Banner, T, TestnetPill } from '../../ui/kit';
 
@@ -24,6 +24,7 @@ export default function Settings() {
   const alerts = useStore((s) => s.alerts);
   const gateway = useStore((s) => s.gateway);
   const merge = useStore((s) => !!s.autoMerge);
+  const shieldOn = useStore(autoShieldOn);
   const snapshot = useStore((s) => s.account[s.network]);
   const [busy, setBusy] = useState<string>();
   const [note, setNote] = useState<{ text: string; tone: 'plain' | 'negative' }>();
@@ -67,6 +68,11 @@ export default function Settings() {
   const toggleAutoMerge = (on: boolean) => {
     setState({ autoMerge: on });
     if (on) void autoMerge();
+  };
+
+  const toggleAutoShield = (on: boolean) => {
+    setState({ autoShield: on });
+    if (on) void autoShield();
   };
 
   const syncNow = async () => {
@@ -148,6 +154,11 @@ export default function Settings() {
           <>
             <Label>Private balance</Label>
             <Group>
+              <Row
+                title="Auto Shield"
+                sub={`Moves your public balance to your private one once it's $${AUTO_SHIELD_MIN} or more. $0.01 fee each time.`}
+                right={<Switch value={shieldOn} onValueChange={toggleAutoShield} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={shieldOn ? '#fff' : c.fg3} />}
+              />
               <Row
                 title="Auto-merge"
                 sub="Combines your 12 largest private notes when you have more than 12. $0.01 fee each time."

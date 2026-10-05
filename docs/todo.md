@@ -2,6 +2,21 @@
 
 Deliberately deferred. Newest first.
 
+- **Auto Shield (6 Oct).**
+  - Online only, and only while a Quick send session holds the key: money
+    that arrives while the app is locked or offline stays public until the
+    next unlock online. No auto-shield by text.
+  - Self-custody caveat: with it on by default, nearly all funds sit in the
+    pool, and spending them needs the gateway (it proves) until open exit
+    ships (below).
+  - The deposit is priced at `MAX_FEE`; if the gateway ever quotes a lower
+    fee, the difference stays public (dust under $0.01). A re-quote at the
+    quoted fee would close it.
+  - A public payment being reviewed (quoted, not yet signed) can race an
+    auto-shield for the same balance; one of them then fails and is retried.
+  - A failed auto-shield leaves a failed "Private balance" row in Activity,
+    as a failed auto-merge does.
+
 - **Names in texts (5 Oct).**
   - Notes indexed before `0008` have no `tx_hash` (no backfill), so their
     private rows never get an explorer link. A rescan from the deploy block

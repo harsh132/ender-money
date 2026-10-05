@@ -82,6 +82,8 @@ export type State = {
   shieldedPins: Record<string, string>;
   /** Settings' Auto-merge (networks with a pool): fold the 12 largest private notes while unlocked and online. Off by default. */
   autoMerge?: boolean;
+  /** Settings' Auto Shield (networks with a pool): move the public balance into the private one while unlocked and online. On unless false (autoShieldOn). */
+  autoShield?: boolean;
 };
 
 const initial: State = {

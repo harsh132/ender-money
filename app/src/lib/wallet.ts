@@ -11,6 +11,7 @@ import { MAX_FEE } from './config';
 import { fileReceived, smsTwin, type Received } from './inbox';
 import { quickSend, type Unlocked } from './keys';
 import {
+  autoShieldOn,
   checkShieldedQuote,
   chooseRoute,
   fileReply,
@@ -19,9 +20,13 @@ import {
   POOL_NETWORKS,
   resync,
   settleAwaiting,
+  shieldAmount,
   shouldAutoMerge,
+  shouldAutoShield,
   signPrivate,
+  signShield,
   txLinks,
+  withdrawRoute,
   type Awaiting,
   type Cache,
   type PrivateDraft,
@@ -49,10 +54,11 @@ export const sync = async (network = getState().network): Promise<boolean> => {
   }
 };
 
-/** Pull to refresh: balance, then the status of transfers still sending, then incoming payments. */
+/** Pull to refresh: balance, then the status of transfers still sending, then incoming payments; then Auto Shield may run. */
 export const refresh = async () => {
   if (!(await sync())) return false;
   await Promise.all([refreshPending(), pullActivity(), pullNotes()]);
+  void autoShield();
   return true;
 };
 
@@ -177,6 +183,7 @@ export const pullNotes = async (network = getState().network) => {
   // Rows from texts know only the short hash; the notes give the full one (private transactions aren't on the wallet's page).
   for (const link of txLinks(getState().activity, network, r.cache.notes)) upsertTx(link);
   void autoMerge(network);
+  void autoShield(network);
 };
 
 /** A private payment or shield was signed: hold its notes until it settles. */
@@ -193,6 +200,7 @@ export const settlePrivate = (network: NetworkName, id: string, p?: number) => {
   const a = c.awaiting.find((x) => x.id === id);
   if (a) saveCache(network, settleAwaiting(c, a, p));
   void autoMerge(network);
+  void autoShield(network);
 };
 
 /**
@@ -205,7 +213,10 @@ export const applyShieldedReply = (r: Reply) => {
   if (r.kind !== 'sent' && r.kind !== 'shielded' && !received) return;
   const filed = fileReply(getState(), r);
   if (filed) setState(filed.patch);
-  if (filed?.settled) void autoMerge(filed.network);
+  if (filed?.settled) {
+    void autoMerge(filed.network);
+    void autoShield(filed.network);
+  }
   const short = r.tx ? { shortTx: r.tx } : {};
   const id = filed?.settled?.id ?? (received ? undefined : r.id);
   if (id && getState().activity.some((t) => t.id === id)) upsertTx({ id, status: 'sent', ...short, ...(r.p === undefined ? {} : { pos: r.p }) });
@@ -237,9 +248,16 @@ export const applyReceived = (r: Received) => {
   setState({ account: filed.account });
 };
 
-// ---------------------------------------------------------------- auto-merge
+// ---------------------------------------------------------------- auto-merge, auto-shield
 
+// One at a time: a trigger that comes while the other runs waits for it to finish.
 let merging = false;
+let shielding = false;
+/** After a failed auto-shield, triggers wait this long, so a gateway that keeps refusing doesn't fill Activity with failed rows. */
+const SHIELD_BACKOFF_MS = 10 * 60_000;
+let shieldRetryAt = 0;
+let mergeLater = false;
+let shieldLater = false;
 
 /**
  * Settings' Auto-merge: one merge (the 12 largest notes into one, fee 0.01)
@@ -251,6 +269,7 @@ let merging = false;
  */
 export const autoMerge = async (network: NetworkName = getState().network): Promise<void> => {
   if (merging) return;
+  if (shielding) return void (mergeLater = true);
   merging = true;
   let again = false;
   const ready = async () => {
@@ -294,20 +313,111 @@ export const autoMerge = async (network: NetworkName = getState().network): Prom
     console.warn('auto-merge:', e instanceof ApiError ? e.code : e instanceof Error ? e.message : e);
   } finally {
     merging = false;
+    if (again) void autoMerge(network);
+    else if (shieldLater) {
+      shieldLater = false;
+      void autoShield(network);
+    }
   }
-  if (again) void autoMerge(network);
+};
+
+/**
+ * Settings' Auto Shield: the whole public balance into the private one, in one
+ * deposit (fee included), online in the background when shouldAutoShield says
+ * so. Like Auto-merge: the open Quick send session's key, never by text, a
+ * failure only logs and the next trigger (a refresh, a resync, a settled
+ * private payment, the foreground, the toggle) tries again. A shield that
+ * settles syncs the public balance and lets Auto-merge run.
+ */
+export const autoShield = async (network: NetworkName = getState().network): Promise<void> => {
+  if (shielding || Date.now() < shieldRetryAt) return;
+  if (merging) return void (shieldLater = true);
+  shielding = true;
+  const ready = async () => {
+    const s = getState();
+    const base = {
+      on: autoShieldOn(s),
+      unlocked: !!quickSend.get(),
+      registered: isRegistered(network, s),
+      network,
+      cache: cacheOf(s, network),
+      publicBalance: s.account[network]?.balance ?? '0',
+      // A public payment still sending would race the deposit for the same balance.
+      busy: s.activity.some((t) => t.network === network && t.direction === 'out' && t.status === 'sending' && !t.private),
+    };
+    return shouldAutoShield({ ...base, online: true }) && (await online());
+  };
+  try {
+    if (!(await ready())) return;
+    // ponytail: priced at MAX_FEE (the gateway's fee today); a lower quoted fee would leave the difference public.
+    const amount = shieldAmount(getState().account[network]!.balance, MAX_FEE);
+    const draft: PrivateDraft = { kind: 'shield', amount };
+    const q = await api.shieldedQuote({ network, kind: 'shield', amount });
+    const session = quickSend.get();
+    // Locked, turned off or a payment started meanwhile: the quote just expires.
+    if (!session || !(await ready())) return;
+    const quote = { id: q.id, exp: q.exp, fee: q.fee, ...(q.to === undefined ? {} : { to: q.to as Address }) };
+    const refused = checkShieldedQuote(draft, quote);
+    if (refused) throw new Error(refused.code);
+    const r = await signShield(session.unlocked.shielded, session.unlocked.account, amount, quote, network);
+    holdNotes(network, r.awaiting);
+    upsertTx({
+      id: q.id,
+      network,
+      direction: 'out',
+      amount,
+      fee: q.fee,
+      counterparty: NETWORKS[network].pool,
+      label: 'Private balance',
+      status: 'sending',
+      at: Date.now(),
+      deadline: q.exp,
+      private: true,
+      shield: true,
+    });
+    let res;
+    try {
+      res = await api.shieldedSubmit({ id: q.id, signature: r.signature });
+    } catch (e) {
+      // Refused: nothing moved. Lost connection: it may have gone through; held until a resync tells.
+      if (!(e instanceof OfflineError)) {
+        releaseNotes(network, q.id);
+        upsertTx({ id: q.id, status: 'failed', error: e instanceof ApiError ? e.code : undefined });
+      }
+      throw e;
+    }
+    // Still landing: held until a resync sees it.
+    if (res.pending) return upsertTx({ id: q.id, txHash: res.tx });
+    upsertTx({ id: q.id, status: 'sent', txHash: res.tx });
+    settlePrivate(network, q.id, res.p);
+    await sync(network);
+  } catch (e) {
+    console.warn('auto-shield:', e instanceof ApiError ? e.code : e instanceof Error ? e.message : e);
+    if (!(e instanceof OfflineError)) shieldRetryAt = Date.now() + SHIELD_BACKOFF_MS;
+  } finally {
+    shielding = false;
+    // The settle above (or a resync meanwhile) asked for a merge.
+    if (mergeLater) {
+      mergeLater = false;
+      void autoMerge(network);
+    }
+  }
 };
 
 /**
  * Private or public for this payment. A number or Ender ID can take a private payment once
  * we've paid it privately (pinned) or the gateway knows its shielded address;
- * offline and unpinned means public. A private address (ender1…) takes private
- * payments only: 'public' for one means the private balance can't pay it.
+ * one without a shielded address gets a private withdrawal to its wallet
+ * (withdrawTo) when the notes cover it (withdrawRoute). Offline and unpinned
+ * means public. A private address (ender1…) takes private payments only:
+ * 'public' for one means the private balance can't pay it.
  */
-export const decideRoute = async (d: Draft): Promise<'private' | 'public'> => {
+export const decideRoute = async (d: Draft): Promise<{ route: 'private' | 'public'; withdrawTo?: Address }> => {
   const s = getState();
-  if (!isRegistered(d.network, s) || d.deliver === 'CTK') return 'public';
+  if (!isRegistered(d.network, s) || d.deliver === 'CTK') return { route: 'public' };
   let recipientPrivate = !!d.toAddress || isPrivateAddress(d.to);
+  /** The recipient's wallet, when a lookup gave it. */
+  let wallet: Address | undefined;
   const label = parseEnderId(d.to);
   if (d.phone)
     recipientPrivate =
@@ -316,14 +426,17 @@ export const decideRoute = async (d: Draft): Promise<'private' | 'public'> => {
         () => true,
         () => false,
       ));
-  else if (label)
-    recipientPrivate =
-      !!s.shieldedPins[d.to] ||
-      (await api.name(label).then(
-        (r) => !!r.private,
-        () => false,
-      ));
-  return chooseRoute({ recipientPrivate, cache: cacheOf(s, d.network), amount: d.amount, deliver: d.deliver });
+  else if (label && s.shieldedPins[d.to]) recipientPrivate = true;
+  else if (label) {
+    const r = await api.name(label).catch(() => undefined);
+    recipientPrivate = !!r?.private;
+    wallet = r?.address;
+  }
+  const cache = cacheOf(s, d.network);
+  if (recipientPrivate || !(d.phone || label)) return { route: chooseRoute({ recipientPrivate, cache, amount: d.amount, deliver: d.deliver }) };
+  if (d.phone) wallet = await api.nameByPhone(d.phone).then((r) => r.address, () => undefined);
+  const key = pinKey(d);
+  return withdrawRoute({ wallet, pinned: key ? s.pins[key] : undefined, cache, amount: d.amount });
 };
 
 export const syncByText = () => textGateway({ kind: 'sync' }, getState().network);

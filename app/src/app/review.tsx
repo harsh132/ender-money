@@ -75,15 +75,17 @@ export default function Review() {
   const draft: Draft = self
     ? { network, to: wallet.address, amount: merge ? '0' : p.amount, deliver }
     : { network, to: p.to, toAddress: p.toAddress as Address | undefined, phone: p.phone, label: p.label, enderId: p.enderId, amount: p.amount, deliver };
-  const kind: PrivateDraft['kind'] = merge ? 'merge' : shield ? 'shield' : draft.toAddress ? 'withdraw' : 'pay';
+  // Private or public is decided once, on arrival (it may ask the gateway whether the number takes private payments).
+  const [route, setRoute] = useState<'private' | 'public' | undefined>(self ? 'private' : undefined);
+  /** A number or Ender ID without a private address, paid privately: a withdrawal to their wallet (decideRoute). */
+  const [withdrawTo, setWithdrawTo] = useState<Address>();
+  const kind: PrivateDraft['kind'] = merge ? 'merge' : shield ? 'shield' : draft.toAddress || withdrawTo ? 'withdraw' : 'pay';
   /** To a private address (ender1…): private only, never public. */
   const privAddr = !self && isPrivateAddress(draft.to);
   /** Paying an Ender ID: the gateway resolves it; its first answers are pinned under it, as a number's are. */
   const byName = !self && !!parseEnderId(draft.to);
   const pin = pinKey(draft);
-  const pdraft: PrivateDraft = { kind, amount: draft.amount, to: draft.toAddress ?? draft.phone ?? draft.to, phone: pin };
-  // Private or public is decided once, on arrival (it may ask the gateway whether the number takes private payments).
-  const [route, setRoute] = useState<'private' | 'public' | undefined>(self ? 'private' : undefined);
+  const pdraft: PrivateDraft = { kind, amount: draft.amount, to: withdrawTo ?? draft.toAddress ?? draft.phone ?? draft.to, phone: pin };
   const priv = route === 'private';
   /** A private address the private balance can't pay (or no private balance on this network yet). */
   const blocked = privAddr && route === 'public';
@@ -102,7 +104,14 @@ export default function Review() {
   }, [phase]);
 
   useEffect(() => {
-    if (!self) void decideRoute(draft).then(setRoute, () => setRoute('public'));
+    if (!self)
+      void decideRoute(draft).then(
+        (r) => {
+          setWithdrawTo(r.withdrawTo);
+          setRoute(r.route);
+        },
+        () => setRoute('public'),
+      );
     void online().then((up) => setPipe(up ? 'internet' : 'text'));
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -110,7 +119,7 @@ export default function Review() {
   }, []);
 
   const mark = (step: Step) => setTimes((t) => ({ ...t, [step]: stamp() }));
-  const recipientAddress = (quote?.to ?? draft.toAddress)?.toLowerCase();
+  const recipientAddress = (quote?.to ?? draft.toAddress ?? withdrawTo)?.toLowerCase();
   const isRecent =
     self ||
     (!!recipientAddress && recents.some((r) => r.address === recipientAddress)) ||
@@ -283,7 +292,7 @@ export default function Review() {
     mark('request');
     if (await online()) {
       try {
-        const q = await api.shieldedQuote({ network, kind, ...(merge ? {} : { amount: draft.amount }), ...(self ? {} : { to: draft.to }) });
+        const q = await api.shieldedQuote({ network, kind, ...(merge ? {} : { amount: draft.amount }), ...(self ? {} : { to: withdrawTo ?? draft.to }) });
         setPipe('internet');
         mark('quote');
         const to = q.to === undefined ? undefined : q.to.startsWith('0x') ? (q.to.toLowerCase() as Address) : (unb64(q.to.replace(/=+$/, ''), 64) ?? new Uint8Array());
@@ -294,7 +303,7 @@ export default function Review() {
     }
     setPipe('text');
     try {
-      await textGateway(merge ? { kind: 'merge' } : shield ? { kind: 'shield', amount: draft.amount } : { kind: 'pay', to: draft.to, amount: draft.amount }, network);
+      await textGateway(merge ? { kind: 'merge' } : shield ? { kind: 'shield', amount: draft.amount } : { kind: 'pay', to: withdrawTo ?? draft.to, amount: draft.amount }, network);
       setPhase({ k: 'wait-quote' });
     } catch (e) {
       fail('request', e);
@@ -331,11 +340,13 @@ export default function Review() {
         };
       });
     } catch (e) {
+      // The notes can't do it after all (FUNDS / MERGE): Try again pays publicly.
+      if (e instanceof TransferError && PUBLIC_INSTEAD.has(e.code) && !privAddr) setRoute('public');
       return setPhase({ k: 'failed', step: 'approve', message: e instanceof TransferError ? e.message : (passkeyError(e) ?? 'Approval cancelled.') });
     }
     mark('approve');
     holdNotes(network, signed.awaiting);
-    const address = draft.toAddress ?? (pin ? getState().pins[pin] : undefined);
+    const address = draft.toAddress ?? withdrawTo ?? (pin ? getState().pins[pin] : undefined);
     if (!self && (address || privAddr)) rememberRecipient({ address: address ?? draft.to, phone: draft.phone, name: draft.label, enderId: draft.enderId });
     upsertTx({
       id: q.id,
@@ -374,6 +385,9 @@ export default function Review() {
         if (!(e instanceof OfflineError)) {
           releaseNotes(network, id);
           upsertTx({ id, status: 'failed', error: errorText(e) });
+          // Refused (proving included), nothing moved: Try again pays publicly when the public balance covers it.
+          const pub = getState().account[network]?.balance;
+          if (!self && !privAddr && pub !== undefined && Number(pub) >= Number(total(draft.amount, MAX_FEE))) setRoute('public');
           return setPhase({ k: 'failed', step: 'sent', message: errorText(e) });
         }
       }

@@ -7,6 +7,7 @@ import { encodePrivateAddress } from '../../../protocol/recipient';
 import { unb64 } from '../../../protocol/sms';
 import { MAX_FEE } from '../lib/config';
 import { phoneDisplay } from '../lib/format';
+import { autoShieldOn } from '../lib/private';
 import { useStore } from '../lib/store';
 import { isRegistered } from '../lib/wallet';
 import { c, f } from '../lib/theme';
@@ -25,7 +26,8 @@ export default function Receive() {
   const wallet = useStore((s) => s.wallet);
   const network = useStore((s) => s.network);
   const owner = useStore((s) => (isRegistered(s.network, s) ? s.shielded?.owner : undefined));
-  const canShield = useStore((s) => isRegistered(s.network, s) && Number(s.account[s.network]?.balance ?? 0) > Number(MAX_FEE));
+  // With Auto Shield on the public balance moves by itself.
+  const canShield = useStore((s) => isRegistered(s.network, s) && !autoShieldOn(s) && Number(s.account[s.network]?.balance ?? 0) > Number(MAX_FEE));
   const [mode, setMode] = useState<Mode>('public');
   const [copied, setCopied] = useState<'address' | 'link'>();
   const { bottom } = useSafeAreaInsets();

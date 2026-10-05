@@ -8,17 +8,22 @@ import { b64, formatReply, parseReply, type Reply } from '../../../protocol/sms'
 import type { Tx } from './store';
 import {
   applyReply,
+  AUTO_SHIELD_MIN,
+  autoShieldOn,
   canMerge,
   checkShieldedQuote,
   chooseRoute,
   fileReply,
   privateBalance,
   resync,
+  shieldAmount,
   shieldedUser,
   shouldAutoMerge,
+  shouldAutoShield,
   signPrivate,
   textNetwork,
   txLinks,
+  withdrawRoute,
   type Awaiting,
   type Cache,
   type CachedNote,
@@ -298,4 +303,59 @@ test('auto-merge: only when on, online, unlocked, registered, nothing pending an
   expect(shouldAutoMerge({ ...go, cache: { notes: [...many.notes, note(20, '1')], awaiting: [{ ...awaitingPay, ins: [20] }] } })).toBe(false);
   // Spent and dust notes don't count towards the 13.
   expect(shouldAutoMerge({ ...go, cache: { ...many, notes: [...many.notes.slice(0, 12), note(12, '1', true), note(13, '0.0005')] } })).toBe(false);
+});
+
+test('auto-shield: on unless turned off; installs from before it (no value) read as on', () => {
+  expect(autoShieldOn({})).toBe(true);
+  expect(autoShieldOn({ autoShield: undefined })).toBe(true);
+  expect(autoShieldOn({ autoShield: true })).toBe(true);
+  expect(autoShieldOn({ autoShield: false })).toBe(false);
+});
+
+test('auto-shield: only when on, online, unlocked, registered, nothing pending, no public send in flight and at least 1 AUSD public', () => {
+  const go = { on: true, online: true, unlocked: true, registered: true, network: 'testnet' as const, cache: { awaiting: [] }, publicBalance: '1', busy: false };
+  expect(AUTO_SHIELD_MIN).toBe('1');
+  expect(shouldAutoShield(go)).toBe(true);
+  expect(shouldAutoShield({ ...go, publicBalance: '250.5' })).toBe(true);
+  expect(shouldAutoShield({ ...go, publicBalance: '0.999999' })).toBe(false);
+  expect(shouldAutoShield({ ...go, publicBalance: '0' })).toBe(false);
+  expect(shouldAutoShield({ ...go, on: false })).toBe(false);
+  expect(shouldAutoShield({ ...go, online: false })).toBe(false);
+  expect(shouldAutoShield({ ...go, unlocked: false })).toBe(false);
+  expect(shouldAutoShield({ ...go, registered: false })).toBe(false);
+  expect(shouldAutoShield({ ...go, busy: true })).toBe(false); // a public payment still sending
+  // A shield, merge or payment still waiting: never two at once.
+  expect(shouldAutoShield({ ...go, cache: { awaiting: [awaitingPay] } })).toBe(false);
+});
+
+test('auto-shield: a no-op on mainnet (no pool, so never registered there)', () => {
+  const go = { on: true, online: true, unlocked: true, network: 'mainnet' as const, cache: { awaiting: [] }, publicBalance: '500', busy: false };
+  expect(shouldAutoShield({ ...go, registered: false })).toBe(false);
+  // Even a state that claims mainnet is registered: no pool, no shield.
+  expect(shouldAutoShield({ ...go, registered: true })).toBe(false);
+});
+
+test('auto-shield amount: the whole public balance less the fee, so deposit + fee is all of it', () => {
+  expect(shieldAmount('25', '0.01')).toBe('24.99');
+  expect(shieldAmount('1', '0.01')).toBe('0.99');
+  expect(shieldAmount('3.123456', '0.01')).toBe('3.113456');
+  const amount = shieldAmount('7.5', '0.01');
+  expect(parseUnits(amount, 6) + parseUnits('0.01', 6)).toBe(parseUnits('7.5', 6));
+  // What the gateway takes: at most 6 decimals.
+  expect(amount).toMatch(/^\d+(\.\d{1,6})?$/);
+});
+
+test('review decision: a number or Ender ID with no shielded address is paid by a private withdrawal to its wallet', () => {
+  const cache = { notes: [note(0, '15'), note(1, '10')], awaiting: [] };
+  const wallet = '0x00000000000000000000000000000000000b0b0b' as const;
+  expect(withdrawRoute({ wallet, cache, amount: '20' })).toEqual({ route: 'private', withdrawTo: wallet });
+  // The notes can't cover amount + fee: public, from the public balance.
+  expect(withdrawRoute({ wallet, cache, amount: '25' })).toEqual({ route: 'public' });
+  const many = { notes: Array.from({ length: 13 }, (_, i) => note(i, '1')), awaiting: [] };
+  expect(withdrawRoute({ wallet, cache: many, amount: '12.5' })).toEqual({ route: 'public' }); // MERGE
+  // No wallet (not on Ender, or the lookup failed): public.
+  expect(withdrawRoute({ cache, amount: '1' })).toEqual({ route: 'public' });
+  // The wallet pinned for them: fine in any case; a different one goes public, where Review flags the change.
+  expect(withdrawRoute({ wallet, pinned: '0x00000000000000000000000000000000000B0B0B', cache, amount: '1' })).toEqual({ route: 'private', withdrawTo: wallet });
+  expect(withdrawRoute({ wallet, pinned: '0x000000000000000000000000000000000000dead', cache, amount: '1' })).toEqual({ route: 'public' });
 });
