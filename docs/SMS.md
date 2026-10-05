@@ -177,20 +177,16 @@ layout (`OK` → `applyOkReply`, `Received` → `applyReceived`, everything else
 `applyShieldedReply`, each on the network the text names) and the Review
 screen while it waits (`Q`, `ERR`, `Sent`, `Shielded`, matched by id):
 
-1. **RECEIVE_SMS** (Android, if granted; the Activity tab asks once). A
-   manifest receiver (`SmsReceiver`) keeps only texts whose sender's last ten
-   digits match a gateway number (`setSenders`, stored natively, so it filters
-   while the app is closed). Others are dropped before the body is read.
-   Matching texts go into a queue in SharedPreferences (`ender.sms`, at most
-   50, deduped by body and timestamp). JS drains it on start, on every
-   foreground and whenever a text is added (`pump`).
-2. **SMS Retriever** (Android, without the permission). Play services hands
-   over the next text that ends with the app's hash, one per `start()`,
-   within five minutes. `pump` re-arms it on start, on every foreground and
-   after each text.
-3. **Clipboard** (any platform). On foreground, within 10 minutes of texting
+1. **SMS Retriever** (Android, no permission). Play services hands over the
+   next text that ends with the app's hash, one per `start()`, within five
+   minutes. `pump` re-arms it on start, on every foreground, after each text
+   and every 4 minutes while the app is open. Texts that arrive while the app
+   is closed are picked up by the next online sync, or by pasting. (A
+   `RECEIVE_SMS` receiver was tried and dropped: Play Protect blocks
+   sideloaded apps that ask for SMS permissions.)
+2. **Clipboard** (any platform). On foreground, within 10 minutes of texting
    the gateway, a new clipboard string is passed to `acceptReply`.
-4. **Paste reply** button on the Review screen while it waits.
+3. **Paste reply** button on the Review screen while it waits.
 
 The OTP is not a reply: `listenForCode` matches `Ender code: (\d{6})` on the
 same `onSms` stream.

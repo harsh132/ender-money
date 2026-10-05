@@ -1,7 +1,7 @@
 /**
  * Picking the pipe: HTTPS when the internet is reachable, otherwise the SMS
  * composer to the gateway number. Replies to texts come back by themselves on
- * Android (modules/sms-retriever: RECEIVE_SMS, or else the SMS Retriever; wired
+ * Android (modules/sms-retriever: the SMS Retriever, re-armed while open; wired
  * in the root layout), and everywhere through the clipboard (the user copies
  * the gateway's reply; the app reads it on focus) or Paste reply.
  */

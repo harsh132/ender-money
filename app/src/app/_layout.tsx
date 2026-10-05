@@ -11,8 +11,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
-import { onSms, pump, setSenders } from '../../modules/sms-retriever';
-import { GATEWAY_SMS } from '../lib/config';
+import { onSms, pump } from '../../modules/sms-retriever';
 import { c } from '../lib/theme';
 import { hydrate, useStore } from '../lib/store';
 import { acceptReply, onReply } from '../lib/transport';
@@ -34,13 +33,13 @@ export default function Root() {
   // incoming row, Sent / Shielded / Got update private notes. Q / ERR go to the screen waiting for them.
   useEffect(() => onReply((r) => (r.kind === 'ok' ? applyOkReply(r) : r.kind === 'received' ? applyReceived(r) : applyShieldedReply(r))), []);
 
-  // Android: texts from the gateway's numbers (RECEIVE_SMS, queued while closed), or else the SMS Retriever, re-armed on
-  // every foreground and after each text. Elsewhere a no-op; the clipboard and Paste reply still work everywhere.
+  // Android: the SMS Retriever, re-armed on every foreground, after each text and every 4 minutes while open (its window
+  // is 5). Elsewhere a no-op; the clipboard and Paste reply still work everywhere.
   // Back in the foreground with a Quick send session still open (after the SMS composer, say): Auto-merge may run.
   useEffect(() => {
-    setSenders([GATEWAY_SMS.india, GATEWAY_SMS.international].filter((n): n is string => !!n));
     const off = onSms((body) => void acceptReply(body));
     void pump();
+    const rearm = setInterval(() => AppState.currentState === 'active' && void pump(), 4 * 60_000);
     const sub = AppState.addEventListener('change', (s) => {
       if (s !== 'active') return;
       void pump();
@@ -48,6 +47,7 @@ export default function Root() {
     });
     return () => {
       off();
+      clearInterval(rearm);
       sub.remove();
     };
   }, []);

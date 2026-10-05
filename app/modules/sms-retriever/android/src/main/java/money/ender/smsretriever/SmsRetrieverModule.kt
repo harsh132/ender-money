@@ -12,10 +12,9 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 /**
- * Two ways in. With RECEIVE_SMS: SmsReceiver queues texts from the gateway's numbers (setSenders), even while the
- * app is closed; drain() hands them over and "onInbox" says there are new ones. Without it, Android's SMS Retriever:
- * Play services hands the app the next SMS that ends with the app's hash, no permission needed. One message per
- * start(), within five minutes ("onSms").
+ * Android's SMS Retriever: Play services hands the app the next SMS that ends with the app's hash, no permission
+ * needed. One message per start(), within five minutes ("onSms"). (RECEIVE_SMS was dropped: Play Protect blocks
+ * sideloaded apps that ask for it.)
  */
 class SmsRetrieverModule : Module() {
   private var receiver: BroadcastReceiver? = null
@@ -23,13 +22,7 @@ class SmsRetrieverModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("SmsRetriever")
-    Events("onSms", "onInbox")
-
-    OnCreate { SmsInbox.onAdded = { sendEvent("onInbox", mapOf<String, Any>()) } }
-
-    Function("setSenders") { numbers: List<String> -> SmsInbox.setSenders(context, numbers) }
-
-    AsyncFunction("drain") { SmsInbox.drain(context) }
+    Events("onSms")
 
     AsyncFunction("start") {
       stop()
@@ -55,10 +48,7 @@ class SmsRetrieverModule : Module() {
 
     Function("stop") { stop() }
 
-    OnDestroy {
-      stop()
-      SmsInbox.onAdded = null
-    }
+    OnDestroy { stop() }
   }
 
   private fun stop() {

@@ -74,8 +74,6 @@ export type State = {
   awaiting: Partial<Record<NetworkName, Awaiting[]>>;
   /** phone -> shielded address (base64) seen on the first private payment; a different one later is refused. */
   shieldedPins: Record<string, string>;
-  /** Asked once for RECEIVE_SMS (Activity), whatever the answer. */
-  smsAsked?: boolean;
   /** Settings' Auto-merge (networks with a pool): fold the 12 largest private notes while unlocked and online. Off by default. */
   autoMerge?: boolean;
 };

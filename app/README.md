@@ -18,7 +18,7 @@ src/lib/
   private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge rule
   transport.ts  internet first; SMS composer when offline ([Test] prefix for testnet); replies by SMS, clipboard or paste
   inbox.ts      Received alerts by text -> Activity rows, deduped against the online history
-modules/sms-retriever/   Android: gateway texts by RECEIVE_SMS (queued while closed) or the SMS Retriever
+modules/sms-retriever/   Android: gateway texts via the SMS Retriever (no permission)
   api.ts        gateway HTTPS client (5 s timeout, then SMS)
   store.ts      persisted state (AsyncStorage; JWT in SecureStore)
 ../protocol/    shared with the gateway: networks, Calibur typed data, SMS format, recipients (0x, numbers, ender1…)
@@ -45,19 +45,12 @@ and a Quick send session holds the key; it never keeps a key for this.
 ## Texts from the gateway
 
 On Android the app reads the gateway's replies and alerts (`Received`,
-`Got`, `Sent`, `Shielded`, `Q`, `ERR`) by itself. With
-`RECEIVE_SMS` (asked once, from Activity), a manifest receiver in
-`modules/sms-retriever` keeps texts from the gateway's numbers only
-(`EXPO_PUBLIC_GATEWAY_SMS_IN` / `_INTL`, passed in at startup), queues
-them while the app is closed and hands them over on startup and every
-foreground; other senders are dropped unread. Without the permission it
-falls back to the SMS Retriever (no permission; every gateway text ends with
-the app's hash), re-armed on every foreground and after each text. Copy or
-Paste reply works everywhere.
-
-Play Store builds need the SMS permissions declaration form (core use:
-SMS-based money transactions) before `RECEIVE_SMS` is allowed; sideloaded
-APKs are unaffected.
+`Got`, `Sent`, `Shielded`, `Q`, `ERR`) by itself while it's open, through
+the SMS Retriever (no permission; every gateway text ends with the app's
+hash), re-armed on every foreground, after each text and every 4 minutes.
+Texts that arrive while the app is closed come in with the next online sync,
+or by Copy / Paste reply, which work everywhere. `RECEIVE_SMS` was dropped:
+Play Protect blocks sideloaded apps that request SMS permissions.
 
 ## Passkeys need the signing key
 
