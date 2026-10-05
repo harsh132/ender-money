@@ -43,7 +43,8 @@ single atomic SQL statement, so concurrent requests can't double-act.
 | D1 `links` | `phone (E.164) · address · network · alerts · created_at · label`, unique on phone, on address and on label. The directory, queried both ways: phone → address to pay a number, address → phone for alerts. `label` is the Ender ID (`0007_names.sql`), null for accounts made before names |
 | D1 `otps` | `phone · code_hash · attempts · expires_at`. A try is `UPDATE … SET attempts = attempts + 1 WHERE phone = ? AND expires_at > ? AND attempts < 5 RETURNING *` |
 | D1 `sessions` | pending quotes, i.e. exactly what the user is asked to sign (below). Signing claims one with `UPDATE … SET state = 'sending' WHERE id = ? AND state = 'open' RETURNING *`; a racing duplicate gets nothing back and reads the tx hash instead |
-| D1 `alerts_sent` | `tx_hash · phone`, so a repeated webhook delivery (or a `Got` for the same transaction) never alerts twice |
+| D1 `alerts_sent` | `tx_hash · phone`, so a repeated webhook delivery (or a private `Received` for the same transaction) never alerts twice |
+| D1 `ens_names` | `address · name · checked_at`: reverse ENS per sender address for a public `Received`'s `from=` (`0008_names_in_texts.sql`); `name` null when there is none a text can carry; rechecked after 7 days |
 | D1 `transfers` | AUSD `Transfer` logs touching a linked address (`network · tx_hash · log_index · from · to · amount · block · at`), written by the Alchemy webhook (`INSERT OR IGNORE`, so a repeated delivery writes nothing); serves `GET /activity` and alerts |
 | D1 `alchemy_webhooks` | `id · network · signing_key · addresses · created_at`: the Address Activity webhooks the gateway made itself (`0006_alchemy.sql`); `signing_key` sealed under `SHIELDED_KEY_SECRET` |
 | D1 `alchemy_addresses` | `network · address`: linked addresses already pushed to that network's webhook |
@@ -69,6 +70,7 @@ one code path.
 | `request_hash` | hash of the request; a repeated `SEND` from the same number while the quote is open returns this quote |
 | `state`, `tx_hash`, `error` | `open → sending → sent`, or back to `open` with an error so a retry before the deadline works |
 | `expires_at` | 5 minutes after the quote is sent |
+| `recipient` | what the quote was asked for when it was a number or an Ender ID (null for a 0x address), so its `Sent` names it (`0008_names_in_texts.sql`) |
 
 **Duplicate SMS** (carriers occasionally deliver twice; the relay may
 re-forward after a reconnect) need no table of their own: a repeated `SIG`
@@ -129,15 +131,18 @@ another network is `ERR <id> wrong-network` (the quote stays open), private
 commands go to testnet. Unprefixed commands keep the older rule, so older
 app builds work: `SYNC` is mainnet, `SEND` uses the number's current
 network, a `SIG` its session's, private commands testnet. Every reply about
-testnet (`OK`, `Q`, `Sent`, `ERR`, every private reply, `Got`, testnet
+testnet (`OK`, `Q`, `Sent`, `ERR`, every private reply, every testnet
 `Received`) starts with `[Test] `; no prefix means mainnet. The app applies
 each text to the network it names, whatever mode it shows. See
 [SMS.md](SMS.md).
 
 Errors: `expired`, `low-balance`, `bad-sig`, `not-on-ender`, `not-registered`,
 `rate-limited`. Duplicates are handled by the session rules above. Every outbound message is checked to fit one GSM-7
-segment; every text the gateway sends (replies, `Q`, `Sent`, `Shielded`, `ERR`, `Got`,
+segment; every text the gateway sends (replies, `Q`, `Sent`, `Shielded`, `ERR`,
 incoming-payment alerts, OTPs) appends the SMS Retriever hash (`SMS_RETRIEVER_HASH`) on its own line.
+`Sent … to=` names the number the payment was asked for by, else the
+recipient's Ender ID (also when paid by 0x or `ender1…` address), else the
+short address (`sentTo` in `sms.ts`; SMS.md "Who appears in texts").
 
 OTP text: `Ender code: 481926. Don't share it.` plus the Retriever hash.
 
@@ -301,14 +306,25 @@ retry) is recorded but not texted about.
 - With `ALCHEMY_AUTH_TOKEN` unset (or `ALCHEMY_WEBHOOK_URL` /
   `SHIELDED_KEY_SECRET`), no webhooks are made and incoming transfers go
   unrecorded.
-- Alert text (`protocol/sms.ts`, a `received` reply):
-  `[Test] Received 10 AUSD from=0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5 balance=10 tx=0xab12...ef`
-  plus the SMS Retriever hash line; `[Test] ` on testnet only. The sender is
-  always the full EIP-55 address, never a number, even when the sender is on
+- Alert text (`protocol/sms.ts`, a public `received` reply):
+  `[Test] Received 10 AUSD from=bobby.ender.my balance=10 tx=0xab12...ef`
+  plus the SMS Retriever hash line; `[Test] ` on testnet only. `from=` is
+  the sender's Ender ID when the sending address is linked to a named
+  account, else its verified primary ENS name, else the full EIP-55 address
+  (`senderName` in `names.ts`); never a number, even when the sender is on
   Ender: a text never tells one user another's number. `tx` is the short hash
   the app uses to match the alert with the same transfer from `/activity`.
-  Longest case 121 septets (`[` and `]` cost two), 133 with the hash. Folding several alerts into
-  one (30 s) is not built.
+  Longest case 121 septets with an address, 119 with a 40-character ENS name
+  (`[` and `]` cost two), 133 and 131 with the hash. Folding several alerts
+  into one (30 s) is not built.
+- **Reverse ENS** (`reverseEns` in `names.ts`): viem's `getEnsName` on
+  Ethereum mainnet through `ETH_RPC_URL` (default `https://eth.drpc.org`;
+  publicnode, llamarpc, cloudflare-eth and ankr were unreachable from our
+  tests). The Universal Resolver only returns a name whose forward record
+  points back at the address. Used only if `isTextName` (printable ASCII,
+  plain GSM-7, at most 40 characters). The answer, a name or none, is cached
+  in `ens_names` for 7 days. A lookup has 4 s; an RPC error or timeout falls
+  back to the cached name, else the address, and the alert goes out anyway.
 
 **Turning the webhook on** after deploying (`0006_alchemy.sql` applied
 with `bun run gateway:migrate:remote`): copy the Notify auth token from the
@@ -374,12 +390,14 @@ Turn on Notifications → Workers usage (weekly summary and the CPU-spike alert)
   (`shielded.e2e.test.ts`; needs anvil, the spike's forge build and the
   `ender-prover` docker image, else skipped); Alchemy webhook creation,
   address pushes (including from `/wallet/create`) and the 100k rollover,
-  signed deliveries, AUSD-only recording, one alert per transfer and the
-  stale-alert rule, against a mocked Notify API and JSON-RPC
+  signed deliveries, AUSD-only recording, one alert per transfer, the
+  stale-alert rule and who the alert names (Ender ID, reverse ENS cached a
+  week, too-long or non-ASCII names and RPC failures falling back to the
+  address), against a mocked Notify API, JSON-RPC and Universal Resolver
   (`alchemy.test.ts`); Ender IDs: label rules, signup with a name (required,
   one winner under a race, carried by a relink), the one-time claim, lookups
-  and their limits, the pay page (found, not found, no number in it) and
-  SEND / PAY to a name by SMS (`names.test.ts`); ENS answers checked the way
+  and their limits, the pay page (found, not found, no number in it),
+  SEND / PAY to a name by SMS and who `Sent` names (`names.test.ts`); ENS answers checked the way
   `EnderResolver.resolveCallback` checks them, the digest against the
   contract's pinned vector, and the real contract on anvil resolving through
   viem's CCIP-Read against this gateway served locally (`ccip.test.ts`;
@@ -428,8 +446,8 @@ transports), `pool.ts` (index and Merkle tree), `prover.ts` (container).
 | `pool_appends` | one row per tree append `[from_size, to_size)`, keyed by `from_size`: two racing appends from the same size can't both commit (the D1 batch rolls back), so the tree is never built from stale siblings |
 | `pool_nullifiers` | every `NewNullifier` |
 | `pool_cursors` | the catch-up scan's last block and whether it reached the pool's leaf count |
-| `shielded_notes` | `network · pos · phone · amount · blinding · nullifier · spent`: each user's notes, found by trial decryption |
-| `shielded_quotes` | `id · phone · network · kind · to_phone · to_address · amount · fee · exp · state · ins · tx_hash · p · error`. `to_address` is a withdrawal's 0x address, or the `ender1…` address a payment was made to (then `to_phone` is its owner, used only for `Got`). Claimed like `sessions` (`open → sending → sent`); `ins` reserves the notes being spent while a SIG is proved; `exp` (10 minutes) is also the signed on-chain deadline |
+| `shielded_notes` | `network · pos · phone · amount · blinding · nullifier · spent · tx_hash`: each user's notes, found by trial decryption. `tx_hash` is the transaction that made the note (`0008_names_in_texts.sql`; from the receipt or the catch-up's logs; null for notes indexed before it) |
+| `shielded_quotes` | `id · phone · network · kind · to_phone · to_address · amount · fee · exp · state · ins · tx_hash · p · error`. `to_address` is a withdrawal's 0x address, or the `ender1…` address or Ender ID a payment was made to (then `to_phone` is its owner, used only internally: the private `Received`, and the owner's Ender ID for `Sent`). Claimed like `sessions` (`open → sending → sent`); `ins` reserves the notes being spent while a SIG is proved; `exp` (10 minutes) is also the signed on-chain deadline |
 
 **Indexing.** Every pool transaction goes through the gateway (deposits and
 transfers are gateway-only on-chain, and open exits aren't supported yet), so
@@ -494,19 +512,21 @@ rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
    `GATEWAY_SHIELDED_SEED`); every non-null output belongs to a registered
    user; deposits only from a registered wallet.
 5. Prove, send as a `direct` item, wait for the receipt, index its logs.
-6. A payment to another user texts them
-   `[Test] Got <amt> AUSD (private) p=<pos> b=<blinding>` (alerts switch on,
-   `canText`, once per transaction through `alerts_sent`). No sender: the
-   phone needs only `p` and `b`. A payment to a private address texts the
+6. A payment to another user texts them a private `Received`:
+   `[Test] Received <amt> AUSD[ from=<payer's Ender ID>] tx=<short tx> p=<pos> b=<blinding>`
+   (`receivedAlert`; alerts switch on, `canText`, once per transaction
+   through `alerts_sent`). No `from=` when the payer has no Ender ID, never a
+   number, and no `balance=`. A payment to a private address texts the
    address's owner; their number is looked up internally and never reaches
-   the payer (`Sent <id> … to=ender1abcd...wxyz`).
+   the payer, whose `Sent` names the owner's Ender ID (else
+   `to=ender1abcd...wxyz`).
 
 **HTTPS** (JWT like every other route; `network` defaults to `testnet`):
 
 | Call | Does |
 | --- | --- |
 | `POST /shielded/register {network, keys: {Ax, Ay, nk, viewSk}}` | decimal strings; `viewSk` is the 32 key bytes as a big-endian integer. Returns `{owner}`, the 64-byte packed shielded address in unpadded base64 (`protocol/sms.ts` `b64`). `eoa` = the number's linked wallet. Idempotent; other keys for the same number are `key-changed` (409), the same keys under another number `key-in-use` (409) |
-| `GET /shielded/notes?network=` | `{notes: [{pos, amount, blinding, spent}], root}`: the number's whole index, spent included (amount, blinding and root as decimal strings) |
+| `GET /shielded/notes?network=` | `{notes: [{pos, amount, blinding, spent, tx?}], root}`: the number's whole index, spent included (amount, blinding and root as decimal strings; `tx` the full hash of the transaction that made the note, absent for notes indexed before `0008`). The app links private Activity rows to `tx` |
 | `POST /shielded/quote {network, kind, to?, amount}` | `kind`: `pay` (to a number or an `ender1…` private address), `withdraw` (to a 0x address), `shield`, `merge` (amount ignored). Returns `{id, exp, fee, to?}`: `to` is the recipient's packed address (base64) for `pay`, the address for `withdraw`, absent otherwise |
 | `POST /shielded/submit {id, refs?, sig?, signature?}` | `refs` (tree positions) + `sig` (64-byte EdDSA, base64, padded or not) for pay / withdraw / merge; `signature` (0x, 65-byte EIP-3009) for shield. Returns `{tx, p?}` after the receipt (`p` = position of output 0; absent for a change-free withdrawal); `{tx, pending: true}` if the receipt didn't come within 30 s, and a repeated submit settles it |
 | `GET /shielded/address?network=&phone=` | `{owner}` of a registered number, so the app can pin a contact's key online; `NOUSER` (404) otherwise |
@@ -550,10 +570,13 @@ today), alert MACs.
 ## Ender IDs
 
 Every account has a name, `<label>.ender.my`, chosen at signup and never
-changed (`protocol/names.ts`, shared with the app): 5-30 characters, `a-z`,
+changed (`protocol/names.ts`, shared with the app): 5-20 characters, `a-z`,
 `0-9` and interior single hyphens, case-insensitive (stored lowercase), not in
 `RESERVED_LABELS`, first come first served. It lives on `links.label`
-(unique), so it follows the number.
+(unique), so it follows the number. 20 is the most a private `Received`
+naming the payer can carry in one segment (155 septets with `[Test] ` and
+the hash line). It was 30; the only name stored then, `harsh`, fits, and the
+schema is unchanged.
 
 - **Signup.** The app asks for it after the passkey and sends it in
   `/wallet/create` (`name`). Checked before any gas is spent (`bad-name`,
@@ -578,8 +601,10 @@ changed (`protocol/names.ts`, shared with the app): 5-30 characters, `a-z`,
 Paying a name: `POST /tx/quote` and `SEND` resolve it to the public address
 (`unknown-name`); `/shielded/quote` and `PAY` resolve it to the owner's
 shielded key (`NOUSER` when unknown or not registered) and quote `to=` that
-key, so the phone can pin it, as for a number. The private `Sent` says
-`to=<label>.ender.my`; the owner's number is only used internally (`Got`).
+key, so the phone can pin it, as for a number. `Sent` (public or private) says
+`to=<label>.ender.my`; the owner's number is only used internally (the
+private `Received`). Texts name Ender IDs wherever they can: SMS.md "Who
+appears in texts".
 The app routes a name like a number: private when the name has a private
 address and the private notes cover it, else public.
 
@@ -631,7 +656,11 @@ through to its own origin. Locally (`DEV=1`) pages answer at
    and paste the key ender-backend used (its address must be in the
    resolver's `signers`, as it is today). For `wrangler dev`, add it to
    `gateway/.dev.vars`.
-2. **Migration**: `bun run gateway:migrate:remote` (applies `0007_names.sql`).
+2. **Migration**: `bun run gateway:migrate:remote` (applies `0007_names.sql`,
+   and `0008_names_in_texts.sql`: `ens_names`, `sessions.recipient`,
+   `shielded_notes.tx_hash`). `ETH_RPC_URL` (reverse ENS) defaults to
+   `https://eth.drpc.org`; set it as a var or secret only to use another
+   Ethereum RPC.
 3. **Route**: a zone route can belong to one Worker only, so remove
    `*.ender.my/*` from ender-backend's Worker (its `wrangler.jsonc` and a
    deploy, or dashboard → Workers → ender-backend → Settings → Domains &

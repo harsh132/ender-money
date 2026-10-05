@@ -26,7 +26,7 @@ import {
 import { decodePrivateAddress } from '../../../protocol/recipient';
 import { b64, type Reply } from '../../../protocol/sms';
 import { MAX_FEE } from './config';
-import type { State } from './store';
+import type { State, Tx } from './store';
 
 const units = (s: string) => parseUnits(s, AUSD_DECIMALS);
 
@@ -51,8 +51,12 @@ const domainOf = (n: NetworkName) => ({ chainId: NETWORKS[n].chain.id, pool: NET
 
 // ---------------------------------------------------------------- the note cache
 
-/** One note, as persisted (bigints as decimal strings; amount in AUSD base units). */
-export type CachedNote = { pos: number; amount: string; blinding: string; spent: boolean };
+/** One note, as persisted (bigints as decimal strings; amount in AUSD base units). tx: its transaction, from /shielded/notes. */
+export type CachedNote = { pos: number; amount: string; blinding: string; spent: boolean; tx?: string };
+
+/** An incoming private payment: a `Received` with p= and b= (or an older gateway's `Got`). */
+export type PrivateReceived = Extract<Reply, { kind: 'received'; p: number }>;
+export const isPrivateReceived = (r: Reply): r is PrivateReceived => r.kind === 'received' && r.p !== undefined;
 
 /** A private payment, shield or merge that was signed and is waiting for its Sent / Shielded (matched by id). */
 export type Awaiting = {
@@ -95,13 +99,13 @@ export const settleAwaiting = (c: Cache, a: Awaiting, p?: number): Cache => {
 };
 
 /**
- * An SMS reply: Sent / Shielded (the waiting payment with that id), Got (a
- * note someone sent us). Returns the settled payment too, so the caller can
- * mark it in Activity. Anything else: unchanged. An older gateway's id-less
- * Sent / Shielded falls back to the oldest waiting one of that kind and amount.
+ * An SMS reply: Sent / Shielded (the waiting payment with that id), a private
+ * Received (a note someone sent us). Returns the settled payment too, so the
+ * caller can mark it in Activity. Anything else: unchanged. An older gateway's
+ * id-less Sent / Shielded falls back to the oldest waiting one of that kind and amount.
  */
 export const applyReply = (c: Cache, r: Reply): { cache: Cache; settled?: Awaiting } => {
-  if (r.kind === 'got')
+  if (isPrivateReceived(r))
     return { cache: { ...c, notes: addNote(c.notes, { pos: r.p, amount: units(r.amount).toString(), blinding: r.blinding.toString(), spent: false }) } };
   if (r.kind !== 'sent' && r.kind !== 'shielded') return { cache: c };
   const a = c.awaiting.find((x) =>
@@ -112,16 +116,16 @@ export const applyReply = (c: Cache, r: Reply): { cache: Cache; settled?: Awaiti
 
 /**
  * The network a text names: `[Test] ` testnet, no tag mainnet. The app's mode
- * is display only. A private-only text (private Q, Shielded, Got) without a
- * tag came from an older gateway: the network with the pool.
+ * is display only. A private-only text (private Q, Shielded, private Received)
+ * without a tag came from an older gateway: the network with the pool.
  */
 export const textNetwork = (r: Reply): NetworkName => {
   const named: NetworkName = r.test ? 'testnet' : 'mainnet';
-  return (r.kind === 'shieldedQuote' || r.kind === 'shielded' || r.kind === 'got') && !hasPool(named) ? POOL_NETWORKS[0]! : named;
+  return (r.kind === 'shieldedQuote' || r.kind === 'shielded' || isPrivateReceived(r)) && !hasPool(named) ? POOL_NETWORKS[0]! : named;
 };
 
 /**
- * The note cache a private text (Sent, Shielded, Got) goes to: the network
+ * The note cache a private text (Sent, Shielded, private Received) goes to: the network
  * it names; with no pool there (an older gateway didn't tag private texts),
  * the network that has one. Never the network the app happens to show.
  */
@@ -131,7 +135,7 @@ export const notesNetwork = (r: Reply): NetworkName => {
 };
 
 /**
- * A Sent / Shielded / Got text, filed under the network it names: the state
+ * A Sent / Shielded / private Received text, filed under the network it names: the state
  * patch for that network's notes, waiting payments and pins, and the payment
  * it settled. Nothing when that network has no registered private balance.
  */
@@ -142,6 +146,17 @@ export const fileReply = (s: Pick<State, 'notes' | 'awaiting' | 'shieldedPins' |
   const patch = { notes: { ...s.notes, [network]: cache.notes }, awaiting: { ...s.awaiting, [network]: cache.awaiting }, shieldedPins: cache.pins };
   return { network, patch, settled };
 };
+
+/**
+ * Private rows from texts know only the short hash. A resync's notes carry their transaction's full one: a row
+ * whose transaction made our note at its position (`pos`, output 0) or the next (`pos + 1`, change) gets it.
+ */
+export const txLinks = (activity: Tx[], network: NetworkName, notes: CachedNote[]) =>
+  activity.flatMap((t) => {
+    if (!t.private || t.txHash || t.network !== network || t.pos === undefined) return [];
+    const n = notes.find((x) => x.tx && (x.pos === t.pos || x.pos === t.pos! + 1));
+    return n ? [{ id: t.id, txHash: n.tx! }] : [];
+  });
 
 /** One payment spends at most this many notes (the largest circuit); past it, Home offers a merge. */
 export const MERGE_OVER = CIRCUITS[CIRCUITS.length - 1]!;

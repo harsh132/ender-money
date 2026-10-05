@@ -119,7 +119,8 @@ export const api = {
   shieldedRegister: (network: NetworkName, keys: { Ax: string; Ay: string; nk: string; viewSk: string }) =>
     request<{ owner: string }>('POST', '/shielded/register', { network, keys }),
   shieldedNotes: (network: NetworkName) =>
-    request<{ notes: { pos: number; amount: string; blinding: string; spent: boolean }[]; root: string }>('GET', `/shielded/notes?network=${network}`),
+    // tx: the note's transaction (full hash); absent from older gateways and for notes indexed before it.
+    request<{ notes: { pos: number; amount: string; blinding: string; spent: boolean; tx?: string }[]; root: string }>('GET', `/shielded/notes?network=${network}`),
   shieldedQuote: (body: { network: NetworkName; kind: ShieldedKind; to?: string; amount?: string }) => request<ShieldedQuoteInfo>('POST', '/shielded/quote', body, undefined, 15_000),
   shieldedSubmit: (body: { id: string; refs?: number[]; sig?: string; signature?: Hex }) => // The gateway proves (1-4 s) and waits for the receipt before answering.
     request<{ tx: Hex; p?: number; pending?: true }>('POST', '/shielded/submit', body, undefined, 60_000),

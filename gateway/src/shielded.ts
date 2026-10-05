@@ -54,10 +54,11 @@ import {
 } from '../../protocol/shielded';
 import { enderId, parseEnderId } from '../../protocol/names';
 import { decodePrivateAddress, encodePrivateAddress } from '../../protocol/recipient';
-import { b64, formatReply, isPhone, REF_MOD, SESSION_ID_ALPHABET, unb64, withRetrieverHash } from '../../protocol/sms';
+import { b64, formatReply, isPhone, REF_MOD, SESSION_ID_ALPHABET, shortHex, unb64, withRetrieverHash } from '../../protocol/sms';
 import { publicClient } from './chain';
 import { GatewayError } from './core';
 import type { Env } from './env';
+import { idOfPhone } from './names';
 import { canText, sendSms } from './outbound';
 import { catchUp, ingest, poolOf, treeFor } from './pool';
 import { prove, warm, type Circuit } from './prover';
@@ -207,18 +208,22 @@ export const register = async (env: Env, phone: string, network: NetworkName, ra
   return { owner: ownerB64 };
 };
 
-/** The number's whole index (spent included) and the tree root, for the app to resync its cache. */
+/** The number's whole index (spent included, with each note's transaction) and the tree root, for the app to resync its cache. */
 export const notes = async (env: Env, phone: string, network: NetworkName) => {
   poolOf(network);
   if (!(await userRow(env, phone, network))) throw new GatewayError('NOUSER', 403);
   await catchUp(env, network);
   const [{ results }, tree] = await Promise.all([
-    env.DB.prepare('SELECT pos, amount, blinding, spent FROM shielded_notes WHERE phone = ? AND network = ? ORDER BY pos')
+    env.DB.prepare('SELECT pos, amount, blinding, spent, tx_hash FROM shielded_notes WHERE phone = ? AND network = ? ORDER BY pos')
       .bind(phone, network)
-      .all<{ pos: number; amount: string; blinding: string; spent: number }>(),
+      .all<{ pos: number; amount: string; blinding: string; spent: number; tx_hash: Hex | null }>(),
     treeFor(env, network, []),
   ]);
-  return { notes: results.map((n) => ({ pos: n.pos, amount: n.amount, blinding: n.blinding, spent: n.spent === 1 })), root: tree.root.toString() };
+  return {
+    // tx: the pool transaction that made the note (absent for notes indexed before 0008).
+    notes: results.map((n) => ({ pos: n.pos, amount: n.amount, blinding: n.blinding, spent: n.spent === 1, ...(n.tx_hash ? { tx: n.tx_hash } : {}) })),
+    root: tree.root.toString(),
+  };
 };
 
 /** A registered number's shielded address, so the app can pin a contact's key online. */
@@ -360,8 +365,8 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
     if (typeof req.to !== 'string' || (!isPhone(req.to) && !packed && !label)) throw new GatewayError('bad-recipient');
     const r = packed ? await userByAddress(env, network, packed) : label ? await userByLabel(env, network, label) : await userRow(env, req.to, network);
     if (!r) throw new GatewayError('NOUSER', 404);
-    // To a private address or an Ender ID: its owner's number is used internally (the Got text) and never shown to
-    // the payer, who sees what they paid (`Sent … to=`).
+    // To a private address or an Ender ID: its owner's number is used internally (the private Received) and never shown to
+    // the payer, whose `Sent … to=` names what they paid (an ender1 address: its owner's Ender ID, if any).
     toPhone = r.phone;
     if (packed) toAddress = encodePrivateAddress(packed);
     else if (label) toAddress = enderId(label);
@@ -408,7 +413,8 @@ export const quoteOf = (env: Env, phone: string, id: string) =>
 // ---------------------------------------------------------------- submit
 
 export type SubmitRequest = { id: string; refs?: number[]; sig?: Uint8Array; signature?: Hex };
-export type SubmitResult = { tx: Hex; p?: number; pending?: true; kind: ShieldedKind; amount: string; to: string };
+/** to: what was paid (number, Ender ID, ender1 or 0x address; our own number for a merge). toPhone: the recipient's number, internal only. */
+export type SubmitResult = { tx: Hex; p?: number; pending?: true; kind: ShieldedKind; amount: string; to: string; toPhone?: string };
 
 const resultOf = (q: QuoteRow): SubmitResult => ({
   tx: q.tx_hash!,
@@ -418,6 +424,7 @@ const resultOf = (q: QuoteRow): SubmitResult => ({
   amount: formatUnits(BigInt(q.amount), AUSD_DECIMALS),
   // Paid to a private address: that address, never its owner's number.
   to: q.to_address ?? q.to_phone ?? q.phone,
+  ...(q.to_phone ? { toPhone: q.to_phone } : {}),
 });
 
 const firstLeaf = (network: NetworkName, logs: Log[]) => {
@@ -536,9 +543,9 @@ const transfer = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
   const sent = await relay(env, q, data);
 
   if (q.kind === 'pay' && q.to_phone !== q.phone && sent.state === 'sent' && sent.p !== null) {
-    const got = { amount: formatUnits(amount, AUSD_DECIMALS), p: sent.p, blinding: r.tx.outs[0]!.blinding, test: network === 'testnet' };
-    await gotAlert(env, q.to_phone!, sent.tx_hash!, got).catch((e) =>
-      console.error('got alert failed', e instanceof Error ? e.message : e),
+    const note = { amount: formatUnits(amount, AUSD_DECIMALS), p: sent.p, blinding: r.tx.outs[0]!.blinding };
+    await receivedAlert(env, q.phone, q.to_phone!, sent.tx_hash!, note, network).catch((e) =>
+      console.error('private received alert failed', e instanceof Error ? e.message : e),
     );
   }
   return sent;
@@ -594,13 +601,26 @@ const deposit = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
   return relay(env, q, data);
 };
 
-/** `Got …` to the recipient of a private payment the gateway relayed, if they take texts (one per tx, alerts_sent). */
-const gotAlert = async (env: Env, to: string, txHash: Hex, got: { amount: string; p: number; blinding: bigint; test: boolean }) => {
+/**
+ * A private `Received … tx=… p=… b=…` to the recipient of a private payment the gateway relayed, if they take texts
+ * (one per tx, alerts_sent). `from=` is the sender's Ender ID, left out when they have none: never their number.
+ * No balance: a carrier reads every text.
+ */
+const receivedAlert = async (
+  env: Env,
+  from: string,
+  to: string,
+  txHash: Hex,
+  note: { amount: string; p: number; blinding: bigint },
+  network: NetworkName,
+) => {
   const link = await env.DB.prepare('SELECT alerts FROM links WHERE phone = ?').bind(to).first<{ alerts: number }>();
   if (!link?.alerts || !canText(to)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to).run();
   if (fresh.meta.changes !== 1) return;
-  await sendSms(env, to, withRetrieverHash(formatReply({ kind: 'got', ...got }), env.SMS_RETRIEVER_HASH));
+  const sender = await idOfPhone(env, from);
+  const text = formatReply({ kind: 'received', ...note, ...(sender ? { from: sender } : {}), tx: shortHex(txHash), test: network === 'testnet' });
+  await sendSms(env, to, withRetrieverHash(text, env.SMS_RETRIEVER_HASH));
 };
 
 /** base64 (padded or not) of a 64-byte signature, as /shielded/submit takes it. */

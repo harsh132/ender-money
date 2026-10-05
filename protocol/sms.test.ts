@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
 import { privateKeyToAccount } from 'viem/accounts';
+import { MAX_LABEL } from './names';
 import {
   fitsOneSegment,
+  MAX_TEXT_NAME,
   b64,
   formatCommand,
   formatOtp,
@@ -87,12 +89,33 @@ test('alerts and OTPs fit, with the Retriever hash appended', () => {
   expect(fitsOneSegment(withRetrieverHash(formatOtp('481926'), 'FA+9qCX9VSu'))).toBe(true);
 });
 
-test('Got carries no sender; the older "from" form still parses', () => {
-  const got: Reply = { kind: 'got', amount: '20', p: 2, blinding: 123456789n };
-  const text = formatReply(got);
-  expect(text).toBe('Got 20 AUSD (private) p=2 b=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAdbzRU');
-  expect(parseReply(`${text}\nFA+9qCX9VSu`)).toEqual(got);
-  expect(parseReply(text.replace('(private)', 'from +919800000001'))).toEqual(got);
+test('a private Received: p= and b= mark it, no balance; the older Got forms parse as one', () => {
+  const b = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAdbzRU';
+  const priv: Reply = { kind: 'received', amount: '20', from: 'ravi1.ender.my', tx: '0xab12...ef', p: 4, blinding: 123456789n };
+  const text = formatReply({ ...priv, test: true });
+  expect(text).toBe(`[Test] Received 20 AUSD from=ravi1.ender.my tx=0xab12...ef p=4 b=${b}`);
+  expect(parseReply(`${text}\nFA+9qCX9VSu`)).toEqual({ ...priv, test: true });
+  // A sender without an Ender ID: no from=.
+  const anon: Reply = { kind: 'received', amount: '20', tx: '0xab12...ef', p: 4, blinding: 123456789n };
+  expect(formatReply(anon)).toBe(`Received 20 AUSD tx=0xab12...ef p=4 b=${b}`);
+  expect(parseReply(formatReply(anon))).toEqual(anon);
+  // Older gateways: Got, with `(private)` or `from <who>` (dropped).
+  const legacy: Reply = { kind: 'received', amount: '20', p: 2, blinding: 123456789n };
+  expect(parseReply(`Got 20 AUSD (private) p=2 b=${b}`)).toEqual(legacy);
+  expect(parseReply(`[Test] Got 20 AUSD from +919800000001 p=2 b=${b}`)).toEqual({ ...legacy, test: true });
+  // Never both balance= and p=; a public one needs from= and balance=; a from= must be a name a text can carry.
+  expect(parseReply(`Received 20 AUSD from=ravi1.ender.my balance=5 tx=0xab12...ef p=4 b=${b}`)).toBeNull();
+  expect(parseReply('Received 20 AUSD balance=5 tx=0xab12...ef')).toBeNull();
+  expect(parseReply('Received 20 AUSD from=ravi1.ender.my tx=0xab12...ef')).toBeNull();
+  expect(parseReply(`Received 20 AUSD from=${'x'.repeat(41)} balance=5 tx=0xab12...ef`)).toBeNull();
+});
+
+test('a public Received names the sender by Ender ID, ENS name or address', () => {
+  for (const from of ['ravi1.ender.my', 'vitalik.eth', address]) {
+    const r: Reply = { kind: 'received', amount: '10', from, balance: '25.5', tx: '0xab12...ef', test: false };
+    expect(formatReply(r)).toBe(`Received 10 AUSD from=${from} balance=25.5 tx=0xab12...ef`);
+    expect(parseReply(formatReply(r))).toEqual(r);
+  }
 });
 
 test('Sent, Shielded and Received are key=value; Sent and Shielded carry the id; older forms still parse', () => {
@@ -113,16 +136,21 @@ test('Sent, Shielded and Received are key=value; Sent and Shielded carry the id;
 
 test('[Test] marks every testnet text; worst cases fit one segment with it and the hash line', () => {
   const max = '999999.999999';
+  const longestId = `${'x'.repeat(MAX_LABEL)}.ender.my`;
+  const longestEns = `${'x'.repeat(MAX_TEXT_NAME - 4)}.eth`;
   const worst: Reply[] = [
     { kind: 'ok', nonce: 18446744073709551615n, delegated: true, balance: max, inr: '88.72' },
     { kind: 'quote', id: '7F3K', nonce: 18446744073709551615n, expires: 1791200000, fee: '0.01', to: address, out: '999999.999999999999999999' },
     { kind: 'shieldedQuote', id: '7F3K', expires: 999999999999, fee: '0.01', to: new Uint8Array(64).fill(255) },
     { kind: 'sent', id: '7F3K', amount: max, to: '+123456789012345', tx: '0xab12...ef', p: 99999999 },
     { kind: 'shielded', id: '7F3K', amount: max, tx: '0xab12...ef', p: 99999999 },
-    { kind: 'got', amount: max, p: 99999999, blinding: (1n << 256n) - 1n },
+    { kind: 'received', amount: max, from: longestId, tx: '0xab12...ef', p: 99999999, blinding: (1n << 256n) - 1n },
     { kind: 'error', id: '7F3K', code: 'send-failed' },
     { kind: 'received', amount: max, from: address, balance: max, tx: '0xab12...ef', test: true },
+    { kind: 'received', amount: max, from: longestEns, balance: max, tx: '0xab12...ef', test: true },
+    { kind: 'sent', id: '7F3K', amount: max, to: longestId, tx: '0xab12...ef', p: 99999999 },
   ];
+  const lengths = [];
   for (const r of worst) {
     const text = withRetrieverHash(formatReply({ ...r, test: true }), 'FA+9qCX9VSu');
     expect(text.startsWith('[Test] ')).toBe(true);
@@ -130,7 +158,10 @@ test('[Test] marks every testnet text; worst cases fit one segment with it and t
     expect(parseReply(text)).toEqual({ ...r, test: true });
     // Untagged: mainnet.
     expect(parseReply(formatReply({ ...r, test: false }))?.test).toBeFalsy();
+    lengths.push(septets(text));
   }
+  // The private Received with the longest Ender ID is the longest text the gateway sends.
+  expect(lengths).toEqual([81, 150, 143, 95, 79, 155, 41, 133, 131, 108]);
 });
 
 test('non-GSM characters are refused, extended ones cost two', () => {
@@ -168,7 +199,7 @@ test('phone texts at their longest, with [Test]: all fit (no hash line on phone 
 });
 
 test('Ender IDs in SEND and PAY: any case or @label in, label.ender.my out; the longest still fit with [Test]', () => {
-  const longest = `${'x'.repeat(30)}.ender.my`;
+  const longest = `${'x'.repeat(MAX_LABEL)}.ender.my`;
   expect(parseCommand('SEND Harsh.Ender.My, 10 AUSD')).toEqual({ kind: 'send', to: 'harsh.ender.my', amount: '10', deliver: 'AUSD' });
   expect(parseCommand('[Test] send @harsh,10 ausd > ctk')).toEqual({ kind: 'send', to: 'harsh.ender.my', amount: '10', deliver: 'CTK', network: 'testnet' });
   expect(parseShieldedCommand('PAY harsh.ender.my, 2 AUSD')).toEqual({ kind: 'pay', to: 'harsh.ender.my', amount: '2' });
@@ -177,13 +208,13 @@ test('Ender IDs in SEND and PAY: any case or @label in, label.ender.my out; the 
 
   const send = formatCommand({ kind: 'send', to: longest, amount: '999999.999999', deliver: 'CTK' }, 'testnet');
   const pay = formatShieldedCommand({ kind: 'pay', to: longest, amount: '999999.999999' }, 'testnet');
-  expect([septets(send), septets(pay)]).toEqual([79, 72]);
+  expect([septets(send), septets(pay)]).toEqual([69, 62]);
   expect(parseCommand(send)).toEqual({ kind: 'send', to: longest, amount: '999999.999999', deliver: 'CTK', network: 'testnet' });
   expect(parseShieldedCommand(pay)).toEqual({ kind: 'pay', to: longest, amount: '999999.999999', network: 'testnet' });
 
   // The private Sent names the ID it was paid to (never the number behind it).
   const sent: Reply = { kind: 'sent', id: '7F3K', amount: '999999.999999', to: longest, tx: '0xab12...ef', p: 99999999 };
   const text = withRetrieverHash(formatReply({ ...sent, test: true }), 'FA+9qCX9VSu');
-  expect(septets(text)).toBe(118);
+  expect(septets(text)).toBe(108);
   expect(parseReply(text)).toEqual({ ...sent, test: true });
 });

@@ -17,12 +17,13 @@ export default function TxDetail() {
   if (!tx) return null;
   const incoming = tx.direction === 'in';
   const dead = tx.status === 'failed' || tx.status === 'expired';
-  // A row built from a text only knows the short hash (the full one doesn't fit the SMS): link to the wallet's page,
-  // which lists the transfer, until an online sync fills in the full hash.
-  const smsTx = !tx.txHash && tx.id.startsWith('sms:') ? tx.id.split(':')[2] : undefined;
+  // A row built from a text only knows the short hash (the full one doesn't fit the SMS): a public one links to the
+  // wallet's page, which lists the transfer, until an online sync fills in the full hash. A private transaction isn't
+  // on that page, so a private row links once a resync's notes give its hash.
+  const smsTx = tx.txHash ? undefined : (tx.shortTx ?? (tx.id.startsWith('sms:') ? tx.id.split(':')[2] : undefined));
   const explorer = tx.txHash
     ? `${NETWORKS[tx.network].explorer}/tx/${tx.txHash}`
-    : smsTx && me
+    : smsTx && me && !tx.private
       ? `${NETWORKS[tx.network].explorer}/address/${me}`
       : undefined;
 

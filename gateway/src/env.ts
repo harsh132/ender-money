@@ -16,6 +16,8 @@ export type Env = {
   RELAY: DurableObjectNamespace<Relay>;
   RPC_MAINNET?: string;
   RPC_TESTNET?: string;
+  /** Ethereum mainnet JSON-RPC for reverse ENS in Received alerts (names.ts reverseEns); defaults to https://eth.drpc.org. */
+  ETH_RPC_URL?: string;
   /**
    * Cloudflare rate-limit binding, keyed by IP for /auth/*, /tx/*, /wallet/* and /shielded/*; by
    * `<what>:<ip>` for name checks and lookups, /ccip and pay pages; by `lookup:<phone>` for /names/by-phone.

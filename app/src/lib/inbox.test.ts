@@ -27,6 +27,16 @@ test('a Received alert (with the Retriever hash line) becomes one incoming row',
   expect(receivedRow([row!], parseReply(TEXT.replace('[Test] ', '')) as Received, 0)?.network).toBe('mainnet');
 });
 
+test('a sender named by Ender ID or ENS name is the label; the online history brings the address', () => {
+  for (const name of ['ravi1.ender.my', 'vitalik.eth']) {
+    const r = parseReply(NEW.replace(/from=\S+/,`from=${name}`)) as Received;
+    expect(r.from).toBe(name);
+    const row = receivedRow([], r, 5)!;
+    expect(row).toEqual({ id: 'sms:testnet:0xab12...ef', network: 'testnet', direction: 'in', amount: '10', label: name, status: 'sent', at: 5 });
+    expect(smsTwin([row], 'testnet', { txHash: HASH, direction: 'in' })).toBe(row);
+  }
+});
+
 test('dedupe against the online history, both ways', () => {
   const r = parseReply(TEXT) as Received;
   const online: Tx = { id: `${HASH}:0`, network: 'testnet', direction: 'in', amount: '10', status: 'sent', txHash: HASH, at: 1 };

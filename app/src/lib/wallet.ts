@@ -2,7 +2,7 @@
 import { bytesToBigInt, createPublicClient, http, parseUnits, type Address, type Hex, type LocalAccount } from 'viem';
 import { signedBatchTypedData, swapWithFee, transferWithFee } from '../../../protocol/calibur';
 import { AUSD_DECIMALS, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../../protocol/networks';
-import { parseEnderId } from '../../../protocol/names';
+import { MAX_LABEL, MIN_LABEL, parseEnderId } from '../../../protocol/names';
 import { isPrivateAddress } from '../../../protocol/recipient';
 import { owner, packAddress, provingKeys, type User } from '../../../protocol/shielded';
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
@@ -15,11 +15,13 @@ import {
   chooseRoute,
   fileReply,
   hasPool,
+  isPrivateReceived,
   POOL_NETWORKS,
   resync,
   settleAwaiting,
   shouldAutoMerge,
   signPrivate,
+  txLinks,
   type Awaiting,
   type Cache,
   type PrivateDraft,
@@ -165,10 +167,15 @@ export const pullNotes = async (network = getState().network) => {
   } catch {
     return;
   }
-  const r = resync(cacheOf(getState(), network), notes.map((n) => ({ pos: n.pos, amount: String(n.amount), blinding: String(n.blinding), spent: n.spent })));
+  const r = resync(
+    cacheOf(getState(), network),
+    notes.map((n) => ({ pos: n.pos, amount: String(n.amount), blinding: String(n.blinding), spent: n.spent, ...(n.tx ? { tx: n.tx } : {}) })),
+  );
   saveCache(network, r.cache);
   for (const a of r.settled) upsertTx({ id: a.id, status: 'sent' });
   for (const a of r.expired) upsertTx({ id: a.id, status: 'expired' });
+  // Rows from texts know only the short hash; the notes give the full one (private transactions aren't on the wallet's page).
+  for (const link of txLinks(getState().activity, network, r.cache.notes)) upsertTx(link);
   void autoMerge(network);
 };
 
@@ -189,18 +196,33 @@ export const settlePrivate = (network: NetworkName, id: string, p?: number) => {
 };
 
 /**
- * Sent / Shielded / Got texts, wherever the user is and whatever network the app shows: the note cache of the
- * network the text names, and the Activity row with the text's id (a public Sent too).
+ * Sent / Shielded / private Received texts, wherever the user is and whatever network the app shows: the note
+ * cache of the network the text names, and the Activity row with the text's id (a public Sent too), with the
+ * text's short hash and output position until a resync gives the full hash (txLinks).
  */
 export const applyShieldedReply = (r: Reply) => {
-  if (r.kind !== 'sent' && r.kind !== 'shielded' && r.kind !== 'got') return;
+  const received = isPrivateReceived(r);
+  if (r.kind !== 'sent' && r.kind !== 'shielded' && !received) return;
   const filed = fileReply(getState(), r);
   if (filed) setState(filed.patch);
   if (filed?.settled) void autoMerge(filed.network);
-  const id = filed?.settled?.id ?? (r.kind === 'got' ? undefined : r.id);
-  if (id && getState().activity.some((t) => t.id === id)) upsertTx({ id, status: 'sent' });
-  if (r.kind === 'got' && filed)
-    upsertTx({ id: `got:${filed.network}:${r.p}`, network: filed.network, direction: 'in', amount: r.amount, label: 'Private payment', private: true, status: 'sent', at: Date.now() });
+  const short = r.tx ? { shortTx: r.tx } : {};
+  const id = filed?.settled?.id ?? (received ? undefined : r.id);
+  if (id && getState().activity.some((t) => t.id === id)) upsertTx({ id, status: 'sent', ...short, ...(r.p === undefined ? {} : { pos: r.p }) });
+  if (received && filed)
+    upsertTx({
+      id: `got:${filed.network}:${r.p}`,
+      network: filed.network,
+      direction: 'in',
+      amount: r.amount,
+      // The sender's Ender ID; a sender without one (or an older gateway's Got) stays "Private payment".
+      label: r.from ?? 'Private payment',
+      private: true,
+      status: 'sent',
+      at: Date.now(),
+      pos: r.p,
+      ...short,
+    });
 };
 
 /**
@@ -210,7 +232,8 @@ export const applyShieldedReply = (r: Reply) => {
 export const applyReceived = (r: Received) => {
   const filed = fileReceived(getState(), r, Date.now());
   if (!filed) return;
-  upsertTx({ ...filed.row, label: labelFor(r.from) });
+  // Named by address: a contact's name if we have one. By Ender ID or ENS name: that name.
+  upsertTx(filed.row.counterparty ? { ...filed.row, label: labelFor(filed.row.counterparty) } : filed.row);
   setState({ account: filed.account });
 };
 
@@ -419,7 +442,7 @@ const ERRORS: Record<string, string> = {
   'unknown-name': 'No one has that Ender ID.',
   'name-taken': 'That Ender ID was just taken. Pick another.',
   'name-required': 'Choose your Ender ID first.',
-  'bad-name': "That Ender ID isn't allowed. Use 5 to 30 letters, numbers or hyphens.",
+  'bad-name': `That Ender ID isn't allowed. Use ${MIN_LABEL} to ${MAX_LABEL} letters, numbers or hyphens.`,
   'name-already-set': 'You already have an Ender ID.',
   // Private payments (shielded pool).
   NOUSER: "This number can't take private payments yet.",

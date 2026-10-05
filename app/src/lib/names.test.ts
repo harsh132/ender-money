@@ -9,6 +9,8 @@ test('cleanLabel: lowercase, no spaces, without @ or .ender.my', () => {
 
 test('nameStatus: rules, typing hints, local errors, then the gateway answer for this exact label', () => {
   expect(nameStatus('')).toEqual({ text: RULES, tone: 'plain', ok: false });
+  expect(RULES).toBe("5 to 20 letters, numbers or hyphens. You can't change it later.");
+  expect(nameStatus('x'.repeat(21))).toMatchObject({ tone: 'negative', ok: false, text: 'At most 20 characters.' });
   expect(nameStatus('har')).toMatchObject({ tone: 'plain', ok: false, text: 'At least 5 characters.' });
   expect(nameStatus('harsh-')).toMatchObject({ tone: 'plain', ok: false }); // a letter may follow
   expect(nameStatus('ha--rsh')).toMatchObject({ tone: 'negative', ok: false });

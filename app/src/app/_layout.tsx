@@ -29,9 +29,13 @@ export default function Root() {
     if (ready) void SplashScreen.hideAsync();
   }, [ready]);
 
-  // Replies by text, however they arrive (read from the SMS, pasted, copied): OK updates the balance, Received adds an
-  // incoming row, Sent / Shielded / Got update private notes. Q / ERR go to the screen waiting for them.
-  useEffect(() => onReply((r) => (r.kind === 'ok' ? applyOkReply(r) : r.kind === 'received' ? applyReceived(r) : applyShieldedReply(r))), []);
+  // Replies by text, however they arrive (read from the SMS, pasted, copied): OK updates the balance, a public Received
+  // adds an incoming row, Sent / Shielded / a private Received (p= b=, or an older Got) update private notes. Q / ERR go
+  // to the screen waiting for them.
+  useEffect(
+    () => onReply((r) => (r.kind === 'ok' ? applyOkReply(r) : r.kind === 'received' && r.p === undefined ? applyReceived(r) : applyShieldedReply(r))),
+    [],
+  );
 
   // Android: the SMS Retriever, re-armed on every foreground, after each text and every 4 minutes while open (its window
   // is 5). Elsewhere a no-op; the clipboard and Paste reply still work everywhere.

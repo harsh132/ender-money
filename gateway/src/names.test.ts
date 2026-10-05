@@ -9,7 +9,7 @@ import { bytesToBigInt, encodeAbiParameters } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { MAX_LABEL, RESERVED_LABELS, validateLabel } from '../../protocol/names';
 import { CALIBUR, NETWORKS } from '../../protocol/networks';
-import { encodePrivateAddress } from '../../protocol/recipient';
+import { encodePrivateAddress, shortPrivateAddress } from '../../protocol/recipient';
 import { newUser, owner, packAddress, provingKeys } from '../../protocol/shielded';
 import { b64, parseReply } from '../../protocol/sms';
 import { d1, mockWorkers } from './test-env';
@@ -19,7 +19,7 @@ const worker = (await import('./index')).default;
 const { createWallet } = await import('./auth');
 const { claim } = await import('./names');
 const { register } = await import('./shielded');
-const { handleInbound } = await import('./sms');
+const { handleInbound, sentTo } = await import('./sms');
 const { signJwt } = await import('./jwt');
 type Env = import('./env').Env;
 
@@ -270,6 +270,31 @@ describe('SMS to a name', () => {
     const row = await env.DB.prepare('SELECT to_phone, to_address FROM shielded_quotes').first<{ to_phone: string; to_address: string }>();
     expect(row).toEqual({ to_phone: BOB, to_address: 'bobby.ender.my' });
     expect(await sms(ALICE, '[Test] PAY nobody.ender.my, 10 AUSD')).toBe('[Test] ERR NOUSER');
+  });
+
+  test('Sent names the number it was asked for by, else the Ender ID (also for an address), else the short address', async () => {
+    const CAROL_ADDRESS = '0x000000000000000000000000000000000000ca01';
+    await link(ALICE, '0x000000000000000000000000000000000000a11c', 'alice');
+    await link(BOB, BOB_ADDRESS, 'bobby');
+    await link(CAROL, CAROL_ADDRESS, null);
+    // A public quote keeps what it was asked for when that was a number or an ID.
+    await sms(ALICE, `SEND ${BOB}, 1 AUSD`);
+    await sms(ALICE, 'SEND @bobby, 2 AUSD');
+    await sms(ALICE, `SEND ${BOB_ADDRESS}, 3 AUSD`);
+    const asked = await env.DB.prepare('SELECT recipient FROM sessions ORDER BY amount').all<{ recipient: string | null }>();
+    expect(asked.results.map((r) => r.recipient)).toEqual([BOB, 'bobby.ender.my', null]);
+
+    expect(await sentTo(env, BOB, BOB_ADDRESS)).toBe(BOB);
+    expect(await sentTo(env, 'bobby.ender.my', BOB_ADDRESS)).toBe('bobby.ender.my');
+    expect(await sentTo(env, null, BOB_ADDRESS)).toBe('bobby.ender.my');
+    expect(await sentTo(env, null, CAROL_ADDRESS)).toBe('0x0000...01');
+    // Private: an ender1 address names its owner's ID (looked up by number, never shown), else stays short.
+    const ender1 = encodePrivateAddress(packAddress(owner(provingKeys(newUser()))));
+    expect(await sentTo(env, ender1, ender1, BOB)).toBe('bobby.ender.my');
+    expect(await sentTo(env, ender1, ender1, CAROL)).toBe(shortPrivateAddress(ender1));
+    // A withdrawal to a linked wallet, and a merge (our own number).
+    expect(await sentTo(env, BOB_ADDRESS, BOB_ADDRESS)).toBe('bobby.ender.my');
+    expect(await sentTo(env, ALICE, ALICE)).toBe(ALICE);
   });
 });
 

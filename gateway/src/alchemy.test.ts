@@ -1,10 +1,11 @@
 /**
- * Alchemy webhooks with fetch mocked: Alchemy's Notify API and a JSON-RPC
+ * Alchemy webhooks with fetch mocked: Alchemy's Notify API, a JSON-RPC
  * stand-in that answers eth_call (balanceOf, for alerts) and what
- * /wallet/create reads. No real network calls.
+ * /wallet/create reads, and an Ethereum one for reverse ENS (the Universal
+ * Resolver's answer per address). No real network calls.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { encodeAbiParameters, pad, toHex, type Address, type Hex } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, pad, parseAbi, toHex, zeroAddress, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { CALIBUR, NETWORKS } from '../../protocol/networks';
 import { d1, mockWorkers, relayStub, type Sent } from './test-env';
@@ -12,6 +13,7 @@ import { d1, mockWorkers, relayStub, type Sent } from './test-env';
 mockWorkers();
 const { alchemyWebhook, syncAlchemy, WEBHOOK_CAPACITY } = await import('./alchemy');
 const { ALERT_MAX_AGE } = await import('./activity');
+const { ENS_TTL_SECONDS } = await import('./names');
 const { createWallet } = await import('./auth');
 const { openKey } = await import('./shielded');
 type Env = import('./env').Env;
@@ -28,6 +30,11 @@ const AUSD = NETWORKS.testnet.ausd;
 type Notify = { method: string; path: string; body: Record<string, unknown> };
 let notifyCalls: Notify[];
 let notifyDown: boolean;
+/** Reverse ENS as the Universal Resolver answers it (already forward-verified), per lowercase address. */
+let ens: Map<string, string>;
+let ensCalls: number;
+let ensDown: boolean;
+const UR = parseAbi(['function reverseWithGateways(bytes reverseName, uint256 coinType, string[] gateways) returns (string, address, address)']);
 
 const rpc = (method: string): unknown => {
   switch (method) {
@@ -52,6 +59,14 @@ beforeAll(() => {
       if (path === 'create-webhook') return Response.json({ data: { id: `wh_${notifyCalls.length}`, signing_key: SIGNING_KEY } });
       return Response.json({});
     }
+    if (url.startsWith('http://eth.test/')) {
+      ensCalls++;
+      if (ensDown) return new Response('down', { status: 503 });
+      const req = JSON.parse(String(init!.body));
+      const { args } = decodeFunctionData({ abi: UR, data: req.params[0].data });
+      const name = ens.get(String(args[0]).toLowerCase()) ?? '';
+      return Response.json({ jsonrpc: '2.0', id: req.id, result: encodeAbiParameters([{ type: 'string' }, { type: 'address' }, { type: 'address' }], [name, zeroAddress, zeroAddress]) });
+    }
     if (url.startsWith('http://rpc.test/')) {
       const req = JSON.parse(String(init!.body));
       try {
@@ -75,6 +90,9 @@ let sent: Sent;
 beforeEach(() => {
   notifyCalls = [];
   notifyDown = false;
+  ens = new Map();
+  ensCalls = 0;
+  ensDown = false;
   sent = [];
   env = {
     DB: d1(),
@@ -85,6 +103,7 @@ beforeEach(() => {
     ALCHEMY_WEBHOOK_URL: 'https://gateway.test/webhooks/alchemy',
     RPC_MAINNET: 'http://rpc.test/mainnet',
     RPC_TESTNET: 'http://rpc.test/testnet',
+    ETH_RPC_URL: 'http://eth.test/',
     SMS_RETRIEVER_HASH: 'FA+9qCX9VSu',
   } as unknown as Env;
 });
@@ -264,11 +283,52 @@ describe('POST /webhooks/alchemy', () => {
     expect(sent.length).toBe(1);
   });
 
-  test('the alert names the sender by full address, never by number, even when they are on Ender', async () => {
+  test('the alert names the sender by Ender ID, else full address; never by number, even when they are on Ender', async () => {
     const bob = '0x7e9bce1e34dadc99a83da4edcdb56d288afa84c5' as Address;
     await env.DB.prepare('UPDATE links SET address = ? WHERE phone = ?').bind(bob, BOB.phone).run();
     expect((await deliver(delivery([token({ hash: tx(7), from: bob, to: ALICE.address })]))).status).toBe(200);
     expect(sent).toEqual([{ to: ALICE.phone, body: `[Test] Received 10 AUSD from=0x7e9BcE1E34dAdC99A83da4EDcDb56D288afA84C5 balance=45.2 tx=0x0000...07${'\n'}FA+9qCX9VSu` }]);
+    // With an Ender ID: the ID, ahead of any ENS name (not even asked for).
+    ens.set(bob, 'bob.eth');
+    await env.DB.prepare('UPDATE links SET label = ? WHERE phone = ?').bind('bobby', BOB.phone).run();
+    ensCalls = 0;
+    await deliver(delivery([token({ hash: tx(8), from: bob, to: ALICE.address })]));
+    expect(sent[1]!.body).toBe(`[Test] Received 10 AUSD from=bobby.ender.my balance=45.2 tx=0x0000...08${'\n'}FA+9qCX9VSu`);
+    expect(ensCalls).toBe(0);
+    for (const s of sent) expect(s.body).not.toContain('98000');
+  });
+
+  test('a sender with a verified ENS name shows by it, cached a week; unusable names and RPC failures show the address', async () => {
+    ens.set(STRANGER, 'stranger.eth');
+    await deliver(delivery([token({ hash: tx(1), from: STRANGER, to: ALICE.address })]));
+    expect(sent[0]!.body).toBe(`[Test] Received 10 AUSD from=stranger.eth balance=45.2 tx=0x0000...01${'\n'}FA+9qCX9VSu`);
+    expect(await rows('SELECT address, name FROM ens_names')).toEqual([{ address: STRANGER, name: 'stranger.eth' }]);
+    // Cached: no second lookup, even with the RPC down.
+    ensDown = true;
+    await deliver(delivery([token({ hash: tx(2), from: STRANGER, to: ALICE.address })]));
+    expect(sent[1]!.body).toContain('from=stranger.eth ');
+    expect(ensCalls).toBe(1);
+    // A week on it is rechecked; a failed recheck keeps the cached name.
+    await env.DB.prepare('UPDATE ens_names SET checked_at = checked_at - ?').bind(ENS_TTL_SECONDS).run();
+    await deliver(delivery([token({ hash: tx(3), from: STRANGER, to: ALICE.address })]));
+    expect(sent[2]!.body).toContain('from=stranger.eth ');
+    expect(ensCalls).toBe(2);
+
+    // RPC down and nothing cached: the address, and the alert still goes.
+    const other = '0x5555555555555555555555555555555555555555' as Address;
+    await deliver(delivery([token({ hash: tx(4), from: other, to: ALICE.address })]));
+    expect(sent[3]!.body).toContain(`from=${other} `);
+    ensDown = false;
+    // Over 40 characters, non-ASCII, or a two-septet character: the address (cached as no name).
+    const names = [`${'x'.repeat(37)}.eth`, 'café.eth', 'a^b.eth'];
+    for (const [i, name] of names.entries()) {
+      const from = toHex(0x6000 + i, { size: 20 }) as Address; // digits only: the same in EIP-55
+      ens.set(from, name);
+      await deliver(delivery([token({ hash: tx(10 + i), from, to: ALICE.address })]));
+      expect(sent.at(-1)!.body).toContain(`from=${from} `);
+    }
+    expect(await rows('SELECT name FROM ens_names WHERE address LIKE ?', '%600_')).toEqual([{ name: null }, { name: null }, { name: null }]);
+    expect(sent).toHaveLength(4 + names.length);
   });
 
   test('a stale delivery is recorded without a text', async () => {

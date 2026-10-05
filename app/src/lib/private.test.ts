@@ -5,6 +5,7 @@ import { buildTx, newUser, owner, packAddress, provingKeys, shieldedKeysFromSeed
 import { encodePrivateAddress } from '../../../protocol/recipient';
 import { selectMerge } from '../../../protocol/select';
 import { b64, formatReply, parseReply, type Reply } from '../../../protocol/sms';
+import type { Tx } from './store';
 import {
   applyReply,
   canMerge,
@@ -17,6 +18,7 @@ import {
   shouldAutoMerge,
   signPrivate,
   textNetwork,
+  txLinks,
   type Awaiting,
   type Cache,
   type CachedNote,
@@ -67,17 +69,37 @@ test('note cache: Sent for an amount nothing waits on (a public send) changes no
   expect(cache).toBe(base);
 });
 
-test('note cache: Shielded p= adds the deposit; Got adds a received note once', () => {
+test('note cache: Shielded p= adds the deposit; a private Received (or an older Got) adds the note once', () => {
   const sh: Awaiting = { id: 'EF67', kind: 'shield', amount: '50', ins: [], outs: [{ i: 0, amount: u('50'), blinding: '99' }], exp: 2e9 };
   const a = applyReply({ notes: [], awaiting: [sh, awaitingPay], pins: {} }, reply('Shielded 50 AUSD. Tx 0x36e2...df p=4'));
   expect(a.settled?.id).toBe('EF67');
   expect(a.cache.notes).toEqual([{ pos: 4, amount: u('50'), blinding: '99', spent: false }]);
   expect(a.cache.awaiting.map((x) => x.id)).toEqual(['AB23']);
 
-  const got = formatReply({ kind: 'got', amount: '20', p: 9, blinding: 123456789n });
+  const got = formatReply({ kind: 'received', amount: '20', from: 'ravi1.ender.my', tx: '0xab12...ef', p: 9, blinding: 123456789n });
   const b = applyReply(a.cache, reply(got));
   expect(b.cache.notes.at(-1)).toEqual({ pos: 9, amount: u('20'), blinding: '123456789', spent: false });
   expect(applyReply(b.cache, reply(got)).cache.notes.length).toBe(2);
+  const legacy = `Got 20 AUSD (private) p=9 b=${got.split(' b=')[1]}`;
+  expect(applyReply(a.cache, reply(legacy)).cache).toEqual(b.cache);
+  // A public Received is no note.
+  expect(applyReply(a.cache, reply('Received 10 AUSD from=ravi1.ender.my balance=5 tx=0xab12...ef')).cache).toBe(a.cache);
+});
+
+test('rows from texts get the full hash from a resync: the note at their position or the next', () => {
+  const rows: Tx[] = [
+    { id: 'got:testnet:9', network: 'testnet', direction: 'in', amount: '20', private: true, status: 'sent', at: 1, pos: 9, shortTx: '0xab12...ef' },
+    { id: 'MRG1', network: 'testnet', direction: 'out', amount: '0', private: true, status: 'sent', at: 1, pos: 4 },
+    { id: 'DONE', network: 'testnet', direction: 'out', amount: '1', private: true, status: 'sent', at: 1, pos: 9, txHash: '0x01' },
+    { id: 'PUB1', network: 'testnet', direction: 'out', amount: '1', status: 'sent', at: 1, pos: 9 },
+    { id: 'MAIN', network: 'mainnet', direction: 'in', amount: '1', private: true, status: 'sent', at: 1, pos: 9 },
+  ];
+  const notes: CachedNote[] = [{ ...note(5, '1'), tx: '0xbb' }, { ...note(9, '20'), tx: '0xaa' }, note(12, '1')];
+  expect(txLinks(rows, 'testnet', notes)).toEqual([
+    { id: 'got:testnet:9', txHash: '0xaa' },
+    { id: 'MRG1', txHash: '0xbb' }, // a merge's own note is its change, at p + 1
+  ]);
+  expect(txLinks(rows, 'testnet', [note(9, '20')])).toEqual([]); // an older gateway: no tx
 });
 
 test('note cache: Sent / Shielded settle the payment with their id, never another of the same amount', () => {
@@ -94,7 +116,7 @@ test('note cache: Sent / Shielded settle the payment with their id, never anothe
 
 test('texts are filed under the network they name, not the one the app shows', () => {
   const state = { network: 'mainnet' as const, notes: {}, awaiting: {}, shieldedPins: {}, shielded: { owner: 'x', registered: ['testnet' as const] } };
-  const got = formatReply({ kind: 'got', amount: '20', p: 9, blinding: 5n, test: true });
+  const got = formatReply({ kind: 'received', amount: '20', tx: '0xab12...ef', p: 9, blinding: 5n, test: true });
   const filed = fileReply(state, reply(got));
   expect(filed?.network).toBe('testnet');
   expect(filed?.patch.notes).toEqual({ testnet: [{ pos: 9, amount: u('20'), blinding: '5', spent: false }] });
@@ -112,6 +134,8 @@ test('texts are filed under the network they name, not the one the app shows', (
   expect(textNetwork(reply('Q 7F3K exp=1791200000 fee=0.01'))).toBe('testnet');
   expect(textNetwork(reply('ERR 7F3K expired'))).toBe('mainnet');
   expect(textNetwork(reply('[Test] ERR 7F3K expired'))).toBe('testnet');
+  expect(textNetwork(reply(got.replace('[Test] ', '')))).toBe('testnet'); // a private Received
+  expect(textNetwork(reply('Received 10 AUSD from=ravi1.ender.my balance=5 tx=0xab12...ef'))).toBe('mainnet'); // a public one
 });
 
 test('Merge pill: more than 12 usable notes, on a network with a pool', () => {

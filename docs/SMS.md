@@ -1,10 +1,12 @@
 # SMS reference
 
-Every text Ender sends or receives, as the code does it after `f4e72e4` plus
-the phone-side `[Test] ` prefix and auto-merge. The
+Every text Ender sends or receives, as the code does it after `91a136f` plus
+Ender IDs of 5-20 characters, one `Received` for public and private incoming
+payments, and Ender IDs / reverse ENS in place of addresses where they fit
+("Who appears in texts"). The
 grammar lives in `protocol/sms.ts` (with `protocol/recipient.ts` for
 recipients and `protocol/shielded.ts` for private payments); the gateway side
-is `gateway/src/sms.ts`, `auth.ts`, `activity.ts` and `shielded.ts`; the app
+is `gateway/src/sms.ts`, `auth.ts`, `activity.ts`, `names.ts` and `shielded.ts`; the app
 side is `app/src/lib/transport.ts`, `wallet.ts`, `private.ts`, `inbox.ts` and
 `app/modules/sms-retriever`. Gateway design: [gateway.md](gateway.md).
 Private-payment design and threat model: [splitkey-spike.md](splitkey-spike.md).
@@ -27,7 +29,7 @@ The app picks the number in `gatewayNumber()`: India when the Settings
 choice is `india`, or `auto` and the wallet's number starts with `+91` (or
 there is no wallet yet); otherwise international.
 
-Outbound texts the gateway starts itself (OTP, `Received`, `Got`) go through
+Outbound texts the gateway starts itself (OTP, `Received`) go through
 `sendSms`, which only texts `+91` numbers. If the relay phone is offline they
 wait in the `Relay` DO for 10 minutes (`OUTBOX_TTL_MS`), then drop with a log
 line. Replies to an inbound text go straight back on the relay socket to the
@@ -46,7 +48,7 @@ answers `ERR internal` for an inbound command, or logs and skips an alert).
 
 ### The Retriever hash line
 
-Every text the gateway sends (OTP, every reply, `Received`, `Got`) ends with
+Every text the gateway sends (OTP, every reply, `Received`) ends with
 `\n` plus the app's SMS Retriever hash, `withRetrieverHash(text,
 env.SMS_RETRIEVER_HASH)`. The value is `IaTP8lLJOvM` (`gateway/wrangler.jsonc`),
 11 characters, so the line adds 12 septets. Android's SMS Retriever hands a
@@ -62,8 +64,8 @@ Every text about testnet starts with `[Test] `, in both directions. It costs
 9 septets (7 characters, `[` and `]` two each); every worst case below
 includes it.
 
-- **Gateway → phone**: `OK`, both `Q`s, `Sent`, `Shielded`, `ERR`, `Got` and
-  `Received`. No prefix means mainnet. `formatReply` adds it for `test: true`;
+- **Gateway → phone**: `OK`, both `Q`s, `Sent`, `Shielded`, `ERR` and
+  both `Received`s. No prefix means mainnet. `formatReply` adds it for `test: true`;
   `parseReply` strips it and sets `test: true`.
 - **Phone → gateway**: every command the app sends for testnet: `SYNC`,
   `SEND`, `PAY`, `SHIELD`, `MERGE` and both `SIG` shapes.
@@ -94,11 +96,12 @@ session that doesn't exist (`not-registered` after a plain `SEND`,
 
 **The app's mode is display only.** Every text is applied to the network it
 names, whatever mode the app shows: `OK` sets that network's balance and
-nonce, `Received` adds a row to that network's Activity and sets its balance,
-`Sent` / `Shielded` / `Got` update that network's note cache and waiting
-payments. Private texts exist only on testnet today, so they go to the
-testnet note cache even while the app shows mainnet; an untagged private-only
-text (private `Q`, `Shielded`, `Got`, from an older gateway) is read as the
+nonce, a public `Received` adds a row to that network's Activity and sets its
+balance, `Sent` / `Shielded` / a private `Received` update that network's note
+cache and waiting payments. Private texts exist only on testnet today, so they
+go to the testnet note cache even while the app shows mainnet; an untagged
+private-only text (private `Q`, `Shielded`, private `Received` or `Got`, from
+an older gateway) is read as the
 network with a pool (`textNetwork`, `notesNetwork` in `private.ts`). The
 Review screen waiting for a reply compares its network with its payment's:
 a `Q`, `ERR`, or its own `Sent` / `Shielded` for the other network fails the
@@ -143,10 +146,10 @@ any id a public session holds. The id is in `Q`, `SIG`, `ERR <id> …`,
 | Encoding | Used for |
 | --- | --- |
 | Standard base64, padded (`signatureToBase64`) | The 65-byte secp256k1 signature in a public or deposit `SIG`: always 88 characters ending in `=` |
-| Standard base64, unpadded (`b64` / `unb64`) | 64-byte EdDSA signature in a private `SIG` (86 chars); the 64-byte packed shielded address in `Q … to=` (86 chars); the 32-byte blinding in `Got … b=` (43 chars, big-endian) |
+| Standard base64, unpadded (`b64` / `unb64`) | 64-byte EdDSA signature in a private `SIG` (86 chars); the 64-byte packed shielded address in `Q … to=` (86 chars); the 32-byte blinding in a private `Received … b=` (43 chars, big-endian) |
 | Refs (`encodeRefs`) | 3 base64-alphabet characters per input note: tree position mod 2^18 (`REF_MOD`), 6 bits per character, most significant first. Position 2 is `AAC`; 262146 is also `AAC` |
 | bech32m (`protocol/recipient.ts`) | Private address: HRP `ender`, the 64-byte packed address (`owner_key ‖ enc_pk`), 115 lower-case characters. Shortened in replies to `ender1abcd...wxyz` (`shortPrivateAddress`) |
-| Short hex (`shortHex`) | `0x` + 4 hex + `...` + 2 hex: tx hashes (`tx=`) and addresses (`to=`) in `Sent`, `Shielded`, `Received` |
+| Short hex (`shortHex`) | `0x` + 4 hex + `...` + 2 hex: tx hashes (`tx=`) in `Sent`, `Shielded`, `Received`; addresses (`to=`) in `Sent` when the recipient has no Ender ID |
 
 Base64url is not used anywhere in SMS.
 
@@ -159,6 +162,33 @@ get `+91`; `91` + 10 digits gets `+`. Anything else (alphanumeric senders like
 `VM-AIRTEL`, short codes) is `null`, and the text is dropped without a reply.
 Inside commands, numbers must already be E.164: `SEND 9876543210, 1 AUSD` does
 not parse.
+
+### Ender IDs
+
+`<label>.ender.my` (`protocol/names.ts`): a label of 5-20 characters
+(`MIN_LABEL`, `MAX_LABEL`), `a-z`, `0-9` and interior single hyphens, not
+reserved. The longest ID is 29 characters; 20 is what lets a private
+`Received` naming it fit one segment with `[Test] ` and the hash line (155
+septets, below). Commands also take `@label`, any case.
+
+### Who appears in texts
+
+A text never tells one user another's number, except to the user who typed it.
+
+| Text | Field | What it shows |
+| --- | --- | --- |
+| `Received`, public | `from=` | The sender's Ender ID if the sending address is linked to a named account; else its verified primary ENS name (reverse ENS on Ethereum, `reverseEns` in `gateway/src/names.ts`) if that is plain ASCII GSM-7 of at most 40 characters (`isTextName`); else the full EIP-55 address. Never a number |
+| `Received`, private | `from=` | The sender's Ender ID; no `from=` when the sender has none. Never a number |
+| `Sent` (public and private) | `to=` | The number, if the payment was asked for by number (`SEND +91…`, `PAY +91…`; a `MERGE` names the sender's own); else the recipient's Ender ID if they have one, also when paid by 0x or `ender1…` address; else the address, short (`0x9965...dc`, `ender1rreg...6dx9`) |
+| `Q` | `to=` | Unchanged: the real address or packed key, which the phone checks before signing |
+
+Reverse ENS: viem's `getEnsName` against the Universal Resolver on Ethereum
+mainnet over `ETH_RPC_URL` (default `https://eth.drpc.org`); the resolver
+only answers a name whose forward record points back at the address. Each
+answer, a name or none, is cached per address in D1 `ens_names` and
+rechecked after 7 days. A lookup gives up after 4 s; an RPC error or
+timeout falls back to the cached name, else the address. It never fails or
+holds back an alert.
 
 ### How the app sends and picks up texts
 
@@ -173,8 +203,8 @@ user taps send. It also opens a
 10-minute window in which the clipboard is read (`REPLY_WINDOW_MS`).
 
 Receiving, every path ends in `acceptReply(raw)`, whose listeners are the root
-layout (`OK` → `applyOkReply`, `Received` → `applyReceived`, everything else →
-`applyShieldedReply`, each on the network the text names) and the Review
+layout (`OK` → `applyOkReply`, a public `Received` → `applyReceived`, everything
+else, a private `Received` too, → `applyShieldedReply`, each on the network the text names) and the Review
 screen while it waits (`Q`, `ERR`, `Sent`, `Shielded`, matched by id):
 
 1. **SMS Retriever** (Android, no permission). Play services hands over the
@@ -282,7 +312,7 @@ step (`start`). Also "Text again" while waiting for the quote.
 
 | Field | Format |
 | --- | --- |
-| `to` | 0x address (42 chars), E.164 number, or Ender ID `label.ender.my` (any case; `@label` also parses; the app always sends the full lowercase form). Not an `ender1…` address (that is `PAY`) |
+| `to` | 0x address (42 chars), E.164 number, or Ender ID `label.ender.my` (5-20 character label; any case; `@label` also parses; the app always sends the full lowercase form). Not an `ender1…` address (that is `PAY`) |
 | `amount` | AUSD amount, as above |
 | `> CTK` | Recipient gets CTK through Agora's testnet pair instead of AUSD |
 
@@ -295,12 +325,14 @@ SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 10.5 AUSD                  58
 [Test] SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 10.5 AUSD           67
 [Test] SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 999999.999999 AUSD > CTK   82 (worst with a 13-char amount; CTK is testnet only)
 SEND harsh.ender.my, 20 AUSD                                                28
-[Test] SEND xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ender.my, 999999.999999 AUSD > CTK   79 (longest name: 30-char label)
+[Test] SEND xxxxxxxxxxxxxxxxxxxx.ender.my, 999999.999999 AUSD > CTK   69 (longest name: 20-char label)
 ```
 
 To an Ender ID the gateway resolves the name to its public address
 (`unknown-name` if nobody has it); the `Q` that follows carries that address in
-`to=`, which the app pins under the name as it does for a number.
+`to=`, which the app pins under the name as it does for a number. The session
+keeps what it was asked for (`sessions.recipient`: the number or the ID; null
+for a 0x address), so its `Sent` can name it.
 
 Gateway (`quote` in `core.ts`): testnet for `[Test] SEND`, mainnet without the
 prefix; it also becomes the number's current network. In order:
@@ -387,19 +419,26 @@ session answers the same `Sent`.
 ### `Sent`, public (gateway → phone)
 
 ```
-[Test] Sent <id> <amount> AUSD to=<short to> tx=<short tx>
+[Test] Sent <id> <amount> AUSD to=<number | Ender ID | short address> tx=<short tx>
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `id` | The session id the `SIG` named |
 | `amount` | The session's amount |
-| `to` | `shortHex` of the recipient address (also when paid to a number) |
+| `to` | The number, if the `SEND` (or `/tx/quote`) named one; else the recipient's Ender ID if they have one (asked for by ID, or the 0x address is linked to a named account); else `shortHex` of the address ("Who appears in texts") |
 | `tx` | `shortHex` of the transaction hash |
 
-Examples: `Sent 7F3K 10.5 AUSD to=0x9965...dc tx=0xc6b9...fb` (49, 61 +hash);
-`[Test] Sent 7F3K 10.5 AUSD to=0x9965...dc tx=0xc6b9...fb` (58, 70); worst
-`[Test] Sent 7F3K 999999.999999 AUSD to=0x9965...dc tx=0xc6b9...fb` (67, 79).
+Examples:
+
+```
+Sent 7F3K 10.5 AUSD to=+919876543210 tx=0xc6b9...fb                                51, 63 +hash
+Sent 7F3K 10.5 AUSD to=harsh.ender.my tx=0xc6b9...fb                               52, 64
+Sent 7F3K 10.5 AUSD to=0x9965...dc tx=0xc6b9...fb                                  49, 61
+[Test] Sent 7F3K 10.5 AUSD to=0x9965...dc tx=0xc6b9...fb                           58, 70
+[Test] Sent 7F3K 999999.999999 AUSD to=xxxxxxxxxxxxxxxxxxxx.ender.my tx=0xc6b9...fb   85, 97 (worst: longest ID)
+```
+
 An older gateway's `Sent 10.5 AUSD to 0x9965...dc. Tx 0xc6b9...fb` (no id)
 still parses; the app then falls back to matching by amount.
 
@@ -442,7 +481,7 @@ Examples:
 [Test] PAY 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 5 AUSD         63
 [Test] PAY ender1rreg3epk4xpk3zmh7sujagu783a06av4andq2dq8x37ye6z6gfe7r3xyxafcr5ggzcaag53fumarcwpcvmy62nc4lc823ktn46kkq2g7q6dx9, 20 AUSD   137
 [Test] PAY harsh.ender.my, 20 AUSD                                    36
-[Test] PAY xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ender.my, 999999.999999 AUSD   72 (longest name)
+[Test] PAY xxxxxxxxxxxxxxxxxxxx.ender.my, 999999.999999 AUSD   62 (longest name)
 ```
 
 Worst case, and the longest phone text: `ender1…` with `999999.999999`, 148
@@ -636,7 +675,7 @@ proves with the gateway's own dummy inputs and sends
 | --- | --- |
 | `id` | The quote id the `SIG` named |
 | `amount` | The quote's amount (`0` for `MERGE`) |
-| `to` | `PAY` to a number: that number. `PAY` to `ender1…`: `ender1abcd...wxyz`, never its owner's number. `PAY` to an Ender ID: the ID (`harsh.ender.my`), never its owner's number. Withdrawal: `shortHex` of the 0x address. `MERGE`: the sender's own number |
+| `to` | `PAY` to a number: that number. `PAY` to an Ender ID: the ID (`harsh.ender.my`). `PAY` to `ender1…`: its owner's Ender ID, else `ender1abcd...wxyz`. Withdrawal: the Ender ID of the account the 0x address is linked to, else `shortHex` of the address. `MERGE`: the sender's own number. Never the recipient's number unless the payer typed it |
 | `tx` | `shortHex` of the transaction |
 | `p` | Tree position of output 0; our change, if any, is at `p+1`. Up to 8 digits. Absent for a withdrawal with no change (two null outputs, no leaves) |
 
@@ -644,13 +683,12 @@ Examples:
 
 ```
 [Test] Sent 7F3K 20 AUSD to=+919876543210 tx=0xc6b9...fb p=2          62, 74 +hash
-[Test] Sent 7F3K 20 AUSD to=ender1rreg...6dx9 tx=0xc6b9...fb p=2      66, 78
-[Test] Sent 7F3K 5 AUSD to=0x9965...dc tx=0xc6b9...fb p=14            60, 72
-[Test] Sent 7F3K 5 AUSD to=0x9965...dc tx=0xc6b9...fb                 55, 67
+[Test] Sent 7F3K 20 AUSD to=harsh.ender.my tx=0xc6b9...fb p=2         63, 75 (an ID, or an ender1 / 0x address whose owner has one)
+[Test] Sent 7F3K 20 AUSD to=ender1rreg...6dx9 tx=0xc6b9...fb p=2      66, 78 (an ender1 address whose owner has no ID)
+[Test] Sent 7F3K 5 AUSD to=0x9965...dc tx=0xc6b9...fb                 55, 67 (withdrawal without change)
 [Test] Sent 7F3K 0 AUSD to=+919876543210 tx=0xc6b9...fb p=40          62, 74 (MERGE)
-[Test] Sent 7F3K 20 AUSD to=harsh.ender.my tx=0xc6b9...fb p=2         63, 75
 [Test] Sent 7F3K 999999.999999 AUSD to=+123456789012345 tx=0xc6b9...fb p=99999999   83, 95
-[Test] Sent 7F3K 999999.999999 AUSD to=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ender.my tx=0xc6b9...fb p=99999999   106, 118 (worst: longest name)
+[Test] Sent 7F3K 999999.999999 AUSD to=xxxxxxxxxxxxxxxxxxxx.ender.my tx=0xc6b9...fb p=99999999   96, 108 (worst: longest ID)
 ```
 
 Only sent once the receipt is in (else `ERR <id> pending`); a repeated `SIG`
@@ -676,71 +714,85 @@ App: the waiting shield with that id settles and its note is added at `p`.
 The older `Shielded 50 AUSD. Tx 0xc6b9...fb p=0` still parses (matched by
 amount).
 
-### `Got` (gateway → recipient)
-
-Texted to the recipient of a private payment (`gotAlert`), after the
-transaction lands, when the recipient is a different number, has alerts on
-(`links.alerts`), and is a `+91` number. Once per transaction per number
-(`alerts_sent`, shared with `Received`).
-
-```
-[Test] Got <amount> AUSD (private) p=<pos> b=<blinding>
-```
-
-| Field | Meaning |
-| --- | --- |
-| `amount` | The payment's amount |
-| `p` | Tree position of the recipient's note |
-| `b` | The note's blinding, 32 bytes big-endian, unpadded base64, 43 chars |
-
-No sender: a text never tells one user another's number. The older
-`Got <amt> AUSD from <who> p=… b=…` still parses; the sender is dropped.
-
-```
-[Test] Got 20 AUSD (private) p=2 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0/k0                 80, 92 +hash
-[Test] Got 999999.999999 AUSD (private) p=99999999 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0/k0   98, 110
-```
-
-App: adds the note `{pos: p, amount, blinding}` to the testnet cache (also
-while the app shows mainnet) and an incoming "Private payment" row
-`got:testnet:<p>`. The next online `/shielded/notes` replaces the cache anyway.
+The recipient of a private payment gets a private `Received` (Alerts, below).
+`Got` is its older name, still parsed.
 
 ## Alerts
 
 ### `Received` (gateway → recipient)
 
-Texted when an AUSD transfer to a linked address arrives (Alchemy Address
-Activity webhook → `record` → `alertAll`), on either network, if the
-recipient has alerts on and a `+91` number. Not for transfers more than 10
-minutes old by the delivery's `createdAt` (`ALERT_MAX_AGE`), and once per
-transaction per number (`alerts_sent`). Any AUSD sender counts, including a
-private withdrawal from the pool to an Ender wallet (then `from` is the pool).
+One keyword for both kinds of incoming payment. `p=` and `b=` make it
+private; a private one never carries `balance=` (a carrier reads every text).
 
 ```
-[Test] Received <amount> AUSD from=<0x EIP-55> balance=<balance> tx=<short tx>
+[Test] Received <amount> AUSD from=<who> balance=<balance> tx=<short tx>            public
+[Test] Received <amount> AUSD[ from=<Ender ID>] tx=<short tx> p=<pos> b=<blinding>  private
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `[Test] ` | Testnet only |
-| `amount` | Transfer value |
-| `from` | Sender's full address, EIP-55. Never a number, even for an Ender sender |
-| `balance` | Recipient's AUSD balance read when the alert is built |
-| `tx` | `shortHex` of the hash: how the app matches the alert with `/activity` |
+| `[Test] ` | Testnet only (every private one, today) |
+| `amount` | Transfer value; for a private one, the payment's amount |
+| `from` | "Who appears in texts". Public: the sender's Ender ID, else verified reverse-ENS name, else EIP-55 address. Private: the sender's Ender ID, else no `from=`. Never a number |
+| `balance` | Public only: the recipient's AUSD balance read when the alert is built |
+| `tx` | `shortHex` of the hash (public: the transfer; private: the pool transaction). How the app matches a public alert with `/activity` |
+| `p` | Private only: tree position of the recipient's note, up to 8 digits |
+| `b` | Private only: the note's blinding, 32 bytes big-endian, unpadded base64, 43 chars |
+
+**Public**: texted when an AUSD transfer to a linked address arrives (Alchemy
+Address Activity webhook → `record` → `alertAll`), on either network, if the
+recipient has alerts on and a `+91` number. Not for transfers more than 10
+minutes old by the delivery's `createdAt` (`ALERT_MAX_AGE`), and once per
+transaction per number (`alerts_sent`). Any AUSD sender counts, including a
+private withdrawal from the pool to an Ender wallet (then `from` is the pool's
+address, or its ENS name if it had one). The balance read and the sender's
+name (`senderName`) run together.
+
+**Private**: texted to the recipient of a private payment the gateway relayed
+(`receivedAlert` in `shielded.ts`), after the transaction lands, when the
+recipient is a different number, has alerts on (`links.alerts`), and is a
+`+91` number. Once per transaction per number (`alerts_sent`, shared with the
+public one).
 
 ```
 [Test] Received 10 AUSD from=0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc balance=25.5 tx=0xc6b9...fb   101, 113 +hash
 Received 10 AUSD from=0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc balance=25.5 tx=0xc6b9...fb          92, 104
-[Test] Received 999999.999999 AUSD from=0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc balance=999999.999999 tx=0xc6b9...fb   121, 133 (worst)
+[Test] Received 10 AUSD from=harsh.ender.my balance=25.5 tx=0xc6b9...fb                               73, 85
+[Test] Received 10 AUSD from=vitalik.eth balance=25.5 tx=0xc6b9...fb                                  70, 82
+[Test] Received 999999.999999 AUSD from=0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc balance=999999.999999 tx=0xc6b9...fb   121, 133 (worst public)
+[Test] Received 999999.999999 AUSD from=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.eth balance=999999.999999 tx=0xc6b9...fb   119, 131 (40-char ENS name)
+[Test] Received 20 AUSD from=ravi1.ender.my tx=0xc6b9...fb p=2 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0fk0      110, 122 (private)
+[Test] Received 20 AUSD tx=0xc6b9...fb p=2 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0fk0                         90, 102 (private, sender without an ID)
+[Test] Received 999999.999999 AUSD from=xxxxxxxxxxxxxxxxxxxx.ender.my tx=0xc6b9...fb p=99999999 b=JChSinJMDXfb6EPnc6mmjkvKxsypLXMVyyyZT3Z0fk0   143, 155 (worst private; the longest text the gateway sends)
 ```
 
-Parsed by a strict regex; the older `… from 0x…. Balance 25.5 AUSD. Tx
-0xc6b9...fb` still parses. App (`applyReceived` → `fileReceived`): network
-from `[Test]`, whatever mode the app shows; adds an incoming Activity row
+Parsed by one strict regex: `from=` must be a 0x address (returned EIP-55) or
+a name `isTextName` accepts; a public one needs `from=`, `balance=` and `tx=`;
+a private one needs `p=` and `b=` and refuses `balance=`. Older forms still
+parse: the public `… from 0x…. Balance 25.5 AUSD. Tx 0xc6b9...fb`, and `Got`
+as a private `Received` without `from` or `tx`: `Got <amt> AUSD (private)
+p=… b=…`, and the older still `Got <amt> AUSD from <who> p=… b=…` (the sender
+dropped).
+
+App, public (`applyReceived` → `fileReceived`): network from `[Test]`,
+whatever mode the app shows; adds an incoming Activity row
 `sms:<network>:<short tx>` unless that transfer is already there (same row
 id, or an incoming row whose full hash shortens to it), and then sets that
-network's balance to `balance`. When `/activity` later returns the transfer,
-the full row replaces the text's row.
+network's balance to `balance`. A sender named by address is the row's
+counterparty (shown by contact name if it has one); one named by Ender ID or
+ENS name is the row's label. When `/activity` later returns the transfer, the
+full row replaces the text's row.
+
+App, private (`applyShieldedReply` → `fileReply`): adds the note
+`{pos: p, amount, blinding}` to the cache of the network the text names
+(untagged: the network with a pool; also while the app shows mainnet) and an
+incoming private row `got:<network>:<p>` labelled with the sender's ID (else
+"Private payment"), with the short hash and `p`. The next online
+`/shielded/notes` replaces the cache anyway; its notes carry their full `tx`,
+which fills in the row's hash (`txLinks`; also for private rows settled by a
+`Sent` or `Shielded` text), so "View on explorer" opens the transaction
+itself. Until then a private row has no explorer link: private transactions
+don't show on the wallet's address page.
 
 ## Texts the app composes but the gateway never sees
 
@@ -754,7 +806,7 @@ I want to send you money on Ender. Get the app and sign up with this number: htt
 ## Flows
 
 Online, the app uses HTTPS for every step marked (HTTP) and no SMS is sent;
-the gateway's texts that it starts itself (OTP, `Received`, `Got`) go out
+the gateway's texts that it starts itself (OTP, `Received`) go out
 either way. Steps can mix: a quote fetched online can be signed and sent by
 text if the connection drops.
 
@@ -774,7 +826,7 @@ recipient's `Received`.
 2. Gateway → `Q 7F3K n=4 exp=… fee=0.01 to=0x…` (or `ERR <code>`; both with `[Test] ` on testnet)
 3. App checks the quote, user approves (passkey or Quick send).
 4. Phone → `SIG 7F3K <88>` (`[Test] SIG …` on testnet)
-5. Gateway → `Sent 7F3K 20 AUSD to=0x9965...dc tx=0xc6b9...fb` (or `ERR 7F3K <code>`)
+5. Gateway → `Sent 7F3K 20 AUSD to=+919876543210 tx=0xc6b9...fb` (or `ERR 7F3K <code>`)
 6. Gateway → recipient: `Received …` (webhook, alerts on).
 
 **Private `PAY` to a number** (offline; online: `/shielded/quote`, `/shielded/submit`)
@@ -784,11 +836,12 @@ recipient's `Received`.
 3. App checks (incl. `KEY CHANGED`), picks notes, signs.
 4. Phone → `[Test] SIG 7F3K <refs> <86>`
 5. Gateway → `[Test] Sent 7F3K 20 AUSD to=+919876543210 tx=… p=2` (or `[Test] ERR 7F3K pending`, then repeat 4)
-6. Gateway → recipient: `[Test] Got 20 AUSD (private) p=2 b=<43>` (alerts on).
+6. Gateway → recipient: `[Test] Received 20 AUSD from=<payer's ID> tx=… p=2 b=<43>` (alerts on).
 
 **Private `PAY` to an `ender1…` address**: as above, but the `Q` has no
-`to=` (the app uses the typed key), `Sent` says `to=ender1rreg...6dx9`, and
-`Got` goes to the address's owner, whose number the payer never sees.
+`to=` (the app uses the typed key), `Sent` names the owner's Ender ID (else
+`to=ender1rreg...6dx9`), and the private `Received` goes to the address's
+owner, whose number the payer never sees.
 
 **Private withdrawal to 0x**: `[Test] PAY 0x…, 5 AUSD` → `[Test] Q … to=0x…` (must
 equal the typed address) → `[Test] SIG <id> <refs> <86>` → `[Test] Sent <id> 5 AUSD
@@ -806,13 +859,14 @@ note at `p+1`. Online: `/shielded/quote {kind:'merge'}`, `/shielded/submit`;
 Auto-merge only ever takes this online path.
 
 **Incoming public payment**: transfer lands → Alchemy webhook → `transfers`
-row → `Received …` text (alerts on, ≤ 10 min old) → app adds the row; online,
-`/activity` shows the same transfer without the text.
+row → `Received … balance=…` text (alerts on, ≤ 10 min old) → app adds the
+row; online, `/activity` shows the same transfer without the text.
 
-**Private `Got`**: the payer's `SIG` (or `/shielded/submit`) lands → the
-gateway indexes the receipt (the recipient's note is found by trial
-decryption) → `Got …` to the recipient (alerts on) → app adds the note; online,
-`/shielded/notes` has it anyway.
+**Incoming private payment**: the payer's `SIG` (or `/shielded/submit`) lands
+→ the gateway indexes the receipt (the recipient's note is found by trial
+decryption and stored with its tx hash) → `Received … p=… b=…` to the
+recipient (alerts on) → app adds the note; online, `/shielded/notes` has it
+anyway, with the full hash.
 
 ## Error codes
 
@@ -874,8 +928,8 @@ of a reply for the other network than the payment's.
 
 ## Open questions
 
-- **`Got` needs alerts on.** `gotAlert` skips numbers with `links.alerts` off,
-  so they learn of a private payment only online.
+- **A private `Received` needs alerts on.** `receivedAlert` skips numbers with
+  `links.alerts` off, so they learn of a private payment only online.
 - **Public `SIG` while pending.** `sign` returns `pending` when no receipt came
   in 30 s, but `gateway/src/sms.ts` answers `Sent` anyway, so the text can
   report a transfer that later fails (`GET /tx/:id` and `reconcile` know).

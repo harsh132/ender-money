@@ -180,6 +180,8 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
     to = recipient.address;
   } else throw new GatewayError('bad-recipient');
   if (to === link.address.toLowerCase()) throw new GatewayError('self-transfer');
+  // What it was asked for when a number or an Ender ID, which its Sent text names (sms.ts); null for an address.
+  const recipient = isAddress(req.to) ? null : label ? enderId(label) : req.to;
 
   // A repeated request (say, the same SEND delivered twice) gets the quote that's still open.
   const requestHash = await sha256([phone, network, to, amount, deliver].join('|'));
@@ -218,10 +220,10 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
       expires_at: deadline,
     };
     const inserted = await env.DB.prepare(
-      `INSERT OR IGNORE INTO sessions (id, phone, network, from_address, to_address, amount, fee, deliver, min_out, nonce, deadline, request_hash, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO sessions (id, phone, network, from_address, to_address, amount, fee, deliver, min_out, nonce, deadline, request_hash, expires_at, recipient)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(id, phone, network, row.from_address, to, row.amount, row.fee, deliver, row.min_out, row.nonce, deadline, requestHash, deadline)
+      .bind(id, phone, network, row.from_address, to, row.amount, row.fee, deliver, row.min_out, row.nonce, deadline, requestHash, deadline, recipient)
       .run();
     if (inserted.meta.changes === 1) return toQuote(env, row);
   }

@@ -11,7 +11,8 @@
  */
 export const NAME_PARENT = 'ender.my';
 export const MIN_LABEL = 5;
-export const MAX_LABEL = 30;
+/** 20: the longest ID (29 characters with `.ender.my`) still fits a private `Received` text with `[Test] ` and the hash line. */
+export const MAX_LABEL = 20;
 
 /** Names the infrastructure needs, or that would let a holder impersonate the service. */
 export const RESERVED_LABELS = [

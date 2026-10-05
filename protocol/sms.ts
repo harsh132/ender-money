@@ -21,13 +21,19 @@
  *   public quote; `to=` is the recipient's packed address for a PAY to a number or an Ender ID,
  *   the 0x address for a withdrawal, and absent for SHIELD, MERGE and a PAY to
  *   an ender1 address, whose key the phone already has),
- *   `Sent <id> <amt> AUSD to=<to> tx=0x1234...ef[ p=<pos>]`, `Shielded <id> <amt> AUSD tx=… p=<pos>`,
- *   `Got <amt> AUSD (private) p=<pos> b=<blinding>` (no sender: the gateway
- *   never tells one user another's number). `Sent` and `Shielded` carry the id
- *   the SIG named; an older gateway's forms (`… to <to>. Tx …`, no id) still parse.
+ *   `Sent <id> <amt> AUSD to=<to> tx=0x1234...ef[ p=<pos>]`, `Shielded <id> <amt> AUSD tx=… p=<pos>`.
+ *   `Sent` and `Shielded` carry the id the SIG named; an older gateway's forms
+ *   (`… to <to>. Tx …`, no id) still parse. `Sent … to=` (public or private) is the
+ *   number the payment was asked for by, else the recipient's Ender ID, else its short address.
  *
- * Alerts: `Received <amt> AUSD from=0x<EIP-55> balance=<amt> tx=0x1234...ef`
- * (the older `from 0x…. Balance … AUSD. Tx …` still parses).
+ * Alerts, one keyword for both kinds of incoming payment:
+ *   public  `Received <amt> AUSD from=<who> balance=<amt> tx=0x1234...ef`
+ *   private `Received <amt> AUSD[ from=<Ender ID>] tx=0x1234...ef p=<pos> b=<blinding>`
+ * `p=` and `b=` make it private: the note for the cache, and no balance (carriers
+ * read texts). `from=` is the sender's Ender ID, else (public only) a verified
+ * reverse-ENS name, else (public only) the EIP-55 address; never a number. The older
+ * `Received … from 0x…. Balance … AUSD. Tx …` and the private `Got <amt> AUSD (private)
+ * p=… b=…` (or `from <who>`) still parse, as public and private `received`.
  * Every reply and alert about testnet starts with `[Test] ` (`test: true`);
  * no tag means mainnet. The app applies each text to the network it names,
  * whatever mode it shows. Every text the gateway sends ends with the SMS
@@ -82,9 +88,16 @@ export type Reply = (
   /** to: a 64-byte shielded address (transfer), a 0x address (withdrawal), or absent (deposit, answering SHIELD). */
   | { kind: 'shieldedQuote'; id: string; expires: number; fee: string; to?: Address | Uint8Array }
   | { kind: 'shielded'; id?: string; amount: string; tx: string; p: number }
-  | { kind: 'got'; amount: string; p: number; blinding: bigint }
-  /** A public incoming transfer. from: EIP-55; tx: shortHex of the hash (dedupes against the online history). */
-  | { kind: 'received'; amount: string; from: Address; balance: string; tx: string; test: boolean }
+  /**
+   * A public incoming transfer. from: an EIP-55 address, the sender's Ender ID or a verified ENS name (isTextName);
+   * tx: shortHex of the hash (dedupes against the online history).
+   */
+  | { kind: 'received'; amount: string; from: string; balance: string; tx: string; test: boolean; p?: undefined; blinding?: undefined }
+  /**
+   * A private incoming payment: the recipient's note at tree position p. from: the sender's Ender ID, when they
+   * have one; tx: shortHex of the pool transaction. Both absent in the older `Got` form.
+   */
+  | { kind: 'received'; amount: string; from?: string; tx?: string; p: number; blinding: bigint; balance?: undefined }
 ) & { test?: boolean };
 
 export const SEGMENT_SEPTETS = 160;
@@ -103,6 +116,12 @@ export const septets = (text: string): number | null => {
   }
   return n;
 };
+
+/** Longest name a text shows for a sender (`from=`); a longer reverse-ENS name shows as the address. */
+export const MAX_TEXT_NAME = 40;
+
+/** A name a text can carry as one field: printable ASCII, no spaces, plain GSM-7 (nothing costing two septets), at most MAX_TEXT_NAME. */
+export const isTextName = (s: string) => s.length <= MAX_TEXT_NAME && /^[!-~]+$/.test(s) && septets(s) === s.length;
 
 export const fitsOneSegment = (text: string) => {
   const n = septets(text);
@@ -292,10 +311,11 @@ const formatBody = (r: Reply): string => {
     }
     case 'shielded':
       return oneSegment(`Shielded ${r.id ? `${r.id} ` : ''}${r.amount} AUSD tx=${r.tx} p=${r.p}`);
-    case 'got':
-      return oneSegment(`Got ${r.amount} AUSD (private) p=${r.p} b=${b64(numberToBytes(r.blinding, { size: 32 }))}`);
-    case 'received':
-      return oneSegment(`Received ${r.amount} AUSD from=${getAddress(r.from)} balance=${r.balance} tx=${r.tx}`);
+    case 'received': {
+      const from = r.from === undefined ? '' : ` from=${isAddress(r.from) ? getAddress(r.from) : r.from}`;
+      if (r.p === undefined) return oneSegment(`Received ${r.amount} AUSD${from} balance=${r.balance} tx=${r.tx}`);
+      return oneSegment(`Received ${r.amount} AUSD${from}${r.tx ? ` tx=${r.tx}` : ''} p=${r.p} b=${b64(numberToBytes(r.blinding, { size: 32 }))}`);
+    }
   }
 };
 
@@ -313,12 +333,21 @@ const parseBody = (text: string): Reply | null => {
   const parts = text.split(/\s+/);
   switch (parts[0]) {
     case 'Received': {
-      // The older form: `… from 0x…. Balance <amt> AUSD. Tx 0x…`.
+      // Public: from= balance= tx=. Private: [from=] [tx=] p= b=, never balance=.
       const m =
-        /^Received (\d+(?:\.\d{1,6})?) AUSD from=(0x[0-9a-fA-F]{40}) balance=(\d+(?:\.\d{1,6})?) tx=(0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2})$/.exec(text) ??
-        /^Received (\d+(?:\.\d{1,6})?) AUSD from (0x[0-9a-fA-F]{40})\. Balance (\d+(?:\.\d{1,6})?) AUSD\. Tx (0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2})$/.exec(text);
-      if (!m) return null;
-      return { kind: 'received', amount: m[1]!, from: getAddress(m[2]!), balance: m[3]!, tx: m[4]!.toLowerCase(), test: false };
+        /^Received (\d+(?:\.\d{1,6})?) AUSD(?: from=(\S+))?(?: balance=(\d+(?:\.\d{1,6})?))?(?: tx=(0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2}))?(?: p=(\d{1,8}) b=([A-Za-z0-9+/]{43}))?$/.exec(text);
+      if (m) {
+        const [, amount, rawFrom, balance, rawTx, p, b] = m;
+        const from = rawFrom === undefined ? undefined : /^0x[0-9a-fA-F]{40}$/.test(rawFrom) ? getAddress(rawFrom) : isTextName(rawFrom) ? rawFrom : null;
+        const tx = rawTx?.toLowerCase();
+        if (from === null) return null;
+        if (p === undefined) return from && balance && tx ? { kind: 'received', amount: amount!, from, balance, tx, test: false } : null;
+        const blinding = balance === undefined ? unb64(b!, 32) : null;
+        return blinding ? { kind: 'received', amount: amount!, ...(from ? { from } : {}), ...(tx ? { tx } : {}), p: Number(p), blinding: bytesToBigInt(blinding) } : null;
+      }
+      // The older public form: `… from 0x…. Balance <amt> AUSD. Tx 0x…`.
+      const old = /^Received (\d+(?:\.\d{1,6})?) AUSD from (0x[0-9a-fA-F]{40})\. Balance (\d+(?:\.\d{1,6})?) AUSD\. Tx (0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{2})$/.exec(text);
+      return old ? { kind: 'received', amount: old[1]!, from: getAddress(old[2]!), balance: old[3]!, tx: old[4]!.toLowerCase(), test: false } : null;
     }
     case 'OK': {
       const f = fields(parts.slice(1));
@@ -351,10 +380,10 @@ const parseBody = (text: string): Reply | null => {
       return m ? { kind: 'shielded', ...(m[1] ? { id: m[1] } : {}), amount: m[2]!, tx: m[3]!, p: Number(m[4]) } : null;
     }
     case 'Got': {
-      // `from <who>`: the older format (and the spike's); the sender is dropped.
+      // The older private Received. `from <who>`: older still (and the spike's); the sender is dropped.
       const m = /^Got (\d+(?:\.\d{1,6})?) AUSD (?:\(private\)|from \S+) p=(\d{1,8}) b=([A-Za-z0-9+/]{43})$/.exec(text);
       const b = m && unb64(m[3]!, 32);
-      return m && b ? { kind: 'got', amount: m[1]!, p: Number(m[2]), blinding: bytesToBigInt(b) } : null;
+      return m && b ? { kind: 'received', amount: m[1]!, p: Number(m[2]), blinding: bytesToBigInt(b) } : null;
     }
     case 'ERR':
       return parts.length === 3

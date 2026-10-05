@@ -31,10 +31,14 @@ export type Tx = {
   private?: true;
   /** Moved from the public to the private balance. */
   shield?: true;
-  /** Contact name, Ender ID or phone number, when we know one. */
+  /** Contact name, Ender ID, ENS name or phone number, when we know one. */
   label?: string;
   status: TxStatus;
   txHash?: string;
+  /** The short hash a text gave (`0xab12...ef`), until the full one is known. */
+  shortTx?: string;
+  /** Private, from a text: tree position of the transaction's first output; a resync's notes there give the full hash. */
+  pos?: number;
   error?: string;
   at: number;
   deadline?: number;

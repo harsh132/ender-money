@@ -18,7 +18,7 @@ src/lib/
   wallet.ts     sync, signup (7702 authorizations), quote checks, signing
   private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge rule
   transport.ts  internet first; SMS composer when offline ([Test] prefix for testnet); replies by SMS, clipboard or paste
-  inbox.ts      Received alerts by text -> Activity rows, deduped against the online history
+  inbox.ts      public Received alerts by text -> Activity rows, deduped against the online history (private ones: private.ts)
   names.ts      the Ender ID screen's hints and rules (live check: GET /names/check)
 modules/sms-retriever/   Android: gateway texts via the SMS Retriever (no permission)
   api.ts        gateway HTTPS client (5 s timeout, then SMS)
@@ -46,7 +46,7 @@ and a Quick send session holds the key; it never keeps a key for this.
 
 ## Ender IDs
 
-Every account has a permanent name, `<label>.ender.my` (5-30 of `a-z`, `0-9`,
+Every account has a permanent name, `<label>.ender.my` (5-20 of `a-z`, `0-9`,
 interior hyphens; `protocol/names.ts`). A new wallet picks it after the
 passkey and before `/wallet/create`, which takes it (`ui/ChooseName.tsx`,
 checking availability as the user types). A relink keeps the existing one;
@@ -64,7 +64,7 @@ wallet, and ENS-aware wallets resolve the name to the public address.
 ## Texts from the gateway
 
 On Android the app reads the gateway's replies and alerts (`Received`,
-`Got`, `Sent`, `Shielded`, `Q`, `ERR`) by itself while it's open, through
+public or private, the older `Got`, `Sent`, `Shielded`, `Q`, `ERR`) by itself while it's open, through
 the SMS Retriever (no permission; every gateway text ends with the app's
 hash), re-armed on every foreground, after each text and every 4 minutes.
 Texts that arrive while the app is closed come in with the next online sync,

@@ -9,11 +9,13 @@
  * an answer if it sent a well-formed command.
  */
 import { isAddress } from 'viem';
-import { parseCommand, parseShieldedCommand, formatReply, normalizePhone, shortHex, unb64, withRetrieverHash, type Parsed, type Reply, type ShieldedCommand } from '../../protocol/sms';
+import { parseCommand, parseShieldedCommand, formatReply, isPhone, normalizePhone, shortHex, unb64, withRetrieverHash, type Parsed, type Reply, type ShieldedCommand } from '../../protocol/sms';
 import type { NetworkName } from '../../protocol/networks';
+import { parseEnderId } from '../../protocol/names';
 import { isPrivateAddress, shortPrivateAddress } from '../../protocol/recipient';
 import { account, GatewayError, quote, sign } from './core';
 import type { Env } from './env';
+import { idOfAddress, idOfPhone } from './names';
 import * as shielded from './shielded';
 
 /** The only network with a pool: where an unprefixed (older app's) private command goes. */
@@ -64,12 +66,14 @@ export const handleInbound = async (env: Env, { from: rawFrom, body }: Inbound):
           if (r.pending || r.p === undefined) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' }, network);
           return reply(env, from, { kind: 'shielded', id: command.id, amount: r.amount, tx: shortHex(r.tx), p: r.p }, network);
         }
-        const session = (await env.DB.prepare('SELECT network FROM sessions WHERE id = ? AND phone = ?').bind(command.id, from).first<{ network: NetworkName }>())
-          ?.network;
-        network = command.network ?? session;
-        sameNetwork(command.network, session);
+        const session = await env.DB.prepare('SELECT network, recipient FROM sessions WHERE id = ? AND phone = ?')
+          .bind(command.id, from)
+          .first<{ network: NetworkName; recipient: string | null }>();
+        network = command.network ?? session?.network;
+        sameNetwork(command.network, session?.network);
         const r = await sign(env, from, command.id, command.signature);
-        return reply(env, from, { kind: 'sent', id: command.id, amount: r.amount, to: shortHex(r.to), tx: shortHex(r.txHash) }, network);
+        const to = await sentTo(env, session?.recipient, r.to);
+        return reply(env, from, { kind: 'sent', id: command.id, amount: r.amount, to, tx: shortHex(r.txHash) }, network);
       }
     }
   } catch (error) {
@@ -89,7 +93,8 @@ const handleShielded = async (env: Env, from: string, command: Parsed<ShieldedCo
       const r = await shielded.submit(env, from, { id: command.id, refs: command.refs, sig: command.signature });
       // Sent but unconfirmed: a Sent now would carry no change position. A repeated SIG answers once it lands.
       if (r.pending) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' }, network);
-      const to = isAddress(r.to) ? shortHex(r.to) : isPrivateAddress(r.to) ? shortPrivateAddress(r.to) : r.to;
+      // r.to: the number, Ender ID or ender1 address paid, the 0x address withdrawn to, or our own number (MERGE).
+      const to = await sentTo(env, r.to, r.to, r.toPhone);
       return reply(env, from, { kind: 'sent', id: command.id, amount: r.amount, to, tx: shortHex(r.tx), p: r.p }, network);
     }
     const req: shielded.ShieldedQuoteRequest =
@@ -108,6 +113,17 @@ const handleShielded = async (env: Env, from: string, command: Parsed<ShieldedCo
     console.error('sms: unhandled', error instanceof Error ? error.stack : error);
     return reply(env, from, { kind: 'error', id, code: 'internal' }, network);
   }
+};
+
+/**
+ * Sent's to=: the number the payment was asked for by, else the recipient's Ender ID (also when it was paid by
+ * 0x or ender1 address), else that address, short. `asked`: what the payment named (a number, an Ender ID, an
+ * address); `owner`: the number behind a private address, used only to find its Ender ID.
+ */
+export const sentTo = async (env: Env, asked: string | null | undefined, address: string, owner?: string | null) => {
+  if (asked && (isPhone(asked) || parseEnderId(asked))) return asked;
+  const id = owner ? await idOfPhone(env, owner) : isAddress(address) ? await idOfAddress(env, address) : null;
+  return id ?? (isAddress(address) ? shortHex(address) : isPrivateAddress(address) ? shortPrivateAddress(address) : address);
 };
 
 /** Every text about testnet starts with `[Test] `, so the app files it under that network. */

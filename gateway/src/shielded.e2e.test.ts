@@ -4,7 +4,7 @@
  * spikes/nova-splitkey/scripts/sms-sim.mjs, the real Sponsor object as the
  * sender and the prover/ container (docker image `ender-prover`) as the
  * prover. Two users: Alice shields 50 by SMS, pays Bob's private address 20
- * by SMS (Bob gets `Got`, neither sees the other's number), Bob withdraws his whole note over HTTPS (two null outputs), Alice
+ * by SMS (Bob gets a private `Received` from her Ender ID, neither sees the other's number), Bob withdraws his whole note over HTTPS (two null outputs), Alice
  * merges over HTTPS; the gateway's tree root matches the pool's throughout.
  *
  * Skipped unless anvil, docker with `ender-prover` and the spike's forge
@@ -36,8 +36,8 @@ import {
   type Note,
   type User,
 } from '../../protocol/shielded';
-import { encodePrivateAddress, shortPrivateAddress } from '../../protocol/recipient';
-import { b64, formatCommand, formatShieldedCommand, parseReply, unb64 } from '../../protocol/sms';
+import { encodePrivateAddress } from '../../protocol/recipient';
+import { b64, formatCommand, formatShieldedCommand, parseReply, shortHex, unb64 } from '../../protocol/sms';
 import { d1, mockWorkers, relayStub, type Sent } from './test-env';
 
 const SPIKE = join(import.meta.dir, '../../spikes/nova-splitkey');
@@ -179,7 +179,7 @@ const sms = async (from: string, body: string) => {
 };
 /** The phone's note cache, resynced from the gateway's index (as the app does online). */
 const notesOf = async (phone: string) =>
-  (await api<{ notes: Array<{ pos: number; amount: string; blinding: string; spent: boolean }>; root: string }>(phone, 'GET', '/shielded/notes?network=testnet'))
+  (await api<{ notes: Array<{ pos: number; amount: string; blinding: string; spent: boolean; tx?: Hex }>; root: string }>(phone, 'GET', '/shielded/notes?network=testnet'))
     .notes;
 const unspent = async (phone: string): Promise<Note[]> =>
   eligible((await notesOf(phone)).map((n) => ({ pos: n.pos, amount: BigInt(n.amount), blinding: BigInt(n.blinding), spent: n.spent })));
@@ -243,7 +243,7 @@ test.skipIf(!ready)(
     expect(await unspent(ALICE)).toEqual([{ pos: 0, amount: AUSD('50'), blinding: dep.outs[0]!.blinding, spent: false } as Note]);
     await rootsMatch();
 
-    // 2. SMS: Alice pays Bob's private address 20; Bob gets Got with the note. A quote to his number names the same key.
+    // 2. SMS: Alice pays Bob's private address 20; Bob gets a private Received with the note. A quote to his number names the same key.
     const bobPacked = unb64(owners[BOB]!, 64)!;
     const bobAddress = encodePrivateAddress(bobPacked);
     const byNumber = await api<{ to: string }>(ALICE, 'POST', '/shielded/quote', { network: 'testnet', kind: 'pay', to: BOB, amount: '20' });
@@ -262,13 +262,17 @@ test.skipIf(!ready)(
       api<{ tx: Hex; p: number }>(ALICE, 'POST', '/shielded/submit', { id: q2.id, refs: pay.refs, sig: b64(pay.sig) }),
     ]);
     const sentReply = parseReply(smsText);
-    expect(sentReply).toMatchObject({ kind: 'sent', id: q2.id, amount: '20', to: shortPrivateAddress(bobAddress), p: 2, test: true });
+    // Paid by private address: Sent names its owner's Ender ID (with none, the short ender1 address).
+    expect(sentReply).toMatchObject({ kind: 'sent', id: q2.id, amount: '20', to: 'bobby.ender.my', p: 2, test: true });
     expect(smsText).not.toContain(BOB.slice(3));
     expect(http2.p).toBe(2);
     expect((sentReply as { tx: string }).tx).toBe(`${http2.tx.slice(0, 6)}...${http2.tx.slice(-2)}`);
     expect(sent.filter((s) => s.to === BOB)).toHaveLength(1);
     const got = sent.find((s) => s.to === BOB);
-    expect(parseReply(got!.body)).toEqual({ kind: 'got', amount: '20', p: 2, blinding: pay.tx.outs[0]!.blinding, test: true });
+    expect(parseReply(got!.body)).toEqual({ kind: 'received', amount: '20', from: 'alice.ender.my', tx: shortHex(http2.tx), p: 2, blinding: pay.tx.outs[0]!.blinding, test: true });
+    expect(got!.body).not.toContain('balance=');
+    // The notes name their transaction (the app links private rows to it).
+    expect((await notesOf(BOB)).find((n) => n.pos === 2)?.tx).toBe(http2.tx);
     expect(got!.body).not.toContain(ALICE.slice(3));
     expect((await unspent(BOB)).map((n) => [n.pos, n.amount])).toEqual([[2, AUSD('20')]]);
     expect((await unspent(ALICE)).map((n) => [n.pos, n.amount])).toEqual([[3, AUSD('29.99')]]);

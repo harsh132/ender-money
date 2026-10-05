@@ -13,6 +13,7 @@ import { formatReply, shortHex, withRetrieverHash } from '../../protocol/sms';
 import { publicClient } from './chain';
 import { GatewayError } from './core';
 import type { Env } from './env';
+import { senderName } from './names';
 import { canText, sendSms } from './outbound';
 
 /** Older than this, a transfer is recorded but not texted about: a late (retried) delivery doesn't send a stale alert. */
@@ -62,17 +63,21 @@ export const alertAll = async (env: Env, { network, ours, links }: Awaited<Retur
 
 /**
  * One alert per transaction per number; alerts_sent makes a repeated delivery harmless. The sender is shown by
- * full address, never by number (even an Ender user's): a text must not tell one user another's number.
+ * Ender ID, else verified reverse-ENS name, else full address (senderName); never by number, even an Ender
+ * user's: a text must not tell one user another's number.
  */
 const alert = async (env: Env, network: NetworkName, to: LinkRow, txHash: Hex, from: Address, value: bigint) => {
   if (!canText(to.phone)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to.phone).run();
   if (fresh.meta.changes !== 1) return;
-  const balance = await publicClient(env, network).readContract({ address: NETWORKS[network].ausd, abi: erc20Abi, functionName: 'balanceOf', args: [to.address as Address] });
+  const [balance, sender] = await Promise.all([
+    publicClient(env, network).readContract({ address: NETWORKS[network].ausd, abi: erc20Abi, functionName: 'balanceOf', args: [to.address as Address] }),
+    senderName(env, from),
+  ]);
   const text = formatReply({
     kind: 'received',
     amount: formatUnits(value, AUSD_DECIMALS),
-    from,
+    from: sender,
     balance: formatUnits(balance, AUSD_DECIMALS),
     tx: shortHex(txHash),
     test: network === 'testnet',

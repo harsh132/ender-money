@@ -275,13 +275,14 @@ test('SMS: every shielded message, formatted and parsed', () => {
 
   const blinding = S.nullifier(1n, 2n, 3);
   const got = SM.formatGot({ amount: '20', from: '+919800000001', p: 2, blinding: Buffer.from(blinding.toString(16).padStart(64, '0'), 'hex') });
-  // Got dropped the spike's `from <number>`; the spike's form still parses, and ours carries the same note.
+  // The spike's Got (`from <number>`) still parses, as a private Received carrying the same note (the number dropped).
   const gp = TM.parseReply(got) as Any;
   const sg = SM.parseGot(got);
   same({ amount: gp.amount, p: gp.p, blinding: gp.blinding }, { amount: sg.amount, p: sg.p, blinding: sg.blinding });
-  const ours = TM.formatReply({ kind: 'got', amount: '20', p: 2, blinding });
-  expect(ours).toBe(got.replace('from +919800000001', '(private)'));
-  expect(TM.parseReply(ours)).toEqual({ kind: 'got', amount: '20', p: 2, blinding });
+  expect(gp).toEqual({ kind: 'received', amount: '20', p: 2, blinding });
+  const ours = TM.formatReply({ kind: 'received', amount: '20', from: 'alice.ender.my', tx: TM.shortHex(tx), p: 2, blinding });
+  expect(ours).toBe(`Received 20 AUSD from=alice.ender.my tx=${TM.shortHex(tx)} p=2 b=${got.split(' b=')[1]}`);
+  expect(TM.parseReply(ours)).toEqual({ kind: 'received', amount: '20', from: 'alice.ender.my', tx: TM.shortHex(tx), p: 2, blinding });
   strings.push([ours, ours]);
 
   const sh = SM.formatShielded({ amount: '50', tx, p: 0 });
