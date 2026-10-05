@@ -21,6 +21,6 @@
   // Turnstile is off until the TURNSTILE_SECRET secret is set (see README).
   "d1_databases": [
     // Replace database_id with the id `wrangler d1 create ender-waitlist` prints.
-    { "binding": "WAITLIST", "database_name": "ender-waitlist", "database_id": "REPLACE_WITH_ENDER_WAITLIST_ID", "migrations_dir": "migrations" }
+    { "binding": "WAITLIST", "database_name": "ender-waitlist", "database_id": "59f15f58-cb23-4db0-be85-9de96ea512da", "migrations_dir": "migrations" }
   ]
 }
