@@ -90,8 +90,8 @@ test('turnstile on: missing token refused before storing', async () => {
 
 test('serves the Digital Asset Links file passkeys need, as JSON', async () => {
   const { default: worker, ASSET_LINKS } = await import('./worker');
-  const res = await worker.fetch(new Request('https://ender.money/.well-known/assetlinks.json') as never, {} as never, {} as never);
+  const res = await worker.fetch(new Request('https://ender.money/.well-known/assetlinks.json') as never, {} as never);
   expect(res.status).toBe(200);
   expect(res.headers.get('content-type')).toContain('application/json');
-  expect(await res.json()).toEqual(ASSET_LINKS);
+  expect((await res.json()) as unknown).toEqual(ASSET_LINKS);
 });
