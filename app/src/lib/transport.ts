@@ -10,6 +10,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as SMS from 'expo-sms';
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
+import { pump } from '../../modules/sms-retriever';
 import type { NetworkName } from '../../../protocol/networks';
 import { formatCommand, formatShieldedCommand, parseReply, type Command, type Reply, type ShieldedCommand } from '../../../protocol/sms';
 import { GATEWAY_SMS } from './config';
@@ -54,6 +55,7 @@ export const textGateway = async (command: Command | ShieldedCommand, network: N
   if (!to) throw new NoSmsError('No gateway number for texts is set up in this build.');
   if (!(await SMS.isAvailableAsync())) throw new NoSmsError("This phone can't send texts.");
   expecting = Date.now() + REPLY_WINDOW_MS;
+  await pump(); // a fresh five-minute Retriever window from the moment the user sends, even if they stay in the SMS app
   await whileOwnScreen(() => SMS.sendSMSAsync([to], format(command, network)));
 };
 

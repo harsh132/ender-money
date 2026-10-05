@@ -4,7 +4,8 @@ import { Platform } from 'react-native';
 type Native = {
   start(): Promise<void>;
   stop(): void;
-  addListener(event: 'onSms', listener: (e: { message?: string }) => void): { remove(): void };
+  drain(): Promise<string[]>;
+  addListener(event: 'onSms', listener: () => void): { remove(): void };
 };
 
 const native = Platform.OS === 'android' ? requireOptionalNativeModule<Native>('SmsRetriever') : null;
@@ -24,18 +25,17 @@ export function onSms(listener: (body: string) => void): () => void {
 export const smsSupported = !!native;
 
 /**
- * (Re-)arms the SMS Retriever: one text per five-minute window, so it's called on startup, on every foreground,
- * after each text and every few minutes while the app is open.
+ * Hands over what the Retriever caught (kept natively, so a reply that arrived while the app was in the background
+ * isn't lost) and re-arms it: one text per five-minute window, so it's called on startup, on every foreground, after
+ * each text, every few minutes while open, and right before opening the SMS app.
  */
 export async function pump(): Promise<void> {
   if (!native) return;
   if (!wired) {
     wired = true;
-    native.addListener('onSms', ({ message }) => {
-      if (message) emit(message);
-      void pump();
-    });
+    native.addListener('onSms', () => void pump());
   }
+  for (const message of await native.drain().catch(() => [] as string[])) emit(message);
   await native.start().catch(() => {});
 }
 
