@@ -13,7 +13,7 @@
   ],
 
   // The page is static; only /api/* reaches the Worker code.
-  "assets": { "directory": "./public", "run_worker_first": ["/api/*"] },
+  "assets": { "directory": "./public", "run_worker_first": ["/api/*", "/.well-known/*"] },
 
   // 5 sign-ups a minute per IP. namespace_id must be unique in the account (the gateway uses 4101).
   "ratelimits": [{ "name": "WAITLIST_LIMITER", "namespace_id": "4102", "simple": { "limit": 5, "period": 60 } }],

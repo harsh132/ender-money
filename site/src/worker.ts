@@ -56,9 +56,25 @@ const join = async (request: Request, env: Env) => {
   return json({ ok: true });
 };
 
+/**
+ * Digital Asset Links: lets the Android app use passkeys for ender.money. Must list the release signing key's
+ * SHA-256; served from code because static assets may skip dot-folders like .well-known.
+ */
+export const ASSET_LINKS = [
+  {
+    relation: ['delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds'],
+    target: {
+      namespace: 'android_app',
+      package_name: 'money.ender.app',
+      sha256_cert_fingerprints: ['9A:6B:FE:68:54:2E:86:CE:08:FC:DE:C9:B6:C7:7E:57:35:A0:26:78:28:40:5E:D6:BA:AD:D1:42:D5:14:E6:DE'],
+    },
+  },
+];
+
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
+    if (pathname === '/.well-known/assetlinks.json') return json(ASSET_LINKS);
     if (pathname !== '/api/waitlist') return fail('not-found', 404);
     if (request.method !== 'POST') return fail('method-not-allowed', 405);
     return join(request, env);
