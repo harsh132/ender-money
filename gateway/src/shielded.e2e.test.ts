@@ -146,7 +146,9 @@ beforeAll(async () => {
     [ALICE, aliceEOA.address],
     [BOB, bobEOA.address],
   ] as const)
-    await env.DB.prepare('INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, 0)').bind(phone, eoa.toLowerCase(), 'testnet').run();
+    await env.DB.prepare('INSERT INTO links (phone, address, network, created_at, label) VALUES (?, ?, ?, 0, ?)')
+      .bind(phone, eoa.toLowerCase(), 'testnet', phone === BOB ? 'bobby' : 'alice')
+      .run();
 }, 120_000);
 
 afterAll(() => {
@@ -247,6 +249,9 @@ test.skipIf(!ready)(
     const byNumber = await api<{ to: string }>(ALICE, 'POST', '/shielded/quote', { network: 'testnet', kind: 'pay', to: BOB, amount: '20' });
     expect(byNumber.to).toBe(owners[BOB]!);
     expect((await api<{ to: string }>(ALICE, 'POST', '/shielded/quote', { network: 'testnet', kind: 'pay', to: bobAddress, amount: '20' })).to).toBe(owners[BOB]!);
+    // So does one to his Ender ID, whose lookup gives that private address and never his number.
+    expect((await api<{ to: string }>(ALICE, 'POST', '/shielded/quote', { network: 'testnet', kind: 'pay', to: 'bobby.ender.my', amount: '20' })).to).toBe(owners[BOB]!);
+    expect(await api<unknown>(ALICE, 'GET', '/names/bobby')).toEqual({ name: 'bobby.ender.my', address: bobEOA.address.toLowerCase(), private: bobAddress });
     const q2 = parseReply(await sms(ALICE, `PAY ${bobAddress}, 20 AUSD`)); // unprefixed, as an older app sends it: still testnet
     if (q2?.kind !== 'shieldedQuote') throw new Error(`no quote: ${JSON.stringify(q2)}`);
     expect(q2.to).toBeUndefined(); // the phone already has the key

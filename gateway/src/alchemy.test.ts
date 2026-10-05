@@ -144,7 +144,7 @@ describe('syncAlchemy', () => {
         ]),
       ),
     );
-    await createWallet(env, ALICE.phone, { address: owner.address, authorizations });
+    await createWallet(env, ALICE.phone, { address: owner.address, authorizations, name: 'alice' });
 
     const me = owner.address.toLowerCase();
     expect(notifyCalls).toEqual([

@@ -87,3 +87,12 @@ test('PAY to a private address fits one segment and round-trips', () => {
   expect(parseShieldedCommand(`pay ${MINE.toUpperCase()},10 ausd`)).toEqual({ kind: 'pay', to: MINE, amount: '10' });
   expect(parseShieldedCommand(`PAY ${MINE.slice(0, -1)}q, 10 AUSD`)).toBeNull();
 });
+
+test('parseRecipient: Ender IDs as label.ender.my, @label, the pay page link and in URIs', () => {
+  const name = { kind: 'name', label: 'harsh' } as const;
+  for (const s of ['harsh.ender.my', 'Harsh.Ender.MY', ' @harsh ', '@HARSH', 'https://harsh.ender.my', 'https://harsh.ender.my/', 'ender:harsh.ender.my', 'ethereum:harsh.ender.my'])
+    expect(parseRecipient(s)).toEqual(name);
+  expect(parseRecipient('ender:harsh.ender.my?amount=5')).toEqual({ ...name, amount: '5' });
+  for (const s of ['harsh', 'ab.ender.my', '@ab', 'harsh.ender.eth', 'a.harsh.ender.my', 'https://harsh.ender.my/pay', 'https://evil.com', 'https://@harsh', '@support', 'har_sh.ender.my'])
+    expect(parseRecipient(s)).toBeNull();
+});

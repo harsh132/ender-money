@@ -18,6 +18,7 @@ import {
   type Call,
 } from '../../protocol/calibur';
 import { AUSD_DECIMALS, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
+import { enderId, parseEnderId } from '../../protocol/names';
 import { isPhone, SESSION_ID_ALPHABET, type Deliver } from '../../protocol/sms';
 import { publicClient, tokenSenders } from './chain';
 import { inrPerUsd } from './fx';
@@ -35,7 +36,7 @@ export class GatewayError extends Error {
 const QUOTE_TTL_SECONDS = 300;
 const now = () => Math.floor(Date.now() / 1000);
 
-type Link = { phone: string; address: Address; network: NetworkName };
+type Link = { phone: string; address: Address; network: NetworkName; label: string | null };
 type SessionRow = {
   id: string;
   phone: string;
@@ -70,7 +71,7 @@ export type Quote = {
 };
 
 const linkFor = async (env: Env, phone: string): Promise<Link> => {
-  const link = await env.DB.prepare('SELECT phone, address, network FROM links WHERE phone = ?').bind(phone).first<Link>();
+  const link = await env.DB.prepare('SELECT phone, address, network, label FROM links WHERE phone = ?').bind(phone).first<Link>();
   if (!link) throw new GatewayError('not-registered', 403);
   return link;
 };
@@ -142,6 +143,8 @@ export const account = async (env: Env, phone: string, requested?: NetworkName) 
   const [a, inr] = await Promise.all([readAccount(env, network, link.address), inrPerUsd()]);
   return {
     address: link.address,
+    /** The Ender ID; null for an account made before names (the app then asks for one). */
+    name: link.label ? enderId(link.label) : null,
     network,
     balance: formatUnits(a.balance, AUSD_DECIMALS),
     nonce: a.nonce.toString(),
@@ -165,10 +168,15 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
   if (amount <= 0n) throw new GatewayError('bad-amount');
 
   let to: Address;
+  const label = parseEnderId(req.to);
   if (isAddress(req.to)) to = req.to.toLowerCase() as Address;
   else if (isPhone(req.to)) {
     const recipient = await env.DB.prepare('SELECT address FROM links WHERE phone = ?').bind(req.to).first<{ address: Address }>();
     if (!recipient) throw new GatewayError('not-on-ender', 404);
+    to = recipient.address;
+  } else if (label) {
+    const recipient = await env.DB.prepare('SELECT address FROM links WHERE label = ?').bind(label).first<{ address: Address }>();
+    if (!recipient) throw new GatewayError('unknown-name', 404);
     to = recipient.address;
   } else throw new GatewayError('bad-recipient');
   if (to === link.address.toLowerCase()) throw new GatewayError('self-transfer');

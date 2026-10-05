@@ -36,7 +36,7 @@ export default function TxDetail() {
       <Card style={{ marginTop: 24 }}>
         <KV k={incoming ? 'From' : 'To'} v={who(tx)} />
         {tx.label && tx.counterparty ? <KV k="Wallet" v={short(tx.counterparty)} mono /> : null}
-        {tx.label && tx.to ? <KV k="Address" v={short(tx.to)} mono /> : null}
+        {tx.label && tx.to?.startsWith('ender1') ? <KV k="Address" v={short(tx.to)} mono /> : null}
         {tx.private ? <KV k="Privacy" v="Private" /> : null}
         {tx.fee ? <KV k="Fee" v={`$${usd(tx.fee)}`} /> : null}
         <KV k="When" v={`${dayLabel(tx.at)}, ${time(tx.at)}`} />

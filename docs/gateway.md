@@ -11,13 +11,11 @@ alerts on 9 Oct).
 ## Shape
 
 One Cloudflare Worker in `gateway/` (wrangler, Bun, TypeScript, viem),
-served at `api.ender.money`. It also serves
-`ender.money/.well-known/assetlinks.json` (a route on that one path only):
-`ender.money` is the passkey's relying-party ID, and Android only lets the
-app use it if that file names the app's package and signing certificate.
-If the Ender wallet adopts passkeys on `ender.money` later, the same file
-lists both apps. Three
-ways in, one session core, one way out to the chain.
+served at `api.ender.money`, plus the Ender ID pay pages on `*.ender.my`
+(see "Ender IDs"). `ender.money/.well-known/assetlinks.json` (the passkey's
+relying-party file for Android) is served by the site Worker (`site/`), not
+the gateway: deploy the site first, then the gateway, so the file never goes
+missing. Three ways in, one session core, one way out to the chain.
 
 ```
  app ──HTTPS──────────────┐
@@ -42,7 +40,7 @@ single atomic SQL statement, so concurrent requests can't double-act.
 
 | Store | Holds |
 | --- | --- |
-| D1 `links` | `phone (E.164) · address · network · alerts · created_at`, unique on phone and on address. The directory, queried both ways: phone → address to pay a number, address → phone for alerts |
+| D1 `links` | `phone (E.164) · address · network · alerts · created_at · label`, unique on phone, on address and on label. The directory, queried both ways: phone → address to pay a number, address → phone for alerts. `label` is the Ender ID (`0007_names.sql`), null for accounts made before names |
 | D1 `otps` | `phone · code_hash · attempts · expires_at`. A try is `UPDATE … SET attempts = attempts + 1 WHERE phone = ? AND expires_at > ? AND attempts < 5 RETURNING *` |
 | D1 `sessions` | pending quotes, i.e. exactly what the user is asked to sign (below). Signing claims one with `UPDATE … SET state = 'sending' WHERE id = ? AND state = 'open' RETURNING *`; a racing duplicate gets nothing back and reads the tx hash instead |
 | D1 `alerts_sent` | `tx_hash · phone`, so a repeated webhook delivery (or a `Got` for the same transaction) never alerts twice |
@@ -89,15 +87,16 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 | Call | Does |
 | --- | --- |
 | `POST /auth/start {phone}` | normalises to E.164, rate-limits, sends a 6-digit OTP (10 min, 5 tries, 3 sends/number/hour, plus per-IP) |
-| `POST /auth/verify {phone, code}` | returns `{token, status: "new"}` or `{token, status: "existing", address, balance}` |
-| `POST /wallet/create {address, authorizations: {mainnet, testnet}, relink?}` | checks both 7702 authorizations (delegate = Calibur, chain matches, nonce = account nonce, signer = address), queues each delegation with that network's `Sponsor` DO, where it rides in the next batch alongside transfers (gateway pays, the user is never charged), waits for them, then writes `links`. Refuses a linked number unless `relink` |
-| `GET /account?network=` | balance, Calibur nonce (`getSeq(0)`), delegated yes/no, and the INR rate for the `≈ ₹` line (Frankfurter / ECB daily rate, cached an hour; omitted if unavailable) |
+| `POST /auth/verify {phone, code}` | returns `{token, status: "new"}` or `{token, status: "existing", address, balance, name}` |
+| `POST /wallet/create {address, authorizations: {mainnet, testnet}, relink?, name?}` | checks both 7702 authorizations (delegate = Calibur, chain matches, nonce = account nonce, signer = address), queues each delegation with that network's `Sponsor` DO, where it rides in the next batch alongside transfers (gateway pays, the user is never charged), waits for them, then writes `links`. Refuses a linked number unless `relink`. `name` (the Ender ID label) is required for a new account (`name-required`); see "Ender IDs". Returns `{token, address, name}` |
+| `GET /account?network=` | `name` (the Ender ID, or null), balance, Calibur nonce (`getSeq(0)`), delegated yes/no, and the INR rate for the `≈ ₹` line (Frankfurter / ECB daily rate, cached an hour; omitted if unavailable) |
 | `POST /tx/quote {network, to, amount, deliver?}` | `to` is an address or phone number. Returns `{id, to, amount, fee, out?, nonce, deadline, calls}`; the app rebuilds and checks `calls` before signing |
 | `POST /tx/sign {id, signature}` | runs the checks below, sends, returns `{txHash}` |
 | `GET /tx/:id` | the session's `network` (stored with it, so no parameter is needed), status (`open`, `sending`, `sent`, `failed`), tx hash and error. The app polls it while a transfer shows "Sending" (only needed when `/tx/sign` came back `pending`) |
 | `GET /activity?network=` | `network` defaults to the number's current one, as for `/account`. The number's last 100 AUSD transfers in and out (fee legs left out), from the `transfers` table, so an online recipient sees money arrive without an SMS and a fresh device gets its history back |
 | `POST /account/alerts {on}` | the Settings switch "Text me when I get paid" (`links.alerts`) |
-| `GET ender.money/.well-known/assetlinks.json` | Android passkey association: package `money.ender.app` and the SHA-256 of the app's signing key (a Worker route on that one path) |
+| `POST /tx/quote` with `to: "label.ender.my"` | resolves the Ender ID to its public address (`unknown-name`, 404, if nobody has it) |
+| Ender ID routes | `GET /names/check`, `GET /names/:label`, `GET /names/by-phone`, `POST /account/name`, `/ccip`: see "Ender IDs" |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
 | `POST /webhooks/twilio` | inbound SMS; checks `X-Twilio-Signature` |
 | `POST /webhooks/alchemy` | Alchemy Address Activity deliveries; `X-Alchemy-Signature` must be the hex HMAC-SHA256 of the raw body under the key of the webhook the body names (else 401). Records AUSD transfers and alerts, below |
@@ -118,7 +117,7 @@ signing up needs the app online.
 | In | Out |
 | --- | --- |
 | `[Test] SYNC` / `SYNC` | `OK n=3 dlg=1 AUSD=45.20 inr=83.9`; also makes that network the number's current one (`SYNC T` still means testnet) |
-| `[Test] SEND <address or +number>, <amount> AUSD[ > CTK]` | `Q <id> n=4 exp=<unix> fee=0.01 to=0x<40>[ out=<ctk>]` |
+| `[Test] SEND <address, +number or label.ender.my>, <amount> AUSD[ > CTK]` | `Q <id> n=4 exp=<unix> fee=0.01 to=0x<40>[ out=<ctk>]` (`to=` is always the resolved address) |
 | `[Test] SIG <id> <sig>` | `Sent <id> 10 AUSD to=0x12…cd tx=0xab…ef` |
 | anything else | `ERR <id?> bad-command` |
 
@@ -146,8 +145,9 @@ OTP text: `Ender code: 481926. Don't share it.` plus the Retriever hash.
 
 **Quote** (same for `/tx/quote` and `SEND`):
 
-1. Resolve the recipient: an address as given, or a phone number through
-   `links` (`not-on-ender` if absent).
+1. Resolve the recipient: an address as given, a phone number through
+   `links` (`not-on-ender` if absent), or an Ender ID through `links.label`
+   (`unknown-name` if absent).
 2. Fee: flat 0.01 AUSD for now, from a `FEE_AUSD` var, paid to
    `FEE_RECIPIENT`, a treasury address in `protocol/networks.ts` (shared, not
    quoted: the SMS quote has no room for it and the app needs it to rebuild
@@ -325,16 +325,19 @@ next `/wallet/create`, whichever comes first); `wrangler tail` shows
 - Signature, delegate address and chain ID checked before every send; the
   gateway relays nothing it can't rebuild from its own session.
 - Phone ↔ address only revealed after an OTP; paying a number reveals the
-  address only to a sender who is about to sign a transfer to it.
+  address only to a sender who is about to sign a transfer to it. Since
+  Ender IDs, a signed-in user can also look a number up
+  (`GET /names/by-phone`, limited per user and per IP). No name lookup, ENS
+  answer or pay page ever contains a phone number.
 - Rate limits: Cloudflare rate-limit bindings per IP on `/auth/*`,
   `/tx/*`, `/wallet/*` and `/shielded/*`, plus per-number limits on OTP sends and SMS through the same
   binding keyed by phone.
 - Phone numbers masked in logs (`+91 98•••••210`).
 - Secrets: `GATEWAY_PRIVATE_KEY`, `JWT_SECRET`, `RELAY_TOKEN`,
-  `SHIELDED_KEY_SECRET`, `GATEWAY_SHIELDED_SEED`,
+  `SHIELDED_KEY_SECRET`, `GATEWAY_SHIELDED_SEED`, `RESOLVER_SIGNER_KEY`,
   `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (Twilio not built yet),
   `ALCHEMY_AUTH_TOKEN`. Plain vars in `wrangler.jsonc`: `FEE_AUSD`,
-  `SMS_RETRIEVER_HASH`, `ALCHEMY_WEBHOOK_URL`. Alchemy webhook signing keys are not secrets to
+  `SMS_RETRIEVER_HASH`, `ALCHEMY_WEBHOOK_URL`, `RESOLVER_ADDRESS`. Alchemy webhook signing keys are not secrets to
   set: the gateway receives them when it creates a webhook and keeps them
   sealed in D1 (`alchemy_webhooks`).
 
@@ -373,7 +376,15 @@ Turn on Notifications → Workers usage (weekly summary and the CPU-spike alert)
   address pushes (including from `/wallet/create`) and the 100k rollover,
   signed deliveries, AUSD-only recording, one alert per transfer and the
   stale-alert rule, against a mocked Notify API and JSON-RPC
-  (`alchemy.test.ts`).
+  (`alchemy.test.ts`); Ender IDs: label rules, signup with a name (required,
+  one winner under a race, carried by a relink), the one-time claim, lookups
+  and their limits, the pay page (found, not found, no number in it) and
+  SEND / PAY to a name by SMS (`names.test.ts`); ENS answers checked the way
+  `EnderResolver.resolveCallback` checks them, the digest against the
+  contract's pinned vector, and the real contract on anvil resolving through
+  viem's CCIP-Read against this gateway served locally (`ccip.test.ts`;
+  bytecode in `fixtures/EnderResolver.bytecode`, from
+  ender-backend/contracts/out; needs anvil, else skipped).
 - `wrangler dev` plus `scripts/play.ts`: plays the app with the demo key
   through both pipes, HTTPS and a dev-only `POST /dev/sms` that injects an
   inbound text as if the relay delivered it.
@@ -535,6 +546,119 @@ e.g. `openssl rand -hex 32`), set with `wrangler secret put` and, for
 exits; `TODO(open-exit)` in `pool.ts`), backfilling notes for keys
 registered after they received notes (the policy makes that impossible
 today), alert MACs.
+
+## Ender IDs
+
+Every account has a name, `<label>.ender.my`, chosen at signup and never
+changed (`protocol/names.ts`, shared with the app): 5-30 characters, `a-z`,
+`0-9` and interior single hyphens, case-insensitive (stored lowercase), not in
+`RESERVED_LABELS`, first come first served. It lives on `links.label`
+(unique), so it follows the number.
+
+- **Signup.** The app asks for it after the passkey and sends it in
+  `/wallet/create` (`name`). Checked before any gas is spent (`bad-name`,
+  `name-taken` 409); written in the same batch as the link, so a signup that
+  lost a race since the check gets `name-taken` and no link (its delegations
+  are done; the retry with another name is cheap). A relink keeps the name
+  the number has, else the one the wallet has, ignoring `name`; an account
+  with neither link nor `name` is `name-required`.
+- **Accounts made before names** pick one once: `POST /account/name {name}`
+  (JWT) is one `UPDATE … WHERE label IS NULL`, so `name-already-set` (409)
+  after that, `name-taken` (409) if someone has it. The app opens the same
+  screen on launch while `/account` says `name: null`.
+- **Restore** needs nothing: `/auth/verify` returns the name.
+
+| Call | Does |
+| --- | --- |
+| `GET /names/check?label=` | `{available: true}` or `{available: false, reason}`; `reason` is `characters`, `hyphens`, `too-short`, `too-long`, `reserved` or `taken`. Public, per IP (`names:<ip>`) |
+| `GET /names/:label` | `{name, address, private?}`: the public 0x address and, if the account registered its shielded keys (testnet pool), its `ender1…` private address. `unknown-name` (404). Public, per IP |
+| `GET /names/by-phone?phone=` | the same for a number (`name` may be null); `not-on-ender` (404). JWT only, limited per user (`lookup:<phone>`) and per IP |
+| `POST /account/name {name}` | the one-time claim above |
+
+Paying a name: `POST /tx/quote` and `SEND` resolve it to the public address
+(`unknown-name`); `/shielded/quote` and `PAY` resolve it to the owner's
+shielded key (`NOUSER` when unknown or not registered) and quote `to=` that
+key, so the phone can pin it, as for a number. The private `Sent` says
+`to=<label>.ender.my`; the owner's number is only used internally (`Got`).
+The app routes a name like a number: private when the name has a private
+address and the private notes cover it, else public.
+
+**Rate limits** all use `IP_LIMITER` with separate keys: `names:<ip>` (check
+and lookups), `lookup:<phone>` (by-phone, per signed-in user), `ccip:<ip>`,
+`page:<ip>`; 30 a minute each.
+
+### ENS (CCIP-Read)
+
+`<label>.ender.my` resolves in MetaMask and other ENS-aware wallets to the
+account's public address. `ender.my` is a gasless DNS name (ENSIP-17): its TXT
+record names `EnderResolver` on Ethereum mainnet
+(`0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B`, `RESOLVER_ADDRESS`), whose
+`resolve` reverts with `OffchainLookup` (EIP-3668) carrying its stored gateway
+URLs; the client fetches `GET /ccip/{sender}/{data}.json` (or `POST /ccip
+{sender, data}`) here and hands the answer to `resolveCallback`, which accepts
+it only if a trusted signer signed it for exactly that request
+(`makeSignatureHash`: `keccak256(0x1900 ‖ resolver ‖ expires ‖
+keccak256(request) ‖ keccak256(result))`, 60 s expiry). `ccip.ts` (ported from
+ender-backend; the stealth address per lookup is gone) answers:
+
+- `addr(node)` (coin type 60) and `addr(node, coinType)` for every EVM coin
+  type (ENSIP-11 `0x80000000 | chainId`, Monad `0x8000008f`, and the ENSIP-19
+  default `0x80000000`): the public address. Other coin types: empty.
+- `text(node, "url")`: `https://<label>.ender.my`; `name(node)`: the name.
+  Other records empty.
+- An unknown name: the signed empty answer (zero address), never an error.
+  A parent other than `ender.my`, or a nested name (`a.b.ender.my`): 400.
+
+Secret `RESOLVER_SIGNER_KEY`: the secp256k1 key in the resolver's `signers`
+(the same one ender-backend used). Whoever holds it can point any name
+anywhere: never log it. Without it (or `RESOLVER_ADDRESS`) `/ccip` answers 503.
+
+### Pay page
+
+`https://<label>.ender.my` (route `*.ender.my/*`, `page.ts`): the name, the
+public address as a QR code and text with a Copy button, the private address
+the same way when there is one, and a short "Pay with any wallet" note. Same
+dark palette, accent, Newsreader / Geist (Google Fonts) and card and pill
+shapes as the app. Works without JavaScript (the addresses are selectable
+text; a few inline lines show the Copy buttons). An unknown or invalid name
+is a themed 404. Strict CSP, `noindex`, cached 60 s. `www.ender.my` is passed
+through to its own origin. Locally (`DEV=1`) pages answer at
+`http://<label>.localhost:8787`.
+
+### Turning it on (owner steps)
+
+1. **Secret**: `wrangler secret put RESOLVER_SIGNER_KEY -c gateway/wrangler.jsonc`
+   and paste the key ender-backend used (its address must be in the
+   resolver's `signers`, as it is today). For `wrangler dev`, add it to
+   `gateway/.dev.vars`.
+2. **Migration**: `bun run gateway:migrate:remote` (applies `0007_names.sql`).
+3. **Route**: a zone route can belong to one Worker only, so remove
+   `*.ender.my/*` from ender-backend's Worker (its `wrangler.jsonc` and a
+   deploy, or dashboard → Workers → ender-backend → Settings → Domains &
+   Routes) before deploying the gateway, which declares it.
+4. **DNS on `ender.my`**: a proxied (orange-cloud) wildcard record so every
+   `<label>.ender.my` reaches the Worker, e.g. `AAAA * 100::` proxied (keep
+   it if ender-backend's is still there). Keep the existing ENSIP-17 TXT
+   record(s) (`ender.my TXT "ENS1 0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B"`,
+   and the `*.ender.my` one if present); a TXT and an AAAA wildcard coexist.
+   Don't add records for individual labels: a wildcard stops applying to a
+   name that has any record of its own.
+5. **Resolver URL**: the contract keeps its gateway URLs on chain
+   (`string[] urls`, set by the owner with `setUrls(string[])`). Today it
+   points at `https://gateway.ender.money/ccip/{sender}/{data}.json`. From the
+   owner account (deployer `0x3f870eceee0ece3a54254c1d364230abd14aa2d3`
+   unless ownership moved; check with `owner()`), after the gateway is
+   deployed:
+
+   ```
+   cast call 0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B "urls(uint256)(string)" 0 --rpc-url $ETH_RPC_URL
+   cast send 0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B "setUrls(string[])" \
+     '["https://api.ender.money/ccip/{sender}/{data}.json"]' \
+     --rpc-url $ETH_RPC_URL --account <owner keystore>
+   ```
+
+   Then check: `cast resolve-name <label>.ender.my --rpc-url $ETH_RPC_URL`
+   returns the address `GET /names/<label>` shows.
 
 ## Not in the gateway
 

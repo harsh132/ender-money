@@ -16,7 +16,10 @@ export type Env = {
   RELAY: DurableObjectNamespace<Relay>;
   RPC_MAINNET?: string;
   RPC_TESTNET?: string;
-  /** Per-IP limiter for /auth/*, /tx/*, /wallet/* and /shielded/* (Cloudflare rate-limit binding). */
+  /**
+   * Cloudflare rate-limit binding, keyed by IP for /auth/*, /tx/*, /wallet/* and /shielded/*; by
+   * `<what>:<ip>` for name checks and lookups, /ccip and pay pages; by `lookup:<phone>` for /names/by-phone.
+   */
   IP_LIMITER: RateLimit;
   /** Comma-separated networks a signup delegates on; defaults to "mainnet,testnet". */
   SIGNUP_NETWORKS?: string;
@@ -30,6 +33,10 @@ export type Env = {
   ALCHEMY_AUTH_TOKEN?: string;
   /** Where Alchemy delivers: this Worker's POST /webhooks/alchemy. */
   ALCHEMY_WEBHOOK_URL?: string;
-  /** "1" enables the /dev/* routes. Only ever set in .dev.vars. */
+  /** EnderResolver on Ethereum: CCIP-Read answers (/ccip) are signed for this address. Unset, /ccip answers 503. */
+  RESOLVER_ADDRESS?: string;
+  /** secp256k1 key the resolver trusts (its `signers`). Can point any name anywhere: a secret, never logged. */
+  RESOLVER_SIGNER_KEY?: string;
+  /** "1" enables the /dev/* routes and pay pages at <label>.localhost. Only ever set in .dev.vars. */
   DEV?: string;
 };

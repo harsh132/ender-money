@@ -4,7 +4,9 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { formatUnits, parseUnits, type Address } from 'viem';
 import { AUSD_DECIMALS } from '../../../protocol/networks';
+import { enderId } from '../../../protocol/names';
 import { encodePrivateAddress, normalizePhone, parseRecipient } from '../../../protocol/recipient';
+import { api, ApiError } from '../lib/api';
 import { MAX_FEE } from '../lib/config';
 import { phoneDisplay, short, usd } from '../lib/format';
 import { quickSend, whileOwnScreen } from '../lib/keys';
@@ -16,14 +18,18 @@ import { Sigil } from '../ui/Sigil';
 import { useQuickSend } from '../ui/useQuickSend';
 import { Avatar, BackHeader, Banner, Button, Chip, Field, Screen, T, TestnetPill } from '../ui/kit';
 
-/** `to`: a 0x address, an E.164 number or a private address (ender1…, lowercase), as Review takes it. */
-export type To = { to: string; toAddress?: Address; phone?: string; label?: string };
+/**
+ * `to`: a 0x address, an E.164 number, a private address (ender1…, lowercase) or an Ender ID (label.ender.my), as
+ * Review takes it. `enderId`: theirs when known (display; equal to `to` when paying the name).
+ */
+export type To = { to: string; toAddress?: Address; phone?: string; label?: string; enderId?: string };
 
 /** Typed, pasted, scanned or linked text -> recipient (protocol/recipient.ts; bare Indian numbers get +91). */
 const toOf = (raw: string): To | null => {
   const r = parseRecipient(raw);
   if (r?.kind === 'address') return { to: r.address, toAddress: r.address };
   if (r?.kind === 'phone') return { to: r.phone, phone: r.phone };
+  if (r?.kind === 'name') return { to: enderId(r.label), enderId: enderId(r.label) };
   return r ? { to: encodePrivateAddress(r.packed) } : null;
 };
 
@@ -31,9 +37,12 @@ const toOf = (raw: string): To | null => {
 const isPrivateTo = (t: To) => t.to.startsWith('ender1');
 
 const fromRecent = (r: Recipient): To | null => {
-  const t = toOf(r.phone ?? r.address);
-  return t && { ...t, label: r.name };
+  const t = toOf(r.phone ?? r.enderId ?? r.address);
+  return t && { ...t, label: r.name, ...(r.enderId ? { enderId: r.enderId } : {}) };
 };
+
+/** Who they are, for display: contact name, Ender ID, number, address. */
+const nameOf = (t: To) => t.label ?? t.enderId ?? (t.phone ? phoneDisplay(t.phone) : short(t.to));
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'] as const;
 
@@ -76,13 +85,21 @@ export default function Send() {
 
   const typed = useMemo(() => toOf(text), [text]);
   const labelled = (t: To): To => {
-    const known = recents.find((r) => (t.phone ? r.phone === t.phone : r.address === t.to));
-    return { ...t, label: t.label ?? known?.name };
+    const known = recents.find((r) => (t.phone ? r.phone === t.phone : t.enderId ? r.enderId === t.enderId : r.address === t.to));
+    return { ...t, label: t.label ?? known?.name, enderId: t.enderId ?? known?.enderId };
   };
-  const pick = (t: To | null) => {
+  const pick = async (t: To | null) => {
     if (!t) return;
     if (isPrivateTo(t) && !hasPool(network)) return setError('Private addresses work in Test mode only.');
     setError(undefined);
+    // Online, check an Ender ID exists, and show a number's Ender ID. Offline the gateway resolves it later.
+    if (t.enderId && t.enderId === t.to) {
+      const known = await api.name(t.enderId.split('.')[0]!).catch((e: unknown) => e);
+      if (known instanceof ApiError && known.code === 'unknown-name') return setError('No one has that Ender ID.');
+    } else if (t.phone && !t.enderId) {
+      const known = await api.nameByPhone(t.phone).catch(() => undefined);
+      if (known?.name) t = { ...t, enderId: known.name };
+    }
     setTo(labelled(t));
   };
 
@@ -95,7 +112,7 @@ export default function Send() {
     const [phones, name] = await Promise.all([contact.getPhones(), contact.getFullName().catch(() => undefined)]);
     const phone = phones.map((p) => normalizePhone((p.number ?? '').replace(/[\s()-]/g, ''))).find(Boolean);
     if (!phone) return setError("That contact doesn't have a phone number Ender can use.");
-    setTo({ to: phone, phone, label: name || undefined });
+    void pick({ to: phone, phone, label: name || undefined });
   };
 
   // ------------------------------------------------------------ amount step
@@ -114,7 +131,7 @@ export default function Send() {
         return a.length >= 9 ? a : a + k;
       });
     };
-    const name = to ? (to.label ?? (to.phone ? phoneDisplay(to.phone) : short(to.to))) : '';
+    const name = to ? nameOf(to) : '';
     return (
       <Screen>
         <BackHeader title={shield ? 'Make private' : 'Send'} right={chips} />
@@ -129,7 +146,15 @@ export default function Send() {
           <View style={{ flex: 1, minWidth: 0 }}>
             <T v="body" numberOfLines={1}>{name}</T>
             <T v="meta" numberOfLines={1} style={{ fontSize: 15, fontFamily: to.toAddress || (toPrivate && to.label) ? f.mono : f.ui }}>
-              {to.label && to.phone ? phoneDisplay(to.phone) : to.toAddress ? short(to.toAddress) : toPrivate ? (to.label ? short(to.to) : 'Private address') : 'Ender finds their wallet'}
+              {(to.label || to.enderId) && to.phone
+                ? phoneDisplay(to.phone)
+                : to.label && to.enderId
+                  ? to.enderId
+                  : to.toAddress
+                    ? short(to.toAddress)
+                    : toPrivate
+                      ? to.label ? short(to.to) : 'Private address'
+                      : 'Ender finds their wallet'}
             </T>
           </View>
           <Pressable onPress={() => setTo(null)} hitSlop={10}>
@@ -209,11 +234,11 @@ export default function Send() {
         autoFocus
         value={text}
         onChangeText={setText}
-        placeholder="Number, wallet or private address"
+        placeholder="Number, Ender ID or address"
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="default"
-        onSubmitEditing={() => pick(typed)}
+        onSubmitEditing={() => void pick(typed)}
         right={
           <View style={{ flexDirection: 'row', gap: 4 }}>
             <Pressable accessibilityLabel="Pick a contact" onPress={pickContact} hitSlop={8} style={{ padding: 6 }}><Person size={24} color={c.fg2} /></Pressable>
@@ -224,11 +249,11 @@ export default function Send() {
       {error ? <View style={{ marginTop: 12 }}><Banner tone="negative">{error}</Banner></View> : null}
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 24 }}>
         {typed ? (
-          <Pressable onPress={() => pick(typed)} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, marginTop: 8, opacity: pressed ? 0.7 : 1 })}>
-            {isPrivateTo(typed) ? <Sigil address={typed.to} fallback="P" /> : <Avatar label={typed.phone ? '#' : '0'} />}
-            <View style={{ flex: 1 }}>
-              <T v="body">Send to {typed.phone ? phoneDisplay(typed.phone) : short(typed.to)}</T>
-              <T v="meta">{typed.phone ? 'Phone number' : isPrivateTo(typed) ? 'Private address' : 'Wallet address'}</T>
+          <Pressable onPress={() => void pick(typed)} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, marginTop: 8, opacity: pressed ? 0.7 : 1 })}>
+            {isPrivateTo(typed) ? <Sigil address={typed.to} fallback="P" /> : <Avatar label={typed.phone ? '#' : typed.enderId ?? '0'} />}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T v="body" numberOfLines={1}>Send to {typed.phone ? phoneDisplay(typed.phone) : typed.enderId ?? short(typed.to)}</T>
+              <T v="meta">{typed.phone ? 'Phone number' : typed.enderId ? 'Ender ID' : isPrivateTo(typed) ? 'Private address' : 'Wallet address'}</T>
             </View>
           </Pressable>
         ) : null}
@@ -236,9 +261,9 @@ export default function Send() {
           <>
             <T v="caption" style={{ color: c.fg3, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 24, marginBottom: 4 }}>Recent</T>
             {recents.map((r) => {
-              const name = r.name ?? (r.phone ? phoneDisplay(r.phone) : short(r.address));
+              const name = r.name ?? r.enderId ?? (r.phone ? phoneDisplay(r.phone) : short(r.address));
               return (
-                <Pressable key={r.address} onPress={() => pick(fromRecent(r))} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, opacity: pressed ? 0.7 : 1 })}>
+                <Pressable key={r.address} onPress={() => void pick(fromRecent(r))} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, opacity: pressed ? 0.7 : 1 })}>
                   <Sigil address={r.address} fallback={name} />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <T v="body" numberOfLines={1}>{name}</T>
@@ -249,7 +274,7 @@ export default function Send() {
             })}
           </>
         ) : (
-          <T v="meta" style={{ marginTop: 20 }}>Type a phone number or paste a wallet or private address. Pick a contact or scan a code with the buttons above.</T>
+          <T v="meta" style={{ marginTop: 20 }}>Type a phone number or Ender ID (name.ender.my), or paste an address. Pick a contact or scan a code with the buttons above.</T>
         )}
       </ScrollView>
     </Screen>

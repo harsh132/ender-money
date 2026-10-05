@@ -10,6 +10,7 @@
  */
 import { bech32m } from '@scure/base';
 import { isAddress, type Address } from 'viem';
+import { parseEnderId } from './names';
 
 export const PRIVATE_HRP = 'ender';
 const PACKED_BYTES = 64;
@@ -57,11 +58,15 @@ export type ParsedRecipient = (
   | { kind: 'address'; address: Address }
   | { kind: 'phone'; phone: string }
   | { kind: 'private'; packed: Uint8Array }
+  /** An Ender ID (`label.ender.my`, `@label`); the gateway resolves it. */
+  | { kind: 'name'; label: string }
 ) & { amount?: string };
 
-/** 0x addresses: lowercase, mixed case only with a valid EIP-55 checksum. */
+/** 0x addresses: lowercase, mixed case only with a valid EIP-55 checksum. EIP-681 allows a name where the address goes. */
 const bare = (s: string, onlyAddress: boolean): ParsedRecipient | null => {
   if (isAddress(s)) return { kind: 'address', address: s.toLowerCase() as Address };
+  const label = parseEnderId(s);
+  if (label) return { kind: 'name', label };
   if (onlyAddress) return null;
   const packed = decodePrivateAddress(s);
   if (packed) return { kind: 'private', packed };
@@ -70,13 +75,19 @@ const bare = (s: string, onlyAddress: boolean): ParsedRecipient | null => {
 };
 
 /**
- * Reads a bare address, number or private address, and the URIs
+ * Reads a bare address, number, private address or Ender ID, the pay page's
+ * link `https://<label>.ender.my`, and the URIs
  * `ethereum:[pay-]0x…[@chain][?amount=…]` (EIP-681; for an ERC-20
  * `…/transfer?address=<recipient>` the recipient is the parameter, not the
  * token) and `ender:<0x…|+number|ender1…>[?amount=…]`.
  */
 export const parseRecipient = (input: string): ParsedRecipient | null => {
   const text = input.trim();
+  const page = /^https?:\/\/([a-z0-9.-]+)\/?$/i.exec(text);
+  if (page) {
+    const label = parseEnderId(page[1]!);
+    return label ? { kind: 'name', label } : null;
+  }
   const uri = /^(ethereum|ender):(?:pay-)?([^@?/]+)(?:@\d+)?(?:\/([^?]*))?(?:\?(.*))?$/i.exec(text);
   if (!uri) return bare(text, false);
   const query = new URLSearchParams(uri[4] ?? '');

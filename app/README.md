@@ -9,7 +9,8 @@ every SMS the app and gateway exchange in [../docs/SMS.md](../docs/SMS.md).
 ```
 src/app/          routes (expo-router)
   welcome, phone, code          O1-O3: log in with an OTP
-  create, restore, lost         N1-N3 new wallet / E1 welcome back / E2 lost passkey
+  create, restore, lost         N1-N3 new wallet (with its Ender ID) / E1 welcome back / E2 lost passkey
+  name                          pick an Ender ID once, for an account made before them
   (tabs)/home, activity, settings
   send, review, scan, receive, tx/[id]
 src/lib/
@@ -18,10 +19,11 @@ src/lib/
   private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge rule
   transport.ts  internet first; SMS composer when offline ([Test] prefix for testnet); replies by SMS, clipboard or paste
   inbox.ts      Received alerts by text -> Activity rows, deduped against the online history
+  names.ts      the Ender ID screen's hints and rules (live check: GET /names/check)
 modules/sms-retriever/   Android: gateway texts via the SMS Retriever (no permission)
   api.ts        gateway HTTPS client (5 s timeout, then SMS)
   store.ts      persisted state (AsyncStorage; JWT in SecureStore)
-../protocol/    shared with the gateway: networks, Calibur typed data, SMS format, recipients (0x, numbers, ender1…)
+../protocol/    shared with the gateway: networks, Calibur typed data, SMS format, recipients (0x, numbers, ender1…, Ender IDs), Ender ID rules
 ```
 
 ## Keys
@@ -41,6 +43,23 @@ proving keys with the gateway (`/shielded/register`); the spending key never
 leaves the phone. Mainnet shows no private balance. Settings' Auto-merge
 (off by default) folds the 12 largest notes into one while the app is online
 and a Quick send session holds the key; it never keeps a key for this.
+
+## Ender IDs
+
+Every account has a permanent name, `<label>.ender.my` (5-30 of `a-z`, `0-9`,
+interior hyphens; `protocol/names.ts`). A new wallet picks it after the
+passkey and before `/wallet/create`, which takes it (`ui/ChooseName.tsx`,
+checking availability as the user types). A relink keeps the existing one;
+an account without one is sent to the same screen on launch (`/name`, once
+per launch; `POST /account/name`). Restoring an account that has one skips it.
+
+Send, the scanner and links take `label.ender.my`, `@label` and
+`https://label.ender.my`; the gateway resolves the name, and the route is
+the usual one (private when the name has a private address and the private
+notes cover it, else public). Its first answers are pinned under the name,
+as a number's are. Receive shows the Ender ID and copies its pay page link;
+Settings shows it. Anyone can open `https://<label>.ender.my` to pay from any
+wallet, and ENS-aware wallets resolve the name to the public address.
 
 ## Texts from the gateway
 

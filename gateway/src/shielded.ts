@@ -52,6 +52,7 @@ import {
   type Tx,
   unpackAddress,
 } from '../../protocol/shielded';
+import { enderId, parseEnderId } from '../../protocol/names';
 import { decodePrivateAddress, encodePrivateAddress } from '../../protocol/recipient';
 import { b64, formatReply, isPhone, REF_MOD, SESSION_ID_ALPHABET, unb64, withRetrieverHash } from '../../protocol/sms';
 import { publicClient } from './chain';
@@ -127,6 +128,10 @@ const userByAddress = async (env: Env, network: NetworkName, packed: Uint8Array)
   const r = await env.DB.prepare('SELECT * FROM shielded_users WHERE network = ? AND owner_key = ?').bind(network, ownerKey.toString()).first<UserRow>();
   return r && r.enc_pk === bytesToHex(encPk) ? r : null;
 };
+
+/** The registered user behind an Ender ID. */
+const userByLabel = (env: Env, network: NetworkName, label: string) =>
+  env.DB.prepare('SELECT s.* FROM shielded_users s JOIN links l ON l.phone = s.phone WHERE l.label = ? AND s.network = ?').bind(label, network).first<UserRow>();
 
 const userFor = async (env: Env, phone: string, network: NetworkName) => {
   const r = await userRow(env, phone, network);
@@ -290,7 +295,7 @@ type QuoteRow = {
   network: NetworkName;
   kind: ShieldedKind;
   to_phone: string | null;
-  /** withdraw: the 0x address; pay: the ender1 address, when paid to one. */
+  /** withdraw: the 0x address; pay: the ender1 address or Ender ID, when paid to one. */
   to_address: string | null;
   amount: string;
   fee: string;
@@ -351,12 +356,15 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
   let to: string | undefined;
   if (kind === 'pay') {
     const packed = typeof req.to === 'string' ? decodePrivateAddress(req.to) : null;
-    if (typeof req.to !== 'string' || (!isPhone(req.to) && !packed)) throw new GatewayError('bad-recipient');
-    const r = packed ? await userByAddress(env, network, packed) : await userRow(env, req.to, network);
+    const label = typeof req.to === 'string' ? parseEnderId(req.to) : null;
+    if (typeof req.to !== 'string' || (!isPhone(req.to) && !packed && !label)) throw new GatewayError('bad-recipient');
+    const r = packed ? await userByAddress(env, network, packed) : label ? await userByLabel(env, network, label) : await userRow(env, req.to, network);
     if (!r) throw new GatewayError('NOUSER', 404);
-    // To a private address: its owner's number is used internally (the Got text) and never shown to the payer.
+    // To a private address or an Ender ID: its owner's number is used internally (the Got text) and never shown to
+    // the payer, who sees what they paid (`Sent … to=`).
     toPhone = r.phone;
     if (packed) toAddress = encodePrivateAddress(packed);
+    else if (label) toAddress = enderId(label);
     to = packedOwner(r);
   } else if (kind === 'withdraw') {
     if (typeof req.to !== 'string' || !isAddress(req.to)) throw new GatewayError('bad-recipient');

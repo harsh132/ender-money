@@ -6,6 +6,7 @@ import { ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Address, Hex } from 'viem';
 import { NETWORKS } from '../../../protocol/networks';
+import { parseEnderId } from '../../../protocol/names';
 import { decodePrivateAddress, isPrivateAddress } from '../../../protocol/recipient';
 import { unb64, type Command, type Reply, type ShieldedCommand } from '../../../protocol/sms';
 import { api, ApiError, OfflineError } from '../lib/api';
@@ -23,6 +24,7 @@ import {
   ensureRegistered,
   errorText,
   holdNotes,
+  pinKey,
   releaseNotes,
   settlePrivate,
   signQuote,
@@ -58,7 +60,7 @@ const paint = () => new Promise((r) => setTimeout(r, 32));
 
 /** Review, then the same screen tracks progress: Request sent -> Quote received -> Approve -> Sent. */
 export default function Review() {
-  const p = useLocalSearchParams<{ to: string; toAddress?: string; phone?: string; label?: string; amount: string; deliver?: string; shield?: string; merge?: string }>();
+  const p = useLocalSearchParams<{ to: string; toAddress?: string; phone?: string; label?: string; enderId?: string; amount: string; deliver?: string; shield?: string; merge?: string }>();
   // The payment's own network, fixed when Review opens: every text it sends names it, whatever mode is shown later.
   const [network] = useState(() => getState().network);
   const wallet = useStore((s) => s.wallet)!;
@@ -72,11 +74,14 @@ export default function Review() {
   const deliver = p.deliver === 'CTK' && network === 'testnet' && !self ? 'CTK' : 'AUSD';
   const draft: Draft = self
     ? { network, to: wallet.address, amount: merge ? '0' : p.amount, deliver }
-    : { network, to: p.to, toAddress: p.toAddress as Address | undefined, phone: p.phone, label: p.label, amount: p.amount, deliver };
+    : { network, to: p.to, toAddress: p.toAddress as Address | undefined, phone: p.phone, label: p.label, enderId: p.enderId, amount: p.amount, deliver };
   const kind: PrivateDraft['kind'] = merge ? 'merge' : shield ? 'shield' : draft.toAddress ? 'withdraw' : 'pay';
   /** To a private address (ender1…): private only, never public. */
   const privAddr = !self && isPrivateAddress(draft.to);
-  const pdraft: PrivateDraft = { kind, amount: draft.amount, to: draft.toAddress ?? draft.phone ?? draft.to, phone: draft.phone };
+  /** Paying an Ender ID: the gateway resolves it; its first answers are pinned under it, as a number's are. */
+  const byName = !self && !!parseEnderId(draft.to);
+  const pin = pinKey(draft);
+  const pdraft: PrivateDraft = { kind, amount: draft.amount, to: draft.toAddress ?? draft.phone ?? draft.to, phone: pin };
   // Private or public is decided once, on arrival (it may ask the gateway whether the number takes private payments).
   const [route, setRoute] = useState<'private' | 'public' | undefined>(self ? 'private' : undefined);
   const priv = route === 'private';
@@ -110,9 +115,10 @@ export default function Review() {
     self ||
     (!!recipientAddress && recents.some((r) => r.address === recipientAddress)) ||
     (priv && !!draft.phone && recents.some((r) => r.phone === draft.phone)) ||
+    (priv && byName && recents.some((r) => r.enderId === draft.to)) ||
     (privAddr && recents.some((r) => r.address === draft.to));
   const quick = quickSend.covers(Number(draft.amount), isRecent);
-  const name = draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : short(draft.to));
+  const name = draft.label ?? draft.enderId ?? (draft.phone ? phoneDisplay(draft.phone) : short(draft.to));
 
   // ---------------------------------------------------------------- steps
 
@@ -201,7 +207,7 @@ export default function Review() {
       return setPhase({ k: 'failed', step: 'approve', message: e instanceof TransferError ? e.message : (passkeyError(e) ?? 'Approval cancelled.'), quote: q });
     }
     mark('approve');
-    rememberRecipient({ address: q.to, phone: draft.phone, name: draft.label });
+    rememberRecipient({ address: q.to, phone: draft.phone, name: draft.label, enderId: draft.enderId });
     upsertTx({
       id: q.id,
       network,
@@ -209,7 +215,8 @@ export default function Review() {
       amount: draft.amount,
       fee: q.fee,
       counterparty: q.to,
-      label: draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : undefined),
+      ...(byName ? { to: draft.to } : {}),
+      label: draft.label ?? draft.enderId ?? (draft.phone ? phoneDisplay(draft.phone) : undefined),
       status: 'sending',
       at: stamp(),
       deadline: q.deadline,
@@ -298,7 +305,7 @@ export default function Review() {
     // A PAY to a private address comes back by text without to=: the key is the one the user gave.
     const q = privAddr && quoted.to === undefined ? { ...quoted, to: decodePrivateAddress(draft.to) ?? undefined } : quoted;
     setPq(q);
-    const refused = checkShieldedQuote(pdraft, q, draft.phone ? getState().shieldedPins[draft.phone] : undefined);
+    const refused = checkShieldedQuote(pdraft, q, pin ? getState().shieldedPins[pin] : undefined);
     if (refused) return fail('quote', new TransferError(refused.code, refused.message));
     void approvePrivate(q);
   };
@@ -328,8 +335,8 @@ export default function Review() {
     }
     mark('approve');
     holdNotes(network, signed.awaiting);
-    const address = draft.toAddress ?? (draft.phone ? getState().pins[draft.phone] : undefined);
-    if (!self && (address || privAddr)) rememberRecipient({ address: address ?? draft.to, phone: draft.phone, name: draft.label });
+    const address = draft.toAddress ?? (pin ? getState().pins[pin] : undefined);
+    if (!self && (address || privAddr)) rememberRecipient({ address: address ?? draft.to, phone: draft.phone, name: draft.label, enderId: draft.enderId });
     upsertTx({
       id: q.id,
       network,
@@ -338,8 +345,8 @@ export default function Review() {
       fee: q.fee,
       counterparty: shield ? NETWORKS[network].pool : merge ? undefined : address,
       phone: draft.phone,
-      ...(privAddr ? { to: draft.to } : {}),
-      label: shield ? 'Private balance' : merge ? 'Merged private notes' : (draft.label ?? (draft.phone ? phoneDisplay(draft.phone) : undefined)),
+      ...(privAddr || byName ? { to: draft.to } : {}),
+      label: shield ? 'Private balance' : merge ? 'Merged private notes' : (draft.label ?? draft.enderId ?? (draft.phone ? phoneDisplay(draft.phone) : undefined)),
       status: 'sending',
       at: stamp(),
       deadline: q.exp,
@@ -496,7 +503,8 @@ export default function Review() {
           ) : (
             <>
               <KV k="To" v={name} />
-              {draft.label && draft.phone ? <KV k="Number" v={phoneDisplay(draft.phone)} /> : null}
+              {draft.enderId && name !== draft.enderId ? <KV k="Ender ID" v={draft.enderId} /> : null}
+              {(draft.label || draft.enderId) && draft.phone ? <KV k="Number" v={phoneDisplay(draft.phone)} /> : null}
               {recipientAddress ? <KV k="Wallet" v={short(recipientAddress)} mono /> : null}
               {privAddr && draft.label ? <KV k="Address" v={short(draft.to)} mono /> : null}
               {priv ? (

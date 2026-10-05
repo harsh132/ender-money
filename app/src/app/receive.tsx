@@ -17,8 +17,9 @@ import { QR } from '../ui/QR';
 type Mode = 'public' | 'private';
 
 /**
- * Sheet: QR of the plain address (any wallet can read it), plus copy and share. On a network with a pool, a
- * Public / Private toggle shows the private address (ender1…) too, which takes private payments only.
+ * Sheet: the Ender ID and its pay page link (copy), the QR of the plain address (any wallet can read it), plus copy
+ * and share. On a network with a pool, a Public / Private toggle shows the private address (ender1…) too, which takes
+ * private payments only.
  */
 export default function Receive() {
   const wallet = useStore((s) => s.wallet);
@@ -26,7 +27,7 @@ export default function Receive() {
   const owner = useStore((s) => (isRegistered(s.network, s) ? s.shielded?.owner : undefined));
   const canShield = useStore((s) => isRegistered(s.network, s) && Number(s.account[s.network]?.balance ?? 0) > Number(MAX_FEE));
   const [mode, setMode] = useState<Mode>('public');
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'address' | 'link'>();
   const { bottom } = useSafeAreaInsets();
   const privateAddress = useMemo(() => {
     const packed = owner ? unb64(owner.replace(/=+$/, ''), 64) : null;
@@ -36,10 +37,11 @@ export default function Receive() {
 
   const priv = mode === 'private' && !!privateAddress;
   const shown = (priv && privateAddress) || wallet.address;
-  const copy = async () => {
-    await Clipboard.setStringAsync(shown);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  const link = wallet.enderId ? `https://${wallet.enderId}` : undefined;
+  const copy = async (what: 'address' | 'link') => {
+    await Clipboard.setStringAsync(what === 'link' ? link! : shown);
+    setCopied(what);
+    setTimeout(() => setCopied(undefined), 1500);
   };
 
   return (
@@ -49,6 +51,20 @@ export default function Receive() {
         <T v="title" style={{ flex: 1 }}>Receive</T>
         {network === 'testnet' ? <TestnetPill /> : null}
       </View>
+      {wallet.enderId ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Copy ${link}`}
+          onPress={() => copy('link')}
+          style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 20, backgroundColor: pressed ? c.surface2 : c.surface, borderWidth: 1, borderColor: c.line })}
+        >
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <T v="caption" style={{ color: c.fg3 }}>Your Ender ID</T>
+            <T numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: f.display, fontSize: 24, lineHeight: 30, color: c.fg, marginTop: 2 }}>{wallet.enderId}</T>
+          </View>
+          {copied === 'link' ? <T style={{ fontFamily: f.uiSemi, fontSize: 15, color: c.accent }}>Copied</T> : <Copy size={20} color={c.accent} />}
+        </Pressable>
+      ) : null}
       {privateAddress ? (
         <View style={{ flexDirection: 'row', alignSelf: 'flex-start', marginTop: 14, backgroundColor: c.surface, borderRadius: 999, borderWidth: 1, borderColor: c.line, padding: 4 }}>
           {(['public', 'private'] as const).map((m) => (
@@ -75,7 +91,7 @@ export default function Receive() {
       </T>
       {priv ? null : (
         <T v="meta" style={{ textAlign: 'center', marginTop: 12 }}>
-          Or just your number: {phoneDisplay(wallet.phone)}. We'll text you when money arrives.
+          {wallet.enderId ? 'Or your number' : 'Or just your number'}: {phoneDisplay(wallet.phone)}. We'll text you when money arrives.
         </T>
       )}
       <View style={{ flex: 1, minHeight: 24 }} />
@@ -90,7 +106,7 @@ export default function Receive() {
         />
       ) : null}
       <View style={{ flexDirection: 'row', gap: 12, marginBottom: 28 }}>
-        <Button title={copied ? 'Copied' : 'Copy'} kind="ghost" icon={<Copy size={20} />} onPress={copy} style={{ flex: 1 }} />
+        <Button title={copied === 'address' ? 'Copied' : 'Copy'} kind="ghost" icon={<Copy size={20} />} onPress={() => copy('address')} style={{ flex: 1 }} />
         <Button
           title="Share"
           icon={<ShareIcon size={20} color={c.accentInk} />}
@@ -98,7 +114,9 @@ export default function Receive() {
             Share.share({
               message: priv
                 ? `Pay me privately on Ender: ${shown}`
-                : `Pay me on Ender: ${phoneDisplay(wallet.phone)}\nOr send AUSD on Monad to ${wallet.address}`,
+                : link
+                  ? `Pay me on Ender: ${link}\nOr send AUSD on Monad to ${wallet.address}`
+                  : `Pay me on Ender: ${phoneDisplay(wallet.phone)}\nOr send AUSD on Monad to ${wallet.address}`,
             })
           }
           style={{ flex: 1 }}

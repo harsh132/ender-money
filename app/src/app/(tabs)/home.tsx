@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, Mask, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
@@ -16,6 +16,9 @@ import { Banner, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
 import { Sigil } from '../../ui/Sigil';
 import { TxRow } from '../../ui/TxRow';
 import { useQuickSend } from '../../ui/useQuickSend';
+
+/** Asked once per launch, for an account the gateway says has no Ender ID yet. */
+let askedForName = false;
 
 /** The faint dot grid behind the balance, fading out from the centre. */
 const DotGrid = () => (
@@ -50,6 +53,13 @@ export default function Home() {
   // More notes than one payment can spend: offer to fold 12 into one.
   const merge = useStore((s) => isRegistered(s.network, s) && canMerge(s.network, { notes: s.notes[s.network] ?? [], awaiting: s.awaiting[s.network] ?? [] }));
   const [split, setSplit] = useState(false);
+  const needsName = useStore((s) => s.wallet?.enderId === null);
+
+  useEffect(() => {
+    if (!needsName || askedForName) return;
+    askedForName = true;
+    router.push('/name');
+  }, [needsName]);
 
   const recent = useMemo(() => activity.filter((t) => t.network === network).sort((a, b) => b.at - a.at).slice(0, 5), [activity, network]);
   const publicBalance = snapshot?.balance ?? '0';

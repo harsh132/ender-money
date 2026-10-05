@@ -25,13 +25,13 @@ export type Tx = {
   counterparty?: Address;
   /** The number paid, for a private payment (to retry it). */
   phone?: string;
-  /** The private address (ender1…) paid, for a payment to one (to retry it). */
+  /** The private address (ender1…) or Ender ID (label.ender.my) paid, for a payment to one (to retry it). */
   to?: string;
   /** Through the private balance (shielded pool). */
   private?: true;
   /** Moved from the public to the private balance. */
   shield?: true;
-  /** Contact name or phone number, when we know one. */
+  /** Contact name, Ender ID or phone number, when we know one. */
   label?: string;
   status: TxStatus;
   txHash?: string;
@@ -40,12 +40,14 @@ export type Tx = {
   deadline?: number;
 };
 
-/** address: a 0x address (lowercase), or a private address (ender1…) paid directly. */
-export type Recipient = { address: string; phone?: string; name?: string; lastUsed: number };
+/** address: a 0x address (lowercase), or a private address (ender1…) paid directly. name: a contact name; enderId: label.ender.my. */
+export type Recipient = { address: string; phone?: string; name?: string; enderId?: string; lastUsed: number };
 
 export type Wallet = {
   phone: string;
   address: Address;
+  /** Our Ender ID (label.ender.my). null: the gateway says the account has none yet (the app asks); undefined: unknown. */
+  enderId?: string | null;
   credentialId: string;
   transports?: string[];
 };
@@ -61,7 +63,7 @@ export type State = {
   inr: number;
   activity: Tx[];
   recents: Recipient[];
-  /** phone -> address seen on the first transfer; a different answer later is flagged. */
+  /** phone or Ender ID -> address seen on the first transfer; a different answer later is flagged. */
   pins: Record<string, Address>;
   alerts: boolean;
   gateway: 'auto' | 'india' | 'international';
@@ -72,7 +74,7 @@ export type State = {
   shielded?: { owner: string; registered: NetworkName[] };
   notes: Partial<Record<NetworkName, CachedNote[]>>;
   awaiting: Partial<Record<NetworkName, Awaiting[]>>;
-  /** phone -> shielded address (base64) seen on the first private payment; a different one later is refused. */
+  /** phone or Ender ID -> shielded address (base64) seen on the first private payment; a different one later is refused. */
   shieldedPins: Record<string, string>;
   /** Settings' Auto-merge (networks with a pool): fold the 12 largest private notes while unlocked and online. Off by default. */
   autoMerge?: boolean;
@@ -169,13 +171,14 @@ export const rememberRecipient = (r: Omit<Recipient, 'lastUsed'>) =>
     const address = r.address.toLowerCase();
     const prev = s.recents.find((x) => x.address === address);
     const merged: Recipient = { ...prev, ...r, address, lastUsed: Date.now() };
+    const key = r.phone ?? r.enderId;
     return {
       recents: [merged, ...s.recents.filter((x) => x.address !== address)].slice(0, 20),
-      pins: r.phone && !s.pins[r.phone] ? { ...s.pins, [r.phone]: address as Address } : s.pins,
+      pins: key && !s.pins[key] ? { ...s.pins, [key]: address as Address } : s.pins,
     };
   });
 
 export const labelFor = (address: string, s: State = state) => {
   const r = s.recents.find((x) => x.address === address.toLowerCase());
-  return r?.name ?? r?.phone;
+  return r?.name ?? r?.enderId ?? r?.phone;
 };

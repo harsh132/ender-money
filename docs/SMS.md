@@ -282,7 +282,7 @@ step (`start`). Also "Text again" while waiting for the quote.
 
 | Field | Format |
 | --- | --- |
-| `to` | 0x address (42 chars) or E.164 number. Not an `ender1…` address (that is `PAY`) |
+| `to` | 0x address (42 chars), E.164 number, or Ender ID `label.ender.my` (any case; `@label` also parses; the app always sends the full lowercase form). Not an `ender1…` address (that is `PAY`) |
 | `amount` | AUSD amount, as above |
 | `> CTK` | Recipient gets CTK through Agora's testnet pair instead of AUSD |
 
@@ -294,12 +294,19 @@ SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 10.5 AUSD                  58
 [Test] SEND +919876543210, 20 AUSD                                          36
 [Test] SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 10.5 AUSD           67
 [Test] SEND 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 999999.999999 AUSD > CTK   82 (worst with a 13-char amount; CTK is testnet only)
+SEND harsh.ender.my, 20 AUSD                                                28
+[Test] SEND xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ender.my, 999999.999999 AUSD > CTK   79 (longest name: 30-char label)
 ```
+
+To an Ender ID the gateway resolves the name to its public address
+(`unknown-name` if nobody has it); the `Q` that follows carries that address in
+`to=`, which the app pins under the name as it does for a number.
 
 Gateway (`quote` in `core.ts`): testnet for `[Test] SEND`, mainnet without the
 prefix; it also becomes the number's current network. In order:
 `not-registered`, `unsupported` (CTK where the network has no pair, i.e.
 mainnet), `bad-amount`, `not-on-ender` (a number with no wallet),
+`unknown-name` (an Ender ID nobody has),
 `self-transfer`, `not-delegated`, `low-balance` (balance < amount + fee),
 `swap-unavailable` (CTK), `rpc-unavailable`, `busy` (no free id after 5
 tries), `internal`. All as `ERR <code>` (no id). A repeated `SEND` (same
@@ -424,6 +431,7 @@ quote step (`startPrivate`).
 | `to` | Kind | Meaning |
 | --- | --- | --- |
 | E.164 number | `pay` | Shielded transfer to that number's registered shielded address |
+| `label.ender.my` | `pay` | Shielded transfer to the registered shielded address of that Ender ID's account; `Q` carries it in `to=` (as for a number), so the app can pin it under the name |
 | `ender1…` | `pay` | Shielded transfer to that private address; its owner must be registered (matched by `owner_key` and `enc_pk`) |
 | 0x address | `withdraw` | Withdrawal from the pool to any address |
 
@@ -433,6 +441,8 @@ Examples:
 [Test] PAY +919876543210, 20 AUSD                                     35 septets
 [Test] PAY 0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc, 5 AUSD         63
 [Test] PAY ender1rreg3epk4xpk3zmh7sujagu783a06av4andq2dq8x37ye6z6gfe7r3xyxafcr5ggzcaag53fumarcwpcvmy62nc4lc823ktn46kkq2g7q6dx9, 20 AUSD   137
+[Test] PAY harsh.ender.my, 20 AUSD                                    36
+[Test] PAY xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ender.my, 999999.999999 AUSD   72 (longest name)
 ```
 
 Worst case, and the longest phone text: `ender1…` with `999999.999999`, 148
@@ -440,13 +450,14 @@ Worst case, and the longest phone text: `ender1…` with `999999.999999`, 148
 
 When the app takes this route: `decideRoute` says private when the network has
 a pool and the app is registered, delivery is AUSD, the recipient can take it
-(a 0x address, an `ender1…` address, or a number that is pinned or that
-`GET /shielded/address` knows; offline and unpinned means public), and the
+(a 0x address, an `ender1…` address, a number that is pinned or that
+`GET /shielded/address` knows, or an Ender ID that is pinned or whose
+`GET /names/:label` has a private address; offline and unpinned means public), and the
 private notes alone cover amount + `MAX_FEE` under the selection rule. An
 `ender1…` recipient is never paid publicly.
 
 Gateway (`shielded.quote`), as `ERR <code>` without id: `NOUSER` (sender not
-registered, or recipient not registered), `bad-amount`, `bad-recipient`,
+registered, or recipient not registered, or an Ender ID nobody has), `bad-amount`, `bad-recipient`,
 `syncing` (pool index still catching up), `FUNDS` (eligible notes < amount +
 fee), `MERGE` (more than 12 notes needed), `busy`, `internal`. `FUNDS` and
 `MERGE` come from the same rule the phone runs (`planCircuit`). Every `PAY`
@@ -625,7 +636,7 @@ proves with the gateway's own dummy inputs and sends
 | --- | --- |
 | `id` | The quote id the `SIG` named |
 | `amount` | The quote's amount (`0` for `MERGE`) |
-| `to` | `PAY` to a number: that number. `PAY` to `ender1…`: `ender1abcd...wxyz`, never its owner's number. Withdrawal: `shortHex` of the 0x address. `MERGE`: the sender's own number |
+| `to` | `PAY` to a number: that number. `PAY` to `ender1…`: `ender1abcd...wxyz`, never its owner's number. `PAY` to an Ender ID: the ID (`harsh.ender.my`), never its owner's number. Withdrawal: `shortHex` of the 0x address. `MERGE`: the sender's own number |
 | `tx` | `shortHex` of the transaction |
 | `p` | Tree position of output 0; our change, if any, is at `p+1`. Up to 8 digits. Absent for a withdrawal with no change (two null outputs, no leaves) |
 
@@ -637,7 +648,9 @@ Examples:
 [Test] Sent 7F3K 5 AUSD to=0x9965...dc tx=0xc6b9...fb p=14            60, 72
 [Test] Sent 7F3K 5 AUSD to=0x9965...dc tx=0xc6b9...fb                 55, 67
 [Test] Sent 7F3K 0 AUSD to=+919876543210 tx=0xc6b9...fb p=40          62, 74 (MERGE)
-[Test] Sent 7F3K 999999.999999 AUSD to=+123456789012345 tx=0xc6b9...fb p=99999999   83, 95 (worst)
+[Test] Sent 7F3K 20 AUSD to=harsh.ender.my tx=0xc6b9...fb p=2         63, 75
+[Test] Sent 7F3K 999999.999999 AUSD to=+123456789012345 tx=0xc6b9...fb p=99999999   83, 95
+[Test] Sent 7F3K 999999.999999 AUSD to=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ender.my tx=0xc6b9...fb p=99999999   106, 118 (worst: longest name)
 ```
 
 Only sent once the receipt is in (else `ERR <id> pending`); a repeated `SIG`
@@ -818,8 +831,9 @@ waiting for `Sent`, any `ERR` with that id or no id) fails the step.
 | `rpc-unavailable` | `SYNC`, `SEND`, `SIG` | Balance read failed | Gateway said |
 | `unsupported` | `SEND … > CTK` | No CTK pair on this network | "Not supported yet." |
 | `bad-amount` | `SEND`, `PAY`, `SHIELD` | Amount invalid (the parser catches it first) | "Check the amount." |
-| `bad-recipient` | `PAY` | Not a number, 0x or `ender1…` (the parser catches it first) | "That isn't a phone number, wallet address or private address." |
+| `bad-recipient` | `PAY` | Not a number, Ender ID, 0x or `ender1…` (the parser catches it first) | "That isn't a phone number, Ender ID, wallet address or private address." |
 | `not-on-ender` | `SEND` | Number not on Ender | Explains, offers "Invite them" |
+| `unknown-name` | `SEND` | Nobody has that Ender ID (`PAY` answers `NOUSER`) | "No one has that Ender ID." |
 | `self-transfer` | `SEND` | Recipient is the sender's wallet | "That's your own wallet." |
 | `not-delegated` | `SEND` | Wallet not delegated yet | "…still being set up…" |
 | `low-balance` | `SEND`, `SIG` | Balance < amount + fee | "Not enough balance…" |

@@ -44,6 +44,8 @@ const request = async <T,>(method: 'GET' | 'POST', path: string, body?: unknown,
 
 export type AccountInfo = {
   address: Address;
+  /** The Ender ID (`label.ender.my`); null for an account made before names, absent from an older gateway. */
+  name?: string | null;
   network: NetworkName;
   balance: string;
   nonce: string;
@@ -82,6 +84,9 @@ export type ActivityItem = {
   at: number;
 };
 
+/** `private`: their ender1… address, when they take private payments. */
+export type NameInfo = { name: string | null; address: Address; private?: string };
+
 export type AuthorizationJson = { address: Address; chainId: number; nonce: number; r: Hex; s: Hex; yParity: number };
 
 /** Shielded-pool quote (see /shielded/quote): to is a base64 shielded address (pay) or 0x (withdraw). */
@@ -93,15 +98,21 @@ export const api = {
   verifyAuth: (phone: string, code: string) =>
     request<
       | { token: string; status: 'new' }
-      | { token: string; status: 'existing'; address: Address; network: NetworkName; balance: string }
+      | { token: string; status: 'existing'; address: Address; network: NetworkName; balance: string; name?: string | null }
     >('POST', '/auth/verify', { phone, code }, ''),
-  createWallet: (token: string, body: { address: Address; authorizations: Partial<Record<NetworkName, AuthorizationJson>>; relink?: boolean }) =>
-    request<{ token: string; address: Address }>('POST', '/wallet/create', body, token),
+  /** `name`: the new account's Ender ID label (required unless the number or wallet already has one). */
+  createWallet: (token: string, body: { address: Address; authorizations: Partial<Record<NetworkName, AuthorizationJson>>; relink?: boolean; name?: string }) =>
+    request<{ token: string; address: Address; name?: string | null }>('POST', '/wallet/create', body, token),
   account: (network: NetworkName) => request<AccountInfo>('GET', `/account?network=${network}`),
   quote: (body: { network: NetworkName; to: string; amount: string; deliver?: 'AUSD' | 'CTK' }) => request<QuoteInfo>('POST', '/tx/quote', body),
   sign: (id: string, signature: Hex) => request<SignInfo>('POST', '/tx/sign', { id, signature }),
   tx: (id: string) => request<TxInfo>('GET', `/tx/${id}`),
   setAlerts: (on: boolean) => request<{ alerts: boolean }>('POST', '/account/alerts', { on }),
+  // Ender IDs. Lookups never return a phone number.
+  checkName: (label: string) => request<{ available: boolean; reason?: string }>('GET', `/names/check?label=${encodeURIComponent(label)}`, undefined, ''),
+  name: (label: string) => request<NameInfo>('GET', `/names/${encodeURIComponent(label)}`, undefined, ''),
+  nameByPhone: (phone: string) => request<NameInfo>('GET', `/names/by-phone?phone=${encodeURIComponent(phone)}`),
+  claimName: (name: string) => request<{ name: string }>('POST', '/account/name', { name }),
   activity: (network: NetworkName) => request<{ items: ActivityItem[] }>('GET', `/activity?network=${network}`),
 
   // Private balance (shielded pool). Bigints travel as decimal strings.

@@ -2,6 +2,7 @@
 import { bytesToBigInt, createPublicClient, http, parseUnits, type Address, type Hex, type LocalAccount } from 'viem';
 import { signedBatchTypedData, swapWithFee, transferWithFee } from '../../../protocol/calibur';
 import { AUSD_DECIMALS, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../../protocol/networks';
+import { parseEnderId } from '../../../protocol/names';
 import { isPrivateAddress } from '../../../protocol/recipient';
 import { owner, packAddress, provingKeys, type User } from '../../../protocol/shielded';
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
@@ -35,6 +36,8 @@ export const sync = async (network = getState().network): Promise<boolean> => {
     setState((s) => ({
       account: { ...s.account, [network]: { balance: a.balance, nonce: a.nonce, delegated: a.delegated, syncedAt: Date.now() } },
       ...(a.inr ? { inr: a.inr } : {}),
+      // null: an account made before Ender IDs, which Home then asks to pick one. An older gateway says nothing.
+      ...(a.name !== undefined && s.wallet ? { wallet: { ...s.wallet, enderId: a.name } } : {}),
     }));
     return true;
   } catch (e) {
@@ -273,7 +276,7 @@ export const autoMerge = async (network: NetworkName = getState().network): Prom
 };
 
 /**
- * Private or public for this payment. A number can take a private payment once
+ * Private or public for this payment. A number or Ender ID can take a private payment once
  * we've paid it privately (pinned) or the gateway knows its shielded address;
  * offline and unpinned means public. A private address (ender1…) takes private
  * payments only: 'public' for one means the private balance can't pay it.
@@ -282,11 +285,19 @@ export const decideRoute = async (d: Draft): Promise<'private' | 'public'> => {
   const s = getState();
   if (!isRegistered(d.network, s) || d.deliver === 'CTK') return 'public';
   let recipientPrivate = !!d.toAddress || isPrivateAddress(d.to);
+  const label = parseEnderId(d.to);
   if (d.phone)
     recipientPrivate =
       !!s.shieldedPins[d.phone] ||
       (await api.shieldedAddress(d.network, d.phone).then(
         () => true,
+        () => false,
+      ));
+  else if (label)
+    recipientPrivate =
+      !!s.shieldedPins[d.to] ||
+      (await api.name(label).then(
+        (r) => !!r.private,
         () => false,
       ));
   return chooseRoute({ recipientPrivate, cache: cacheOf(s, d.network), amount: d.amount, deliver: d.deliver });
@@ -311,7 +322,7 @@ export const applyOkReply = (r: Extract<Reply, { kind: 'ok' }>) =>
  * the key is already unlocked) and hand them to /wallet/create, which sends
  * the sponsored delegations and links the number.
  */
-export const createWallet = async (u: Unlocked, token: string, relink = false) => {
+export const createWallet = async (u: Unlocked, token: string, relink = false, name?: string) => {
   const authorizations: Partial<Record<NetworkName, AuthorizationJson>> = {};
   for (const name of Object.keys(NETWORKS) as NetworkName[]) {
     const { chain } = NETWORKS[name];
@@ -319,15 +330,17 @@ export const createWallet = async (u: Unlocked, token: string, relink = false) =
     const a = await u.account.signAuthorization!({ contractAddress: CALIBUR, chainId: chain.id, nonce });
     authorizations[name] = { address: a.address, chainId: a.chainId, nonce: a.nonce, r: a.r, s: a.s, yParity: a.yParity! };
   }
-  return api.createWallet(token, { address: u.address, authorizations, relink });
+  return api.createWallet(token, { address: u.address, authorizations, relink, ...(name ? { name } : {}) });
 };
 
 // ---------------------------------------------------------------- transfer
 
 export type Draft = {
   network: NetworkName;
-  /** What the user typed or picked: a 0x address, an E.164 number or a private address (ender1…). */
+  /** What the user typed or picked: a 0x address, an E.164 number, a private address (ender1…) or an Ender ID (label.ender.my). */
   to: string;
+  /** The recipient's Ender ID when known (display; `to` itself when paying the name). */
+  enderId?: string;
   /** Known up front for address recipients; for numbers the quote supplies it. */
   toAddress?: Address;
   phone?: string;
@@ -349,6 +362,9 @@ export class TransferError extends Error {
   }
 }
 
+/** What a recipient's first answer is pinned under: the number, or the Ender ID when paying one. */
+export const pinKey = (d: Pick<Draft, 'to' | 'phone'>) => d.phone ?? (parseEnderId(d.to) ? d.to : undefined);
+
 /** Never sign what the gateway made up: the recipient, fee and deadline must be what the user saw. */
 export const checkQuote = (draft: Draft, q: Quote): { pinChanged: boolean } => {
   if (draft.toAddress && q.to.toLowerCase() !== draft.toAddress.toLowerCase())
@@ -358,7 +374,8 @@ export const checkQuote = (draft: Draft, q: Quote): { pinChanged: boolean } => {
   if (q.deadline * 1000 < Date.now()) throw new TransferError('expired', 'That quote has expired. Try again.');
   if (draft.deliver === 'CTK' && !(q.out && Number(q.out) > 0))
     throw new TransferError('no-out', 'The quote came back without a CTK amount. Nothing was sent.');
-  const pinned = draft.phone ? getState().pins[draft.phone] : undefined;
+  const key = pinKey(draft);
+  const pinned = key ? getState().pins[key] : undefined;
   return { pinChanged: !!pinned && pinned !== q.to.toLowerCase() };
 };
 
@@ -379,7 +396,7 @@ const ERRORS: Record<string, string> = {
   'not-on-ender': "This number isn't on Ender yet. Invite them, then pay once they've signed up.",
   'low-balance': "Not enough balance for this amount plus the fee.",
   'self-transfer': "That's your own wallet.",
-  'bad-recipient': "That isn't a phone number, wallet address or private address.",
+  'bad-recipient': "That isn't a phone number, Ender ID, wallet address or private address.",
   'bad-amount': 'Check the amount.',
   'not-delegated': 'Your wallet is still being set up on this network. Try again in a minute.',
   'not-registered': 'This number has no wallet. Log in again.',
@@ -399,6 +416,11 @@ const ERRORS: Record<string, string> = {
   'bad-code': "That code isn't right.",
   'code-expired': 'That code has expired. Send a new one.',
   'bad-phone': 'Check the number.',
+  'unknown-name': 'No one has that Ender ID.',
+  'name-taken': 'That Ender ID was just taken. Pick another.',
+  'name-required': 'Choose your Ender ID first.',
+  'bad-name': "That Ender ID isn't allowed. Use 5 to 30 letters, numbers or hyphens.",
+  'name-already-set': 'You already have an Ender ID.',
   // Private payments (shielded pool).
   NOUSER: "This number can't take private payments yet.",
   FUNDS: 'Not enough private balance for this amount plus the fee.',

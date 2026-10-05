@@ -32,7 +32,7 @@ export default function CodeScreen() {
     setError(undefined);
     try {
       const r = await api.verifyAuth(phone, value);
-      onboarding.verified = r.status === 'new' ? { phone, token: r.token, status: 'new' } : { phone, token: r.token, status: 'existing', address: r.address, balance: r.balance };
+      onboarding.verified = r.status === 'new' ? { phone, token: r.token, status: 'new' } : { phone, token: r.token, status: 'existing', address: r.address, balance: r.balance, name: r.name };
       if (change) router.replace({ pathname: '/create', params: { mode: 'change' } });
       else router.replace(r.status === 'new' ? '/create' : '/restore');
     } catch (e) {

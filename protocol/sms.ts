@@ -1,7 +1,8 @@
 /**
  * The SMS protocol between the app and the gateway, in both directions.
  *
- * App → gateway: `SYNC`, `SEND <to>, <amount> AUSD[ > CTK]`, `SIG <id> <sig>`.
+ * App → gateway: `SYNC`, `SEND <to>, <amount> AUSD[ > CTK]`, `SIG <id> <sig>`. `<to>` is a 0x
+ * address, a +number or an Ender ID (`label.ender.my`); the gateway resolves the last two.
  * Gateway → app: `OK …`, `Q …`, `Sent …`, `ERR …`, plus alerts and OTPs.
  *
  * Every command the phone sends for testnet starts with `[Test] ` too (the
@@ -12,12 +13,12 @@
  * The older `SYNC T` still parses as testnet.
  *
  * Private payments (shielded pool, testnet only; see protocol/shielded.ts):
- *   `SEND` is always public. A private payment is `PAY <+number|ender1…|0x…>, <amount> AUSD`
- *   (to a number or a private address: a shielded transfer; to a 0x address: a
+ *   `SEND` is always public. A private payment is `PAY <+number|label.ender.my|ender1…|0x…>, <amount> AUSD`
+ *   (to a number, an Ender ID or a private address: a shielded transfer; to a 0x address: a
  *   withdrawal from the pool). `SHIELD <amount> AUSD` deposits from the user's
  *   own account; `MERGE` folds many notes into one. Replies:
  *   `Q <id> exp=… fee=…[ to=…]` (no `n=`, which is how it differs from the
- *   public quote; `to=` is the recipient's packed address for a PAY to a number,
+ *   public quote; `to=` is the recipient's packed address for a PAY to a number or an Ender ID,
  *   the 0x address for a withdrawal, and absent for SHIELD, MERGE and a PAY to
  *   an ender1 address, whose key the phone already has),
  *   `Sent <id> <amt> AUSD to=<to> tx=0x1234...ef[ p=<pos>]`, `Shielded <id> <amt> AUSD tx=… p=<pos>`,
@@ -40,6 +41,7 @@
  * `septets` refuses anything else.
  */
 import { bytesToBigInt, bytesToHex, getAddress, hexToBytes, isAddress, numberToBytes, type Address, type Hex } from 'viem';
+import { enderId, parseEnderId } from './names';
 import { isPhone, isPrivateAddress } from './recipient';
 
 export { isPhone, normalizePhone } from './recipient';
@@ -167,6 +169,19 @@ const unprefix = (raw: string): { text: string; network?: NetworkCode } => {
 };
 const withNetwork = <C extends object>(c: C | null, network?: NetworkCode) => (c && network ? { ...c, network } : c) as Parsed<C> | null;
 
+/**
+ * A recipient as the gateway takes it, or null: a 0x address (lowercased), an
+ * E.164 number, an Ender ID (`label.ender.my`, also read from `@label`) and,
+ * for PAY only, a private address (ender1…, lowercased).
+ */
+const recipientOf = (to: string, private_: boolean): string | null => {
+  if (isAddress(to)) return to.toLowerCase();
+  if (isPhone(to)) return to;
+  const label = parseEnderId(to);
+  if (label) return enderId(label);
+  return private_ && isPrivateAddress(to) ? to.toLowerCase() : null;
+};
+
 export const parseCommand = (raw: string): Parsed<Command> | null => {
   const { text, network } = unprefix(raw);
   const [word, ...rest] = text.split(' ');
@@ -180,9 +195,8 @@ export const parseCommand = (raw: string): Parsed<Command> | null => {
       const m = /^(\S+), ?(\S+) AUSD(?: > (CTK))?$/i.exec(rest.join(' '));
       if (!m) return null;
       const [, to, amount, ctk] = m;
-      const recipient = isAddress(to!) ? to!.toLowerCase() : to!;
-      if (!isAddress(recipient) && !isPhone(recipient)) return null;
-      if (!isAmount(amount!)) return null;
+      const recipient = recipientOf(to!, false);
+      if (!recipient || !isAmount(amount!)) return null;
       return withNetwork({ kind: 'send', to: recipient, amount: amount!, deliver: ctk ? 'CTK' : 'AUSD' } as const, network);
     }
     case 'SIG': {
@@ -221,8 +235,8 @@ const parseShielded = (text: string): ShieldedCommand | null => {
     case 'PAY': {
       const m = /^(\S+), ?(\S+) AUSD$/i.exec(rest.join(' '));
       if (!m) return null;
-      const to = isAddress(m[1]!) || isPrivateAddress(m[1]!) ? m[1]!.toLowerCase() : m[1]!;
-      if ((!isAddress(to) && !isPhone(to) && !isPrivateAddress(to)) || !isAmount(m[2]!)) return null;
+      const to = recipientOf(m[1]!, true);
+      if (!to || !isAmount(m[2]!)) return null;
       return { kind: 'pay', to, amount: m[2]! };
     }
     case 'SHIELD': {

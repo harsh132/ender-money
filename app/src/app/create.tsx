@@ -6,14 +6,20 @@ import { createWalletKey, lock, passkeyError, quickSend, unlockWallet, type Unlo
 import { onboarding } from '../lib/onboarding';
 import { getState, setState } from '../lib/store';
 import { c } from '../lib/theme';
+import { ApiError } from '../lib/api';
 import { createWallet, errorText, registerShielded, sync } from '../lib/wallet';
+import { ChooseName } from '../ui/ChooseName';
 import { Check, Fingerprint } from '../ui/icons';
 import { BackHeader, Banner, Button, Card, KV, Screen, Spinner, Steps, T } from '../ui/kit';
 
-type Phase = 'intro' | 'setting' | 'ready';
+type Phase = 'intro' | 'name' | 'setting' | 'ready';
+
+/** The gateway refused the Ender ID: back to choosing one. */
+const NAME_ERRORS = new Set(['name-taken', 'name-required', 'bad-name']);
 
 /**
- * N1 -> N2 -> N3. Modes:
+ * N1 -> Ender ID -> N2 -> N3. A new wallet picks its Ender ID after the passkey and before /wallet/create, which
+ * takes it; a relink keeps the one the number or wallet has (or asks, if the gateway says it needs one). Modes:
  * - new (default): fresh passkey, or "I already have an Ender passkey" to move this number to it
  * - relink: E2, a fresh wallet that takes the number over from a lost one
  * - change: Settings, the current wallet takes over a new number
@@ -25,6 +31,8 @@ export default function Create() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const key = useRef<Unlocked | null>(null);
+  const [label, setLabel] = useState<string>();
+  const [nameError, setNameError] = useState<string>();
   const [existing, setExisting] = useState(false);
 
   if (!verified) {
@@ -32,16 +40,22 @@ export default function Create() {
     return null;
   }
 
-  const setUp = async (useExisting = existing) => {
+  const setUp = async (useExisting = existing, name = label) => {
     const u = key.current!;
     setPhase('setting');
     setError(undefined);
     try {
       const relink = mode !== 'new' || useExisting;
-      const res = await createWallet(u, verified.token, relink);
+      const res = await createWallet(u, verified.token, relink, name);
       const prev = getState().wallet;
       setState({
-        wallet: { phone: verified.phone, address: res.address, credentialId: u.credential.credentialId, transports: u.credential.transports as string[] | undefined },
+        wallet: {
+          phone: verified.phone,
+          address: res.address,
+          credentialId: u.credential.credentialId,
+          transports: u.credential.transports as string[] | undefined,
+          enderId: res.name,
+        },
         token: res.token,
         ...(prev?.address.toLowerCase() === res.address.toLowerCase() ? {} : { network: 'mainnet', account: {}, activity: [] }),
       });
@@ -53,6 +67,10 @@ export default function Create() {
       if (mode === 'change') router.dismissTo('/settings');
       else setPhase('ready');
     } catch (e) {
+      if (e instanceof ApiError && NAME_ERRORS.has(e.code)) {
+        setNameError(e.code === 'name-required' ? undefined : errorText(e));
+        return setPhase('name');
+      }
       setError(errorText(e));
     }
   };
@@ -64,7 +82,8 @@ export default function Create() {
       quickSend.end();
       key.current = await open();
       setExisting(useExisting);
-      await setUp(useExisting);
+      if (mode === 'new' && !useExisting) setPhase('name');
+      else await setUp(useExisting);
     } catch (e) {
       const msg = passkeyError(e);
       if (msg) setError(msg);
@@ -74,6 +93,19 @@ export default function Create() {
   };
 
   const current = getState().wallet;
+
+  if (phase === 'name')
+    return (
+      <ChooseName
+        step={3}
+        error={nameError}
+        onSubmit={(l) => {
+          setLabel(l);
+          setNameError(undefined);
+          void setUp(existing, l);
+        }}
+      />
+    );
 
   if (phase === 'setting')
     return (
@@ -85,6 +117,7 @@ export default function Create() {
         <View style={{ marginTop: 32, gap: 4 }}>
           <Progress done title="Number verified" sub={phoneDisplay(verified.phone)} />
           <Progress done title={existing || mode === 'change' ? 'Passkey checked' : 'Passkey created'} />
+          {label ? <Progress done title="Ender ID" sub={`${label}.ender.my`} /> : null}
           <Progress done={false} failed={!!error} title="Setting up your wallet on Monad" sub="No fees for you. Ender covers it." last />
         </View>
         {error ? (
@@ -107,9 +140,10 @@ export default function Create() {
         </View>
         <T v="headline" style={{ textAlign: 'center', fontSize: 36 }}>You're all set</T>
         <T v="meta" style={{ fontSize: 18, lineHeight: 27, textAlign: 'center', marginTop: 12, marginHorizontal: 8 }}>
-          Anyone can pay you at your number, and we'll text you when money arrives.
+          Anyone can pay you at your {getState().wallet?.enderId ? 'Ender ID or number' : 'number'}, and we'll text you when money arrives.
         </T>
         <Card style={{ marginTop: 28 }}>
+          {getState().wallet?.enderId ? <KV k="Ender ID" v={getState().wallet!.enderId!} /> : null}
           <KV k="Number" v={phoneDisplay(verified.phone)} />
           <KV k="Balance" v={`$${getState().account.mainnet?.balance ?? '0.00'}`} last />
         </Card>

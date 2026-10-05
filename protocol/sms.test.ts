@@ -166,3 +166,24 @@ test('phone texts at their longest, with [Test]: all fit (no hash line on phone 
   expect(parseCommand(sig)).toBeNull();
   expect(b64(new Uint8Array(64).fill(255)).length).toBe(86);
 });
+
+test('Ender IDs in SEND and PAY: any case or @label in, label.ender.my out; the longest still fit with [Test]', () => {
+  const longest = `${'x'.repeat(30)}.ender.my`;
+  expect(parseCommand('SEND Harsh.Ender.My, 10 AUSD')).toEqual({ kind: 'send', to: 'harsh.ender.my', amount: '10', deliver: 'AUSD' });
+  expect(parseCommand('[Test] send @harsh,10 ausd > ctk')).toEqual({ kind: 'send', to: 'harsh.ender.my', amount: '10', deliver: 'CTK', network: 'testnet' });
+  expect(parseShieldedCommand('PAY harsh.ender.my, 2 AUSD')).toEqual({ kind: 'pay', to: 'harsh.ender.my', amount: '2' });
+  for (const bad of ['harsh', 'ab.ender.my', 'harsh.ender.eth', 'a.harsh.ender.my', 'support.ender.my', '-harsh.ender.my'])
+    expect(parseCommand(`SEND ${bad}, 10 AUSD`)).toBeNull();
+
+  const send = formatCommand({ kind: 'send', to: longest, amount: '999999.999999', deliver: 'CTK' }, 'testnet');
+  const pay = formatShieldedCommand({ kind: 'pay', to: longest, amount: '999999.999999' }, 'testnet');
+  expect([septets(send), septets(pay)]).toEqual([79, 72]);
+  expect(parseCommand(send)).toEqual({ kind: 'send', to: longest, amount: '999999.999999', deliver: 'CTK', network: 'testnet' });
+  expect(parseShieldedCommand(pay)).toEqual({ kind: 'pay', to: longest, amount: '999999.999999', network: 'testnet' });
+
+  // The private Sent names the ID it was paid to (never the number behind it).
+  const sent: Reply = { kind: 'sent', id: '7F3K', amount: '999999.999999', to: longest, tx: '0xab12...ef', p: 99999999 };
+  const text = withRetrieverHash(formatReply({ ...sent, test: true }), 'FA+9qCX9VSu');
+  expect(septets(text)).toBe(118);
+  expect(parseReply(text)).toEqual({ ...sent, test: true });
+});

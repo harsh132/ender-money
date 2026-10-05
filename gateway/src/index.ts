@@ -1,12 +1,16 @@
 import { isAddress, isHex, type Hex, type SignedAuthorization } from 'viem';
+import { validateLabel } from '../../protocol/names';
 import { isPhone } from '../../protocol/sms';
 import { isNetwork } from './chain';
 import { activity, setAlerts } from './activity';
 import { alchemyWebhook, syncAlchemy } from './alchemy';
 import { createWallet, startAuth, verifyAuth, TOKEN_TTL_SECONDS } from './auth';
+import { handleCcip } from './ccip';
 import { account, delegate, GatewayError, quote, reconcile, sign, txStatus } from './core';
 import type { Env } from './env';
 import { signJwt, verifyJwt } from './jwt';
+import * as names from './names';
+import { payPage } from './page';
 import * as shielded from './shielded';
 import { handleInbound } from './sms';
 
@@ -49,32 +53,43 @@ const sameSecret = (a: string, b: string) => {
   return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
 };
 
-/**
- * Android hands passkeys for ender.money only to apps whose signing key is
- * listed here. SHA-256 of the app's key (app/credentials/, never committed).
- */
-const ASSET_LINKS = [
-  {
-    relation: ['delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds'],
-    target: {
-      namespace: 'android_app',
-      package_name: 'money.ender.app',
-      sha256_cert_fingerprints: ['9A:6B:FE:68:54:2E:86:CE:08:FC:DE:C9:B6:C7:7E:57:35:A0:26:78:28:40:5E:D6:BA:AD:D1:42:D5:14:E6:DE'],
-    },
-  },
-];
+/** One binding, separate budgets: the key says whose and for what. */
+const limit = async (env: Env, key: string) => {
+  if (!(await env.IP_LIMITER.limit({ key })).success) throw new GatewayError('rate-limited', 429);
+};
 
 const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise<Response> => {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
+  const ip = request.headers.get('cf-connecting-ip') ?? 'local';
+
+  // https://<label>.ender.my: that Ender ID's pay page (route `*.ender.my/*`). www has an origin of its own.
+  const host = /^(.+)\.ender\.my$/.exec(url.hostname) ?? (env.DEV === '1' ? /^(.+)\.localhost$/.exec(url.hostname) : null);
+  if (host) {
+    if (host[1] === 'www') return fetch(request);
+    await limit(env, `page:${ip}`);
+    return payPage(env, request, host[1]!);
+  }
+
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
-  if (url.pathname === '/.well-known/assetlinks.json') return json(ASSET_LINKS);
+  // ENS (EnderResolver's CCIP-Read gateway URL): /ccip/{sender}/{data}.json and POST /ccip.
+  if (url.pathname === '/ccip' || url.pathname.startsWith('/ccip/')) {
+    await limit(env, `ccip:${ip}`);
+    return handleCcip(request, url, env);
+  }
 
   // Per-IP limit on everything a stranger can hammer: OTP sends and transfers.
-  if (/^\/(auth|tx|wallet|shielded)\//.test(url.pathname)) {
-    const ip = request.headers.get('cf-connecting-ip') ?? 'local';
-    if (!(await env.IP_LIMITER.limit({ key: ip })).success) throw new GatewayError('rate-limited', 429);
+  if (/^\/(auth|tx|wallet|shielded)\//.test(url.pathname)) await limit(env, ip);
+
+  // Ender IDs. Public, per IP: availability (the signup screen, while typing) and name -> addresses.
+  const label = /^\/names\/([^/]+)$/.exec(url.pathname)?.[1];
+  if (request.method === 'GET' && label && label !== 'check' && label !== 'by-phone') {
+    await limit(env, `names:${ip}`);
+    if (validateLabel(label)) throw new GatewayError('bad-name');
+    const found = await names.byLabel(env, label);
+    if (!found) throw new GatewayError('unknown-name', 404);
+    return json(found);
   }
 
   const txId = /^\/tx\/([23456789A-Za-z]{4})$/.exec(url.pathname)?.[1];
@@ -110,6 +125,29 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       const network = url.searchParams.get('network') ?? undefined;
       if (network !== undefined && !isNetwork(network)) throw new GatewayError('bad-network');
       return json(await activity(env, phone, network));
+    }
+
+    case 'GET /names/check': {
+      await limit(env, `names:${ip}`);
+      return json(await names.check(env, url.searchParams.get('label') ?? ''));
+    }
+
+    // Number -> Ender ID and addresses, for signed-in users only; limited per user and per IP. Never the other way.
+    case 'GET /names/by-phone': {
+      const me = await phoneFrom(env, request);
+      await limit(env, `lookup:${me}`);
+      await limit(env, `names:${ip}`);
+      const phone = url.searchParams.get('phone') ?? '';
+      if (!isPhone(phone)) throw new GatewayError('bad-phone');
+      const found = await names.byPhone(env, phone);
+      if (!found) throw new GatewayError('not-on-ender', 404);
+      return json(found);
+    }
+
+    // An account made before Ender IDs picks one, once.
+    case 'POST /account/name': {
+      const phone = await phoneFrom(env, request);
+      return json(await names.claim(env, phone, (await body<{ name?: unknown }>(request)).name));
     }
 
     case 'POST /account/alerts': {

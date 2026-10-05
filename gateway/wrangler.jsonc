@@ -8,8 +8,9 @@
 
   "routes": [
     { "pattern": "api.ender.money", "custom_domain": true },
-    // Passkey association for the app; the rest of ender.money is not ours to serve.
-    { "pattern": "ender.money/.well-known/assetlinks.json", "zone_name": "ender.money" }
+    // Ender ID pay pages, https://<label>.ender.my. Needs a proxied wildcard DNS record on ender.my (docs/gateway.md
+    // "Ender IDs"); the route can belong to one Worker only, so ender-backend's must go first.
+    { "pattern": "*.ender.my/*", "zone_name": "ender.my" }
   ],
 
   // A runaway request dies here; proving runs in the container, so nothing legitimate needs more.
@@ -21,7 +22,10 @@
     "FEE_AUSD": "0.01",
     "SMS_RETRIEVER_HASH": "IaTP8lLJOvM",
     // Where Alchemy's Address Activity webhooks deliver. Webhooks are made only once the ALCHEMY_AUTH_TOKEN secret is set.
-    "ALCHEMY_WEBHOOK_URL": "https://api.ender.money/webhooks/alchemy"
+    "ALCHEMY_WEBHOOK_URL": "https://api.ender.money/webhooks/alchemy",
+    // EnderResolver on Ethereum mainnet (ender-backend/contracts, deployed by 0x3f87…a2d3): /ccip signs for it. The
+    // signing key is the RESOLVER_SIGNER_KEY secret; without it /ccip answers 503.
+    "RESOLVER_ADDRESS": "0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B"
   },
 
   "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } }],

@@ -107,6 +107,11 @@ export default function Settings() {
 
         <Label>Account</Label>
         <Group>
+          {wallet.enderId ? (
+            <Row title="Ender ID" sub={wallet.enderId} onPress={() => router.push('/receive')} />
+          ) : wallet.enderId === null ? (
+            <Row title="Ender ID" sub="Choose yours" onPress={() => router.push('/name')} />
+          ) : null}
           <Row title="Phone number" sub={phoneMasked(wallet.phone)} onPress={() => router.push({ pathname: '/phone', params: { change: '1' } })} />
           <Row title="Wallet" sub={short(wallet.address)} mono onPress={() => router.push('/receive')} />
           <Row

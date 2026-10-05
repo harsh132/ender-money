@@ -1,7 +1,42 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "mockups", "runtimeExecutable": "python", "runtimeArgs": ["-m", "http.server", "4173", "-d", "docs"], "port": 4173 },
-    { "name": "app-web", "runtimeExecutable": "node", "runtimeArgs": ["app/node_modules/expo/bin/cli", "start", "app", "--web", "--port", "8083"], "port": 8083 }
+    {
+      "name": "mockups",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4173",
+        "-d",
+        "docs"
+      ],
+      "port": 4173
+    },
+    {
+      "name": "app-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "app/node_modules/expo/bin/cli",
+        "start",
+        "app",
+        "--web",
+        "--port",
+        "8083"
+      ],
+      "port": 8083
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4174",
+        "-d",
+        "site/public"
+      ],
+      "port": 4174
+    }
   ]
 }

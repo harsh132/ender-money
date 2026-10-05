@@ -33,7 +33,8 @@ export default function Restore() {
         return;
       }
       setState({
-        wallet: { phone: v.phone, address: v.address, credentialId: credential.credentialId },
+        // A wallet without an Ender ID yet (null) is asked for one on Home.
+        wallet: { phone: v.phone, address: v.address, credentialId: credential.credentialId, enderId: v.name },
         token: v.token,
         network: 'mainnet',
         account: { mainnet: { balance: v.balance, nonce: '0', delegated: true, syncedAt: Date.now() } },
