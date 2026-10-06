@@ -89,7 +89,7 @@ export const verifyAuth = async (env: Env, rawPhone: unknown, code: unknown) => 
 
 type AuthorizationJson = { address: Address; chainId: number; nonce: number; r: `0x${string}`; s: `0x${string}`; yParity: number };
 
-const parseAuthorization = (a: unknown): SignedAuthorization => {
+export const parseAuthorization = (a: unknown): SignedAuthorization => {
   const x = a as Partial<AuthorizationJson> | undefined;
   if (
     !x ||

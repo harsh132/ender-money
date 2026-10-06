@@ -85,6 +85,9 @@ export default function Receive() {
       <T v="meta" style={{ marginTop: 10 }}>
         {priv ? 'Your private address. Takes private payments from Ender only' : `Your AUSD address on Monad${network === 'testnet' ? ' testnet' : ''}`}
       </T>
+      {priv || network === 'testnet' ? null : (
+        <T v="meta" style={{ marginTop: 4 }}>Also takes tokens on Ethereum, Base, Arbitrum and Polygon. They arrive as AUSD.</T>
+      )}
       <View style={{ alignSelf: 'center', marginTop: 24, marginBottom: 18, padding: 22, borderRadius: 28, backgroundColor: c.fg }}>
         <QR value={shown} size={216} />
       </View>

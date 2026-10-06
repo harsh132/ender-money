@@ -10,7 +10,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 import { isDelegatedToCalibur } from '../../protocol/calibur';
 import { MULTICALL3, NETWORKS, type NetworkName } from '../../protocol/networks';
-import { publicClient, tokenSenders } from './chain';
+import { chainOf, publicClient, tokenSenders, type ChainName } from './chain';
 import type { Env } from './env';
 
 /** A user's signed Calibur `execute` call, or a signup's 7702 authorization. */
@@ -20,9 +20,11 @@ export type SponsorItem =
   | { kind: 'plain'; target: Address; data: Hex }
   /**
    * A gateway-side call that must come from the gateway key itself (msg.sender), not through Multicall3: the
-   * shielded pool's transact / depositWithAuthorization. Sent alone, in queue order; succeeds if it doesn't revert.
+   * shielded pool's transact / depositWithAuthorization, or an auto-bridge (bridge.ts): the user's Calibur `execute`
+   * on their own address, with their 7702 authorization when they aren't delegated there yet. Sent alone, in queue
+   * order; succeeds if it doesn't revert.
    */
-  | { kind: 'direct'; target: Address; data: Hex }
+  | { kind: 'direct'; target: Address; data: Hex; authorizationList?: SignedAuthorization[] }
   | { kind: 'delegation'; account: Address; authorization: SignedAuthorization };
 
 export type SponsorResult =
@@ -57,6 +59,7 @@ const aggregate3 = (calls: Pending[]) =>
 
 /**
  * The gateway key on one network: the only sender, so the only nonce owner.
+ * Also one per auto-bridge chain (named after it), which only gets direct items.
  *
  * Queued items go out as one EIP-7702 transaction to Multicall3: the calldata
  * runs every queued user's Calibur `execute`, and the authorization list
@@ -72,9 +75,9 @@ const aggregate3 = (calls: Pending[]) =>
 export class Sponsor extends DurableObject<Env> {
   private queue: Pending[] = [];
   private busy = false;
-  private network?: NetworkName;
+  private network?: ChainName;
 
-  submit(network: NetworkName, item: SponsorItem): Promise<SponsorResult> {
+  submit(network: ChainName, item: SponsorItem): Promise<SponsorResult> {
     this.network ??= network;
     if (this.network !== network) throw new Error(`sponsor for ${this.network} got ${network}`);
     const result = new Promise<SponsorResult>((resolve) => this.queue.push({ item, resolve }));
@@ -101,23 +104,22 @@ export class Sponsor extends DurableObject<Env> {
   }
 
   private async sendDirect(p: Pending) {
-    const { target, data } = p.item as Extract<SponsorItem, { kind: 'direct' }>;
+    const { target, data, authorizationList } = p.item as Extract<SponsorItem, { kind: 'direct' }>;
     const pub = publicClient(this.env, this.network!);
     const gateway = privateKeyToAccount(this.env.GATEWAY_PRIVATE_KEY as Hex);
     try {
-      await pub.call({ account: gateway.address, to: target, data });
+      await pub.call({ account: gateway.address, to: target, data, authorizationList });
     } catch (error) {
       console.warn('sponsor: direct call reverts', error instanceof Error ? error.message.split('\n')[0] : error);
       return p.resolve({ ok: false, error: 'reverted' });
     }
     const [gas, fees, nonce] = await Promise.all([
-      pub.estimateGas({ account: gateway.address, to: target, data }),
+      pub.estimateGas({ account: gateway.address, to: target, data, authorizationList }),
       pub.estimateFeesPerGas(),
       pub.getTransactionCount({ address: gateway.address, blockTag: 'pending' }),
     ]);
     const serializedTransaction = await gateway.signTransaction({
-      type: 'eip1559',
-      chainId: NETWORKS[this.network!].chain.id,
+      chainId: chainOf(this.network!).id,
       nonce,
       to: target,
       data,
@@ -125,6 +127,7 @@ export class Sponsor extends DurableObject<Env> {
       gas: (gas * GAS_MARGIN_PERCENT) / 100n,
       maxFeePerGas: fees.maxFeePerGas,
       maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+      ...(authorizationList ? { type: 'eip7702' as const, authorizationList } : { type: 'eip1559' as const }),
     });
     const txHash = await pub.sendRawTransaction({ serializedTransaction });
     try {
@@ -136,7 +139,7 @@ export class Sponsor extends DurableObject<Env> {
   }
 
   private async send(batch: Pending[]) {
-    const network = this.network!;
+    const network = this.network as NetworkName;
     const net = NETWORKS[network];
     const pub = publicClient(this.env, network);
     const gateway = privateKeyToAccount(this.env.GATEWAY_PRIVATE_KEY as Hex);

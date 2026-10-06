@@ -1,6 +1,7 @@
 /** HTTPS client for the gateway. Times out fast so a dead connection falls back to SMS. */
 import type { Address, Hex } from 'viem';
 import type { NetworkName } from '../../../protocol/networks';
+import type { BridgePrepared, BridgeSubmit } from './bridge';
 import { GATEWAY_URL, HTTP_TIMEOUT_MS } from './config';
 import { getState } from './store';
 
@@ -126,4 +127,11 @@ export const api = {
     request<{ tx: Hex; p?: number; pending?: true }>('POST', '/shielded/submit', body, undefined, 60_000),
   shieldedAddress: (network: NetworkName, phone: string) =>
     request<{ owner: string }>('GET', `/shielded/address?network=${network}&phone=${encodeURIComponent(phone)}`),
+
+  // Auto-bridge (lib/bridge.ts): balances on Ethereum, Base, Arbitrum and Polygon into AUSD on Monad mainnet.
+  bridgePending: () => request<{ items: { chainId: number; token: Address }[] }>('GET', '/bridge/pending'),
+  // The gateway quotes Relay and simulates the batch to price its fee.
+  bridgePrepare: (body: { chainId: number; token: Address }) => request<BridgePrepared>('POST', '/bridge/prepare', body, undefined, 20_000),
+  // Simulated, sent, and its receipt waited for before the answer.
+  bridgeSubmit: (body: BridgeSubmit) => request<{ txHash: Hex; pending?: true }>('POST', '/bridge/submit', body, undefined, 60_000),
 };

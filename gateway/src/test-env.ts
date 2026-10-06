@@ -20,7 +20,10 @@ export const d1 = (): D1Database => {
     first: async () => (db.query(sql).get(...params) as unknown) ?? null,
     all: async () => ({ results: db.query(sql).all(...params), success: true, meta: {} }),
     run: async () => ({ success: true, meta: { changes: db.query(sql).run(...params).changes } }),
-    exec: () => ({ results: db.query(sql).all(...params), success: true, meta: {} }),
+    exec: () => {
+      const results = db.query(sql).all(...params);
+      return { results, success: true, meta: { changes: (db.query('SELECT changes() AS n').get() as { n: number }).n } };
+    },
   });
   return {
     prepare: (sql: string) => stmt(sql),

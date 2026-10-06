@@ -2,6 +2,31 @@
 
 Deliberately deferred. Newest first.
 
+- **Auto-bridge (6 Oct).**
+  - Only fungible tokens Relay can route: NFTs, illiquid and spam tokens stay
+    where they landed (a token Relay refuses waits a week, or until more
+    arrives). Nothing to recover them from the app yet.
+  - Ethereum, Base, Arbitrum and Polygon only. Optimism (and other chains
+    Relay and Calibur both cover) is one entry in `BRIDGE_CHAINS`, an Alchemy
+    network and an RPC each.
+  - The gateway can't verify that the quote the app signed carried our app
+    fee (no keyless Relay lookup by request id): a modified app gets free gas
+    for its own bridges. Check `GET /requests/v3` (needs a Relay API key)
+    after the fact and stop bridging for accounts that skip the fee, or move
+    the fee into the batch as an on-chain transfer the gateway can check.
+  - Our fee comes back as USDC at Relay while gas is paid in ETH / POL: the
+    gateway key is topped up by hand. No alert beyond the log line.
+  - Mainnet only, and only while the app shows mainnet, is online and
+    unlocked; tokens that arrive meanwhile wait. Testnet has no Relay route.
+  - Ender IDs resolve (ENS) to the Monad address only; per-chain ENS
+    addresses (ENSIP-11 coin types for Ethereum, Base, Arbitrum, Polygon)
+    would let senders on those chains pay `label.ender.my` directly.
+  - The Monad fill still sends a `Received` text naming Relay's solver
+    address; it could say "from Base" instead.
+  - On a lost connection after submit, the row stays "Arriving" until Relay's
+    status settles it, or expires 5 minutes after the signed deadline if
+    Relay never saw the deposit.
+
 - **Auto Shield (6 Oct).**
   - Online only, and only while a Quick send session holds the key: money
     that arrives while the app is locked or offline stays public until the

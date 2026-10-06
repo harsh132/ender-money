@@ -10,6 +10,8 @@ import { Sigil } from './Sigil';
 const STATUS = { sending: 'Sending', sent: 'Sent', failed: 'Failed', expired: 'Expired' } as const;
 
 const metaText = (tx: Tx) => {
+  // A bridge from another chain: on its way until Relay's fill lands.
+  if (tx.bridge && tx.status !== 'sent') return `${tx.status === 'sending' ? 'Arriving' : STATUS[tx.status]} · ${time(tx.at)}`;
   if (tx.direction === 'in') return `Received · ${time(tx.at)}`;
   if (tx.status === 'sending' && tx.deadline && tx.deadline * 1000 > Date.now()) return `Sending · ${countdown(tx.deadline * 1000 - Date.now())} left`;
   if (tx.status === 'failed' || tx.status === 'expired') return `${STATUS[tx.status]} · tap to retry`;

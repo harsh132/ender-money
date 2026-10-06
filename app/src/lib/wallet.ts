@@ -1,12 +1,14 @@
 /** Account sync, signup and the pieces of a transfer, shared by the screens. */
 import { bytesToBigInt, createPublicClient, http, parseUnits, type Address, type Hex, type LocalAccount } from 'viem';
+import { relayQuote, relayStatus } from '../../../protocol/bridge';
 import { signedBatchTypedData, swapWithFee, transferWithFee } from '../../../protocol/calibur';
-import { AUSD_DECIMALS, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../../protocol/networks';
+import { AUSD_DECIMALS, BRIDGE_CHAINS, bridgeChainOf, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, NETWORKS, type NetworkName } from '../../../protocol/networks';
 import { MAX_LABEL, MIN_LABEL, parseEnderId } from '../../../protocol/names';
 import { isPrivateAddress } from '../../../protocol/recipient';
 import { owner, packAddress, provingKeys, type User } from '../../../protocol/shielded';
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
 import { api, ApiError, OfflineError, type ActivityItem, type AuthorizationJson } from './api';
+import { bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge } from './bridge';
 import { MAX_FEE } from './config';
 import { fileReceived, smsTwin, type Received } from './inbox';
 import { quickSend, type Unlocked } from './keys';
@@ -54,11 +56,12 @@ export const sync = async (network = getState().network): Promise<boolean> => {
   }
 };
 
-/** Pull to refresh: balance, then the status of transfers still sending, then incoming payments; then Auto Shield may run. */
+/** Pull to refresh: balance, then the status of transfers and bridges still going, then incoming payments; then Auto Shield and Auto-bridge may run. */
 export const refresh = async () => {
   if (!(await sync())) return false;
-  await Promise.all([refreshPending(), pullActivity(), pullNotes()]);
+  await Promise.all([refreshPending(), refreshBridges(), pullActivity(), pullNotes()]);
   void autoShield();
+  void autoBridge();
   return true;
 };
 
@@ -99,6 +102,12 @@ const pullActivity = async () => {
     // A Received text got here first: the full row replaces it.
     const twin = smsTwin(getState().activity, network, it);
     if (twin) setState((s) => ({ activity: s.activity.filter((t) => t !== twin) }));
+    // A bridge's AUSD landing (Relay's fill): the bridge's own row shows it, with what actually arrived.
+    const bridged = it.direction === 'in' && getState().activity.find((t) => t.bridge && t.txHash?.toLowerCase() === it.txHash.toLowerCase());
+    if (bridged) {
+      if (bridged.amount !== it.amount) upsertTx({ id: bridged.id, amount: it.amount });
+      continue;
+    }
     const local = getState().activity;
     if (local.some((t) => t.txHash?.toLowerCase() === it.txHash.toLowerCase() && t.counterparty === it.counterparty)) continue;
     // A shield moves amount + fee to the pool.
@@ -409,6 +418,104 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
       void autoMerge(network);
     }
   }
+};
+
+// ---------------------------------------------------------------- auto-bridge
+
+let bridging = false;
+/** After the list itself fails (an older gateway, say), triggers wait this long; so does one balance we refused. */
+const BRIDGE_BACKOFF_MS = 10 * 60_000;
+let bridgeRetryAt = 0;
+const bridgeSkip = new Map<string, number>();
+
+/**
+ * Auto-bridge: tokens that reached our address on Ethereum, Base, Arbitrum or
+ * Polygon become AUSD here on Monad mainnet, through Relay (lib/bridge.ts). No
+ * setting; online and unlocked like Auto Shield, from the same triggers (a
+ * refresh, the foreground). For each balance the gateway lists, it prices its
+ * fee and gives the nonces; we fetch Relay's quote ourselves (to us, AUSD on
+ * Monad, that fee to the recipient we ship), check and sign it, and the
+ * gateway sends it, paying the gas. A balance someone refuses only logs: the
+ * gateway lists it again later, or when more arrives.
+ */
+export const autoBridge = async (): Promise<void> => {
+  if (bridging || Date.now() < bridgeRetryAt) return;
+  bridging = true;
+  const ready = async () => shouldAutoBridge({ network: getState().network, unlocked: !!quickSend.get(), online: true }) && (await online());
+  try {
+    if (!(await ready())) return;
+    const { items } = await api.bridgePending();
+    for (const it of items) {
+      const key = `${it.chainId}:${it.token}`;
+      if (Date.now() < (bridgeSkip.get(key) ?? 0)) continue;
+      try {
+        await bridgeOne(it.chainId, it.token);
+      } catch (e) {
+        if (e instanceof OfflineError) throw e;
+        if (!(e instanceof ApiError)) bridgeSkip.set(key, Date.now() + BRIDGE_BACKOFF_MS);
+        console.warn('auto-bridge:', e instanceof ApiError ? e.code : e instanceof Error ? e.message : e);
+      }
+    }
+  } catch (e) {
+    console.warn('auto-bridge:', e instanceof ApiError ? e.code : e instanceof Error ? e.message : e);
+    if (!(e instanceof OfflineError)) bridgeRetryAt = Date.now() + BRIDGE_BACKOFF_MS;
+  } finally {
+    bridging = false;
+  }
+};
+
+const bridgeOne = async (chainId: number, token: Address) => {
+  const p = await api.bridgePrepare({ chainId, token });
+  const refused = checkPrepared(p);
+  if (refused) throw new Error(refused);
+  const me = quickSend.get()?.unlocked.address;
+  if (!me) return;
+  const quote = await relayQuote({ user: me, originChainId: chainId, token, amount: BigInt(p.amount), bps: p.bps });
+  // Locked meanwhile: the prepared bridge just expires.
+  const session = quickSend.get();
+  if (!session) return;
+  const body = await signBridge(session.unlocked.account, p, quote);
+  const id = `bridge:${p.id}`;
+  const bridge = { chainId, requestId: body.requestId };
+  upsertTx({
+    id,
+    network: 'mainnet',
+    direction: 'in',
+    amount: quote.details.currencyOut.amountFormatted,
+    label: `From ${BRIDGE_CHAINS[bridgeChainOf(chainId)!].label}`,
+    status: 'sending',
+    at: Date.now(),
+    deadline: body.deadline,
+    bridge,
+  });
+  try {
+    const r = await api.bridgeSubmit(body);
+    upsertTx({ id, bridge: { ...bridge, tx: r.txHash } });
+  } catch (e) {
+    // Refused: nothing moved, nothing to show. Lost connection: it may have gone; Relay's status tells (refreshBridges).
+    if (!(e instanceof OfflineError)) setState((s) => ({ activity: s.activity.filter((t) => t.id !== id) }));
+    throw e;
+  }
+};
+
+/** Bridges on their way, settled by Relay's status; the fill's own incoming row, if already pulled, goes. */
+const refreshBridges = async () => {
+  const going = getState().activity.filter((t) => t.bridge?.requestId && t.status === 'sending');
+  await Promise.all(
+    going.map(async (t) => {
+      const r = await relayStatus(t.bridge!.requestId!).catch(() => undefined);
+      if (!r) return;
+      const status = bridgeOutcome(r.status);
+      if (!status) {
+        // Relay never saw the deposit and the batch's deadline is long past: it never will.
+        if (r.status === 'waiting' && t.deadline && t.deadline * 1000 + 5 * 60_000 < Date.now()) upsertTx({ id: t.id, status: 'expired' });
+        return;
+      }
+      const fill = status === 'sent' ? r.txHashes?.[0]?.toLowerCase() : undefined;
+      upsertTx({ id: t.id, status, ...(fill ? { txHash: fill } : {}) });
+      if (fill) setState((s) => ({ activity: s.activity.filter((x) => x.bridge || x.direction !== 'in' || x.txHash?.toLowerCase() !== fill) }));
+    }),
+  );
 };
 
 /**

@@ -4,6 +4,7 @@ import { isPhone } from '../../protocol/sms';
 import { isNetwork } from './chain';
 import { activity, setAlerts } from './activity';
 import { alchemyWebhook, syncAlchemy } from './alchemy';
+import * as bridge from './bridge';
 import { createWallet, startAuth, verifyAuth, TOKEN_TTL_SECONDS } from './auth';
 import { handleCcip } from './ccip';
 import { account, delegate, GatewayError, quote, reconcile, sign, txStatus } from './core';
@@ -80,7 +81,7 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
   }
 
   // Per-IP limit on everything a stranger can hammer: OTP sends and transfers.
-  if (/^\/(auth|tx|wallet|shielded)\//.test(url.pathname)) await limit(env, ip);
+  if (/^\/(auth|tx|wallet|shielded|bridge)\//.test(url.pathname)) await limit(env, ip);
 
   // Ender IDs. Public, per IP: availability (the signup screen, while typing) and name -> addresses.
   const label = /^\/names\/([^/]+)$/.exec(url.pathname)?.[1];
@@ -217,6 +218,23 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       const phone = url.searchParams.get('phone') ?? '';
       if (!isPhone(phone)) throw new GatewayError('bad-phone');
       return json(await shielded.shieldedAddress(env, shieldedNetwork(url.searchParams.get('network') ?? undefined), phone));
+    }
+
+    // Auto-bridge (bridge.ts): tokens at the user's address on Ethereum, Base, Arbitrum and Polygon, into AUSD on Monad.
+    case 'GET /bridge/pending':
+      return json(await bridge.pending(env, await phoneFrom(env, request)));
+
+    case 'POST /bridge/prepare': {
+      const phone = await phoneFrom(env, request);
+      return json(await bridge.prepare(env, phone, await body(request)));
+    }
+
+    case 'POST /bridge/submit': {
+      const phone = await phoneFrom(env, request);
+      // Finish even if the app gives up waiting: it learns the outcome from Relay's status.
+      const settled = bridge.submit(env, phone, await body(request));
+      ctx.waitUntil(settled.catch(() => {}));
+      return json(await settled);
     }
 
     // Address activity from Alchemy; proves itself by signature.

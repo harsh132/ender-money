@@ -25,7 +25,14 @@
     "ALCHEMY_WEBHOOK_URL": "https://api.ender.money/webhooks/alchemy",
     // EnderResolver on Ethereum mainnet (ender-backend/contracts, deployed by 0x3f87…a2d3): /ccip signs for it. The
     // signing key is the RESOLVER_SIGNER_KEY secret; without it /ccip answers 503.
-    "RESOLVER_ADDRESS": "0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B"
+    "RESOLVER_ADDRESS": "0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B",
+    // Auto-bridge (docs/gateway.md "Auto-bridge"): the Relay app fee pays our gas × markup + flat USD; a balance under
+    // the minimum, or whose fee would pass the cap, waits. BRIDGE_FEE_RECIPIENT is unset: the gateway key's address,
+    // which the app ships. JSON-RPC there is Alchemy's with the ALCHEMY_API_KEY secret, public endpoints behind it.
+    "BRIDGE_GAS_MARKUP": "1.3",
+    "BRIDGE_FEE_FLAT_USD": "0",
+    "BRIDGE_MAX_FEE_PCT": "5",
+    "BRIDGE_MIN_USD": "1"
   },
 
   "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } }],

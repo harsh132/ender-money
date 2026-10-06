@@ -1,11 +1,31 @@
-import { createPublicClient, http, parseAbi, parseEventLogs, type Address, type TransactionReceipt } from 'viem';
-import { NETWORKS, type NetworkName } from '../../protocol/networks';
+import { createPublicClient, fallback, http, parseAbi, parseEventLogs, type Address, type Chain, type TransactionReceipt } from 'viem';
+import { BRIDGE_CHAINS, NETWORKS, type BridgeChainName, type NetworkName } from '../../protocol/networks';
 import type { Env } from './env';
 
 export const isNetwork = (n: unknown): n is NetworkName => n === 'mainnet' || n === 'testnet';
 
+/** Monad (mainnet, testnet), or a chain whose tokens auto-bridge into it. */
+export type ChainName = NetworkName | BridgeChainName;
+
+export const chainOf = (n: ChainName): Chain => (isNetwork(n) ? NETWORKS[n].chain : BRIDGE_CHAINS[n].chain);
+
+/** Alchemy's JSON-RPC host for each bridge chain, and a public endpoint that backs it up (or stands in without a key). */
+const BRIDGE_RPC: Record<BridgeChainName, { alchemy: string; public: string }> = {
+  ethereum: { alchemy: 'eth-mainnet', public: 'https://eth.drpc.org' },
+  base: { alchemy: 'base-mainnet', public: 'https://mainnet.base.org' },
+  arbitrum: { alchemy: 'arb-mainnet', public: 'https://arb1.arbitrum.io/rpc' },
+  polygon: { alchemy: 'polygon-mainnet', public: 'https://polygon.drpc.org' },
+};
+
 export const rpcUrl = (env: Env, network: NetworkName) =>
   (network === 'mainnet' ? env.RPC_MAINNET : env.RPC_TESTNET) || NETWORKS[network].chain.rpcUrls.default.http[0]!;
+
+const rpcUrls = (env: Env, n: ChainName): string[] => {
+  if (isNetwork(n)) return [rpcUrl(env, n)];
+  const own = env[`RPC_${n.toUpperCase()}` as 'RPC_BASE'];
+  if (own) return [own];
+  return [...(env.ALCHEMY_API_KEY ? [`https://${BRIDGE_RPC[n].alchemy}.g.alchemy.com/v2/${env.ALCHEMY_API_KEY}`] : []), BRIDGE_RPC[n].public];
+};
 
 /**
  * No JSON-RPC batching: viem's batch scheduler shares one pending request
@@ -13,11 +33,11 @@ export const rpcUrl = (env: Env, network: NetworkName) =>
  * resolved from another request's context. Reads that belong together go
  * through Multicall3 instead.
  */
-export const publicClient = (env: Env, network: NetworkName) =>
-  createPublicClient({
-    chain: NETWORKS[network].chain,
-    transport: http(rpcUrl(env, network), { timeout: 15_000 }),
-  });
+export const publicClient = (env: Env, n: ChainName) => {
+  const urls = rpcUrls(env, n);
+  const transport = urls.length === 1 ? http(urls[0], { timeout: 15_000 }) : fallback(urls.map((u) => http(u, { timeout: 15_000 })));
+  return createPublicClient({ chain: chainOf(n), transport });
+};
 
 const transferEvent = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)']);
 

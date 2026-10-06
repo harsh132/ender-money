@@ -33,6 +33,11 @@ export type Tx = {
   shield?: true;
   /** Between our own balances (a merge, a withdrawal to our own wallet, the pool side of a shield): kept to settle, never listed. */
   internal?: true;
+  /**
+   * Auto-bridge: tokens from our address on another chain, arriving as AUSD (direction in, "From Base"). requestId is
+   * Relay's, whose status settles it; tx is the origin chain's transaction. txHash is the Monad fill, once landed.
+   */
+  bridge?: { chainId: number; requestId?: string; tx?: string };
   /** Contact name, Ender ID, ENS name or phone number, when we know one. */
   label?: string;
   status: TxStatus;

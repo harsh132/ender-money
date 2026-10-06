@@ -54,6 +54,18 @@ never by text, never on mainnet (no pool). One of Auto-merge and Auto Shield
 runs at a time. With it on, Home shows one balance (public + private) and no
 Make private; with it off, the split and Make private come back.
 
+Auto-bridge (`lib/bridge.ts`, `autoBridge` in wallet.ts; no setting): tokens
+sent to our address on Ethereum, Base, Arbitrum or Polygon become AUSD here on
+Monad mainnet through Relay. Online, unlocked and showing mainnet, after a
+refresh or on coming to the foreground, it asks the gateway what arrived; per
+balance the gateway prices its fee (bps, paying its gas) and gives the nonces,
+and the app fetches the Relay quote itself (to itself, AUSD on Monad, that fee
+to the recipient it ships, never over 5%), checks it, signs the Calibur batch
+for that chain (and the 7702 authorization the first time there) and hands it
+to the gateway to send. One Activity row per bridge ("From Base", the AUSD
+amount, "Arriving" until Relay reports success); the arriving AUSD transfer is
+merged into it. Receive mentions the other chains in one line.
+
 Activity lists only payments to and from others. Shields, merges and
 withdrawals to our own wallet (and the pool transfers the online history shows
 for them) are kept to settle but never listed (`listed` in store.ts), so their

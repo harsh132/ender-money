@@ -35,6 +35,23 @@ export type Env = {
   ALCHEMY_AUTH_TOKEN?: string;
   /** Where Alchemy delivers: this Worker's POST /webhooks/alchemy. */
   ALCHEMY_WEBHOOK_URL?: string;
+  /** Alchemy API key (dashboard → Apps): JSON-RPC on the auto-bridge chains, public endpoints behind it (chain.ts). */
+  ALCHEMY_API_KEY?: string;
+  /** One auto-bridge chain's JSON-RPC instead of Alchemy's and the public one (tests, a fork). */
+  RPC_ETHEREUM?: string;
+  RPC_BASE?: string;
+  RPC_ARBITRUM?: string;
+  RPC_POLYGON?: string;
+  /** Auto-bridge (bridge.ts): the app fee pays our gas times this... */
+  BRIDGE_GAS_MARKUP?: string;
+  /** ...plus this many USD... */
+  BRIDGE_FEE_FLAT_USD?: string;
+  /** ...unless that is over this percent of the amount (then the balance waits)... */
+  BRIDGE_MAX_FEE_PCT?: string;
+  /** ...or the amount is under this many USD. */
+  BRIDGE_MIN_USD?: string;
+  /** Where Relay accrues the app fee; defaults to the gateway key's address. The app ships the same address and refuses another. */
+  BRIDGE_FEE_RECIPIENT?: string;
   /** EnderResolver on Ethereum: CCIP-Read answers (/ccip) are signed for this address. Unset, /ccip answers 503. */
   RESOLVER_ADDRESS?: string;
   /** secp256k1 key the resolver trusts (its `signers`). Can point any name anywhere: a secret, never logged. */

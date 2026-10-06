@@ -14,19 +14,32 @@
  *
  * Inbound: POST /webhooks/alchemy, signed with that key.
  *
+ * Auto-bridge: the same, on Ethereum, Base, Arbitrum and Polygon. There any
+ * incoming ERC-20 or native transfer to a linked address is noted in
+ * foreign_balances, for the app to bridge into AUSD on Monad (bridge.ts).
+ *
  * Unset ALCHEMY_AUTH_TOKEN (or ALCHEMY_WEBHOOK_URL, or SHIELDED_KEY_SECRET),
  * none of this runs and no incoming transfers are recorded.
  */
-import type { Address, Hex } from 'viem';
-import { NETWORKS, type NetworkName } from '../../protocol/networks';
+import { isAddress, type Address, type Hex } from 'viem';
+import { NATIVE } from '../../protocol/bridge';
+import { BRIDGE_CHAINS, NETWORKS, type BridgeChainName, type NetworkName } from '../../protocol/networks';
 import { alertAll, record, type Transfer } from './activity';
+import { isNetwork, type ChainName } from './chain';
 import type { Env } from './env';
 import { openKey, sealKey } from './shielded';
 
 const API = 'https://dashboard.alchemy.com/api';
 
 /** Alchemy's network enum, as `alchemy app chains` lists it. */
-const ALCHEMY_NETWORK: Record<NetworkName, string> = { mainnet: 'MONAD_MAINNET', testnet: 'MONAD_TESTNET' };
+const ALCHEMY_NETWORK: Record<ChainName, string> = {
+  mainnet: 'MONAD_MAINNET',
+  testnet: 'MONAD_TESTNET',
+  ethereum: 'ETH_MAINNET',
+  base: 'BASE_MAINNET',
+  arbitrum: 'ARB_MAINNET',
+  polygon: 'MATIC_MAINNET',
+};
 
 /** Alchemy's limit on one Address Activity webhook. */
 export const WEBHOOK_CAPACITY = 100_000;
@@ -51,7 +64,7 @@ const notify = async <T>(env: Env, method: string, path: string, body: unknown):
 };
 
 /** Push one batch: onto the network's webhook with room, or a new one if none has any. */
-const register = async (env: Env, network: NetworkName, addresses: string[]) => {
+const register = async (env: Env, network: ChainName, addresses: string[]) => {
   const hook = await env.DB.prepare('SELECT id, addresses FROM alchemy_webhooks WHERE network = ? AND addresses < ? ORDER BY addresses DESC LIMIT 1')
     .bind(network, WEBHOOK_CAPACITY)
     .first<{ id: string; addresses: number }>();
@@ -83,7 +96,7 @@ const register = async (env: Env, network: NetworkName, addresses: string[]) => 
 };
 
 /**
- * Push every linked address not yet on a webhook, on both networks.
+ * Push every linked address not yet on a webhook, on every network (Monad's two and the four auto-bridge chains).
  *
  * Never throws: a network Alchemy can't take right now is logged and left for
  * the next cron run.
@@ -94,7 +107,7 @@ const register = async (env: Env, network: NetworkName, addresses: string[]) => 
  */
 export const syncAlchemy = async (env: Env) => {
   if (!env.ALCHEMY_AUTH_TOKEN || !env.ALCHEMY_WEBHOOK_URL || !env.SHIELDED_KEY_SECRET) return;
-  for (const network of Object.keys(NETWORKS) as NetworkName[]) {
+  for (const network of Object.keys(ALCHEMY_NETWORK) as ChainName[]) {
     try {
       for (let i = 0; i < MAX_BATCHES; i++) {
         const { results } = await env.DB.prepare(
@@ -132,6 +145,8 @@ type Activity = {
   category?: string;
   rawContract?: { address?: string; rawValue?: string };
   log?: { logIndex?: string; blockNumber?: string; removed?: boolean };
+  erc721TokenId?: string;
+  erc1155Metadata?: unknown;
 };
 
 type Delivery = { webhookId?: string; createdAt?: string; type?: string; event?: { activity?: Activity[] } };
@@ -154,13 +169,14 @@ export const alchemyWebhook = async (request: Request, env: Env, ctx: ExecutionC
   const id = String(delivery?.webhookId ?? '');
   const hook = await env.DB.prepare('SELECT network, signing_key FROM alchemy_webhooks WHERE id = ?')
     .bind(id)
-    .first<{ network: NetworkName; signing_key: string }>();
+    .first<{ network: ChainName; signing_key: string }>();
   const key = hook && (await openKey(env.SHIELDED_KEY_SECRET, hook.signing_key, aad(id)).catch(() => null));
   if (!hook || !key || !(await signedBy(body, request.headers.get('x-alchemy-signature'), key))) {
     console.warn('alchemy: rejected an unsigned delivery');
     return new Response('unauthorized', { status: 401 });
   }
   if (delivery.type !== 'ADDRESS_ACTIVITY') return Response.json({ recorded: 0 });
+  if (!isNetwork(hook.network)) return Response.json({ recorded: await recordForeign(env, hook.network, delivery.event?.activity ?? []) });
 
   // When Alchemy saw it; the payload carries no block time.
   const at = Math.floor(Date.parse(delivery.createdAt ?? '') / 1000) || now();
@@ -186,4 +202,32 @@ export const alchemyWebhook = async (request: Request, env: Env, ctx: ExecutionC
   const recorded = await record(env, hook.network, transfers);
   ctx.waitUntil(alertAll(env, recorded));
   return Response.json({ recorded: recorded.ours.length });
+};
+
+/**
+ * An auto-bridge chain's delivery: each incoming ERC-20 (`token`) or native (`external`, or `internal` from a
+ * contract) transfer to a linked address notes (address, chain, token) for the app to bridge, and clears any wait
+ * on it. NFTs, removed logs and zero amounts are skipped; what isn't ours writes nothing.
+ */
+const recordForeign = async (env: Env, chain: BridgeChainName, activity: Activity[]) => {
+  const chainId = BRIDGE_CHAINS[chain].chain.id;
+  const t = now();
+  const seen = new Set<string>();
+  for (const a of activity) {
+    if (a.log?.removed || a.erc721TokenId || a.erc1155Metadata || typeof a.toAddress !== 'string' || !isAddress(a.toAddress)) continue;
+    const token = a.category === 'token' ? a.rawContract?.address : a.category === 'external' || a.category === 'internal' ? NATIVE : undefined;
+    if (!token || !isAddress(token) || !isHexNumber(a.rawContract?.rawValue) || BigInt(a.rawContract.rawValue) === 0n) continue;
+    seen.add(`${a.toAddress.toLowerCase()}|${token.toLowerCase()}`);
+  }
+  if (!seen.size) return 0;
+  const results = await env.DB.batch(
+    [...seen].map((k) => {
+      const [address, token] = k.split('|');
+      return env.DB.prepare(
+        `INSERT INTO foreign_balances (address, chain_id, token, seen_at, retry_at) SELECT ?, ?, ?, ?, 0 WHERE EXISTS (SELECT 1 FROM links WHERE address = ?)
+         ON CONFLICT (address, chain_id, token) DO UPDATE SET seen_at = excluded.seen_at, retry_at = 0`,
+      ).bind(address!, chainId, token!, t, address!);
+    }),
+  );
+  return results.reduce((n, r) => n + (r.meta?.changes ?? 0), 0);
 };

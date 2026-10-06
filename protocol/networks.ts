@@ -1,4 +1,4 @@
-import { monad, monadTestnet } from 'viem/chains';
+import { arbitrum, base, mainnet, monad, monadTestnet, polygon } from 'viem/chains';
 import type { Address, Chain } from 'viem';
 
 export type NetworkName = 'mainnet' | 'testnet';
@@ -62,3 +62,20 @@ export const NETWORKS: Record<NetworkName, Network> = {
     poolDeployBlock: 68154262n,
   },
 };
+
+/**
+ * Chains whose tokens auto-bridge into AUSD on Monad mainnet through Relay
+ * (protocol/bridge.ts): the same address takes tokens there. Calibur is
+ * deployed at CALIBUR on each, with the same bytecode.
+ */
+export type BridgeChainName = 'ethereum' | 'base' | 'arbitrum' | 'polygon';
+
+export const BRIDGE_CHAINS: Record<BridgeChainName, { chain: Chain; label: string }> = {
+  ethereum: { chain: mainnet, label: 'Ethereum' },
+  base: { chain: base, label: 'Base' },
+  arbitrum: { chain: arbitrum, label: 'Arbitrum' },
+  polygon: { chain: polygon, label: 'Polygon' },
+};
+
+export const bridgeChainOf = (chainId: unknown) =>
+  (Object.keys(BRIDGE_CHAINS) as BridgeChainName[]).find((n) => BRIDGE_CHAINS[n].chain.id === chainId);

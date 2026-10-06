@@ -15,7 +15,7 @@ import { onSms, pump } from '../../modules/sms-retriever';
 import { c } from '../lib/theme';
 import { hydrate, useStore } from '../lib/store';
 import { acceptReply, onReply } from '../lib/transport';
-import { applyOkReply, applyReceived, applyShieldedReply, autoMerge, autoShield } from '../lib/wallet';
+import { applyOkReply, applyReceived, applyShieldedReply, autoBridge, autoMerge, autoShield } from '../lib/wallet';
 
 void SplashScreen.preventAutoHideAsync();
 void hydrate();
@@ -39,7 +39,8 @@ export default function Root() {
 
   // Android: the SMS Retriever, re-armed on every foreground, after each text and every 4 minutes while open (its window
   // is 5). Elsewhere a no-op; the clipboard and Paste reply still work everywhere.
-  // Back in the foreground with a Quick send session still open (after the SMS composer, say): Auto-merge and Auto Shield may run.
+  // Back in the foreground with a Quick send session still open (after the SMS composer, say): Auto-merge, Auto Shield and
+  // Auto-bridge may run.
   useEffect(() => {
     const off = onSms((body) => void acceptReply(body));
     void pump();
@@ -49,6 +50,7 @@ export default function Root() {
       void pump();
       void autoMerge();
       void autoShield();
+      void autoBridge();
     });
     return () => {
       off();

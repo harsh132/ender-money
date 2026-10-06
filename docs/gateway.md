@@ -101,7 +101,8 @@ Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
 | Ender ID routes | `GET /names/check`, `GET /names/:label`, `GET /names/by-phone`, `POST /account/name`, `/ccip`: see "Ender IDs" |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
 | `POST /webhooks/twilio` | inbound SMS; checks `X-Twilio-Signature` |
-| `POST /webhooks/alchemy` | Alchemy Address Activity deliveries; `X-Alchemy-Signature` must be the hex HMAC-SHA256 of the raw body under the key of the webhook the body names (else 401). Records AUSD transfers and alerts, below |
+| `POST /webhooks/alchemy` | Alchemy Address Activity deliveries; `X-Alchemy-Signature` must be the hex HMAC-SHA256 of the raw body under the key of the webhook the body names (else 401). Records AUSD transfers and alerts, below; on the auto-bridge chains, notes incoming tokens (see "Auto-bridge") |
+| `GET /bridge/pending`, `POST /bridge/prepare {chainId, token}`, `POST /bridge/submit {id, calls, nonce, deadline, signature, authorization?, requestId?}` | Auto-bridge: see "Auto-bridge" |
 
 ## SMS commands
 
@@ -688,6 +689,153 @@ through to its own origin. Locally (`DEV=1`) pages answer at
 
    Then check: `cast resolve-name <label>.ender.my --rpc-url $ETH_RPC_URL`
    returns the address `GET /names/<label>` shows.
+
+## Auto-bridge
+
+The address is the same on every EVM chain, so people send it tokens on other
+chains too. On Ethereum, Base, Arbitrum and Polygon those are swapped and
+bridged by Relay (relay.link, no API key) into AUSD at the same address on
+Monad mainnet. Mainnet only: Relay has no route to Monad testnet. Code:
+`bridge.ts`, the shared checks in `protocol/bridge.ts`, the app's side in
+`app/src/lib/bridge.ts` and `autoBridge` (wallet.ts).
+
+**Detection.** `syncAlchemy` makes Address Activity webhooks on
+`ETH_MAINNET`, `BASE_MAINNET`, `ARB_MAINNET` and `MATIC_MAINNET` as it does on
+Monad, with every linked address (six webhooks in all). A delivery there
+writes one `foreign_balances` row per (address, chain, token) for each
+incoming ERC-20 (`token`) or native (`external`, `internal`) transfer to a
+linked address; NFTs, removed logs and zero amounts are skipped, and nothing
+is texted. The balance itself is always read live. JSON-RPC on those chains is
+Alchemy's (`ALCHEMY_API_KEY` secret; the Notify token can't do RPC) with a
+public endpoint behind it, or only the public one without the key
+(`chain.ts`; `RPC_BASE` etc. override one chain, for tests and forks).
+
+**Flow** (the app, online with a Quick send session open, after a refresh or
+on coming to the foreground; no setting):
+
+1. `GET /bridge/pending`: `{items: [{chainId, token}]}`, the rows not waiting
+   out a refusal (`retry_at`).
+2. `POST /bridge/prepare {chainId, token}`: reads the whole balance, the
+   address's code, transaction count and Calibur nonce there; asks Relay for a
+   draft quote (EXACT_INPUT, user = recipient = the address, AUSD on 143, no
+   app fee); simulates the quote's calls as the user (`eth_estimateGas` with
+   Multicall3's code put at the address by a state override, plus a constant
+   for Calibur's own work and 25k for a delegation); prices the fee (below).
+   Stores a `bridges` row and returns `{id, chainId, token, amount, amountUsd,
+   bps, feeRecipient, nonce, delegated, authNonce}`. Refusals:
+   `nothing-to-bridge` (404, row deleted), `unsupported-token` (Relay 400, e.g.
+   no route), `unsupported-route` (a step that isn't approve + deposit to
+   Relay), `too-small`, `fee-too-high`, `reverted` (422; the row waits a week,
+   or an hour for a fee or a revert, or until more arrives), `has-code` (409,
+   the address is delegated elsewhere there), `sponsor-low` (503).
+3. The app fetches the final quote from Relay itself, with
+   `appFees: [{recipient: BRIDGE_FEE_RECIPIENT, fee: bps}]`, checks it, signs
+   the Calibur batch of its steps (domain chainId = the origin chain) and, if
+   `delegated` is false, a 7702 authorization (chainId = the origin chain,
+   nonce = `authNonce`).
+4. `POST /bridge/submit`: claims the row (once, within 10 minutes), checks the
+   batch (below), the signature against the batch, the nonce and a deadline at
+   most 15 minutes off, and an authorization if the row needs one (Calibur,
+   that chain, signed by the address, nonce = its transaction count now).
+   Then simulates the exact transaction (`eth_estimateGas` with the
+   authorization list) and refuses `reverted`, or `gas-rose` (409) if gas ×
+   gas price (+ L1) now exceeds what the fee pays for, or `sponsor-low` (503).
+   The Sponsor DO named after the chain sends it: one EIP-7702 (type 4)
+   transaction from the gateway key to the user's address, calling Calibur
+   `execute` with the user's batch, the authorization in its list only when
+   needed (else EIP-1559). Returns `{txHash}` (or `pending: true` on a receipt
+   timeout); the `foreign_balances` row goes. The app follows Relay's
+   `/intents/status/v3` from there.
+
+One transaction, all or nothing: the gateway never fronts a delegation, so it
+pays gas only when the bridge (and its fee) happens.
+
+**What the gateway accepts** (`checkBridgeCalls`, shared with the app): one or
+two calls. The last goes to one of Relay's contracts (depository
+`0x4cd00e38…bc31`, approvalProxy `0xccc88a9d…15be`, erc20Router
+`0xb92fe925…ff4f`, relayReceiver `0xa5f56565…9934`, the same on all four
+chains, from Relay's `GET /chains`). For the chain's coin that's the only call,
+with value = the whole prepared balance. For a token, the first is the token's
+own `approve` to that same contract for at most the amount, and the deposit
+carries no value. A deposit to the depository itself must name the user as
+depositor (where refunds go), the token and the amount. Chain in the
+allowlist, user = the signed-in number's address.
+
+**Fee.** Relay's app fee, sized to our gas:
+
+```
+cost_wei = gas × gas_price (+ Base's L1 data fee, GasPriceOracle.getL1FeeUpperBound)
+fee_usd  = cost_wei / 1e18 × BRIDGE_GAS_MARKUP × native_usd + BRIDGE_FEE_FLAT_USD
+bps      = ceil(fee_usd / amount_usd × 10,000), at least 1
+```
+
+`native_usd` is Relay's price (`GET /currencies/token/price`), `amount_usd`
+the draft quote's `currencyIn.amountUsd`. Skipped below `BRIDGE_MIN_USD` or
+above `BRIDGE_MAX_FEE_PCT`. Submit refuses (`gas-rose`) a transaction costing
+more than `cost_wei × BRIDGE_GAS_MARKUP` at prepare; the app prepares again on
+its next trigger. Fees accrue off-chain at Relay, in USDC, to
+`BRIDGE_FEE_RECIPIENT`.
+
+| Var | Default | |
+| --- | --- | --- |
+| `BRIDGE_GAS_MARKUP` | `1.3` | on our gas cost |
+| `BRIDGE_FEE_FLAT_USD` | `0` | added per bridge |
+| `BRIDGE_MAX_FEE_PCT` | `5` | a fee above this share of the amount: the balance waits (the app also refuses above 5%, `BRIDGE_MAX_BPS`) |
+| `BRIDGE_MIN_USD` | `1` | smaller balances wait |
+| `BRIDGE_FEE_RECIPIENT` | the gateway key's address | must equal the app's `BRIDGE_FEE_RECIPIENT` (protocol/bridge.ts) or the app refuses; change both together |
+| `ALCHEMY_API_KEY` (secret) | unset: public RPCs | JSON-RPC on the four chains |
+
+**Self-custody: the app fetches the quote it signs.** The gateway only names a
+fee in bps and the nonces; the app builds the Relay request itself (user and
+recipient = its own address, AUSD on 143, the fee to the recipient it ships,
+bps ≤ 5%) and refuses a quote that isn't to itself, for the whole prepared
+amount of that token on that chain, into AUSD on Monad, through approve +
+Relay's contracts only (`checkBridgeQuote`). Relay binds the destination to
+the request id in the deposit, so whoever fetches the quote picks the
+recipient: had the gateway fetched it, the app couldn't tell. The cost of this
+choice: the gateway can't prove the quote carried our app fee (Relay has no
+keyless lookup of a quote by request id). A modified app could bridge its own
+tokens with the gateway paying gas and no fee. It is bounded (its own funds,
+to itself, `BRIDGE_MIN_USD`, per-IP limits, a phone-verified account) and
+visible afterwards in Relay's per-request data; see docs/todo.md.
+
+**Activity.** The app shows one row per bridge, "From Base" with the AUSD
+amount, "Arriving" until Relay reports `success` (then the Monad fill's hash,
+and the amount that actually arrived); `refund` / `failure` show failed. The
+fill's own incoming AUSD transfer (from Relay's solver) is merged into that
+row, not listed again. The gateway still texts a `Received` for it.
+
+### Turning it on (owner steps)
+
+1. **Migration**: `bun run gateway:migrate:remote` applies
+   `0009_bridge.sql` (`foreign_balances`, `bridges`).
+2. **Alchemy**: the next cron run makes the four new webhooks with every
+   linked address (check the plan allows six webhooks). Optionally
+   `wrangler secret put ALCHEMY_API_KEY -c gateway/wrangler.jsonc` (an app key
+   with Ethereum, Base, Arbitrum and Polygon enabled) for RPC; without it the
+   public endpoints in `chain.ts` serve.
+3. **Fund the gateway key** `0x458E8F51EC2B833209b5C71372376eeb1e40af08` (the
+   same address on every chain) with native gas on each. A bridge is about
+   125-135k gas with a delegation, ~100k after; prepare refuses unless the key
+   holds twice the bridge's priced cost. Starting amounts: Ethereum 0.02 ETH
+   (~50 bridges at 3 gwei), Base 0.002 ETH, Arbitrum 0.002 ETH, Polygon 10 POL
+   (each hundreds to thousands of bridges). The fees come back as USDC at
+   Relay, not as gas: top up by hand. A low key logs `bridge: the gateway key
+   is low on <chain>` and refuses with `sponsor-low`.
+4. **Claim fees**: `GET https://api.relay.link/app-fees/0x458E8F51EC2B833209b5C71372376eeb1e40af08/balances`
+   shows what accrued; claim at https://relay.link/claim-app-fees with that
+   key, or `POST /app-fees/{address}/claim` with its EIP-191 signature
+   (https://docs.relay.link/features/app-fees).
+5. **Vars** are in `wrangler.jsonc` with the defaults above.
+
+Test: `bridge.test.ts` (fee math, prepare and submit against a mocked RPC and
+Relay), `protocol/bridge.test.ts` (batch and quote checks),
+`app/src/lib/bridge.test.ts`. `BRIDGE_E2E=1 bun test gateway/src/bridge.e2e.test.ts`
+forks Base with anvil (`BRIDGE_FORK_URL`, default `https://mainnet.base.org`),
+gives a fresh EOA USDC, gets a real Relay quote, signs with the app's code and
+submits through the gateway's: one type-4 transaction delegates the address
+and moves the USDC into Relay's depository (measured: 123.5k gas, priced at
+~134k).
 
 ## Not in the gateway
 

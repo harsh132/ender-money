@@ -116,26 +116,25 @@ const pushed = (network: string) => rows<{ address: string }>('SELECT address FR
 // ---------------------------------------------------------------- webhook management
 
 describe('syncAlchemy', () => {
-  test('first sync creates one webhook per network with every linked address, key sealed', async () => {
+  test('first sync creates one webhook per network (Monad and the four auto-bridge chains) with every linked address, key sealed', async () => {
     await link(ALICE);
     await link(BOB, 1);
     await syncAlchemy(env);
-    expect(notifyCalls).toEqual([
-      {
+    expect(notifyCalls).toEqual(
+      ['MONAD_MAINNET', 'MONAD_TESTNET', 'ETH_MAINNET', 'BASE_MAINNET', 'ARB_MAINNET', 'MATIC_MAINNET'].map((network) => ({
         method: 'POST',
         path: 'create-webhook',
-        body: { network: 'MONAD_MAINNET', webhook_type: 'ADDRESS_ACTIVITY', webhook_url: 'https://gateway.test/webhooks/alchemy', addresses: [ALICE.address, BOB.address] },
-      },
-      {
-        method: 'POST',
-        path: 'create-webhook',
-        body: { network: 'MONAD_TESTNET', webhook_type: 'ADDRESS_ACTIVITY', webhook_url: 'https://gateway.test/webhooks/alchemy', addresses: [ALICE.address, BOB.address] },
-      },
-    ]);
-    const hooks = await rows<{ id: string; network: string; signing_key: string; addresses: number }>('SELECT * FROM alchemy_webhooks ORDER BY network');
+        body: { network, webhook_type: 'ADDRESS_ACTIVITY', webhook_url: 'https://gateway.test/webhooks/alchemy', addresses: [ALICE.address, BOB.address] },
+      })),
+    );
+    const hooks = await rows<{ id: string; network: string; signing_key: string; addresses: number }>('SELECT * FROM alchemy_webhooks ORDER BY id');
     expect(hooks.map((h) => [h.id, h.network, h.addresses])).toEqual([
       ['wh_1', 'mainnet', 2],
       ['wh_2', 'testnet', 2],
+      ['wh_3', 'ethereum', 2],
+      ['wh_4', 'base', 2],
+      ['wh_5', 'arbitrum', 2],
+      ['wh_6', 'polygon', 2],
     ]);
     for (const h of hooks) {
       expect(h.signing_key).not.toContain(SIGNING_KEY);
@@ -166,14 +165,11 @@ describe('syncAlchemy', () => {
     await createWallet(env, ALICE.phone, { address: owner.address, authorizations, name: 'alice' });
 
     const me = owner.address.toLowerCase();
-    expect(notifyCalls).toEqual([
-      { method: 'PATCH', path: 'update-webhook-addresses', body: { webhook_id: 'wh_1', addresses_to_add: [me], addresses_to_remove: [] } },
-      { method: 'PATCH', path: 'update-webhook-addresses', body: { webhook_id: 'wh_2', addresses_to_add: [me], addresses_to_remove: [] } },
-    ]);
-    expect(await rows('SELECT id, addresses FROM alchemy_webhooks ORDER BY id')).toEqual([
-      { id: 'wh_1', addresses: 2 },
-      { id: 'wh_2', addresses: 2 },
-    ]);
+    const hooks = [1, 2, 3, 4, 5, 6].map((i) => `wh_${i}`);
+    expect(notifyCalls).toEqual(
+      hooks.map((webhook_id) => ({ method: 'PATCH', path: 'update-webhook-addresses', body: { webhook_id, addresses_to_add: [me], addresses_to_remove: [] } })),
+    );
+    expect(await rows('SELECT id, addresses FROM alchemy_webhooks ORDER BY id')).toEqual(hooks.map((id) => ({ id, addresses: 2 })));
   });
 
   test('a full webhook takes what fits and the rest starts a new one', async () => {
@@ -351,5 +347,65 @@ describe('POST /webhooks/alchemy', () => {
     expect((await deliver({ ...payload, webhookId: 'wh_unknown' })).status).toBe(401);
     expect(await rows('SELECT * FROM transfers')).toEqual([]);
     expect(sent).toEqual([]);
+  });
+});
+
+describe('POST /webhooks/alchemy on an auto-bridge chain', () => {
+  const USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' as Address;
+  const base = (activity: unknown[]) => ({ ...delivery(activity), webhookId: 'wh_4', event: { network: 'BASE_MAINNET', activity } });
+  const native = (to: Address, value = 10n ** 15n, category = 'external') => ({
+    hash: tx(20),
+    fromAddress: STRANGER,
+    toAddress: to,
+    category,
+    asset: 'ETH',
+    rawContract: { rawValue: toHex(value), decimals: 18 },
+  });
+
+  beforeEach(async () => {
+    await link(ALICE);
+    await link(BOB, 1);
+    await syncAlchemy(env);
+  });
+
+  test('incoming tokens and coins to a linked address are noted per (address, chain, token); nothing else, no texts', async () => {
+    const response = await deliver(
+      base([
+        token({ hash: tx(1), from: STRANGER, to: ALICE.address, contract: USDC }),
+        // The same token again in this delivery: one row.
+        token({ hash: tx(2), from: STRANGER, to: ALICE.address, contract: USDC, logIndex: 1 }),
+        native(ALICE.address),
+        // From a contract (internal) to Bob.
+        native(BOB.address, 5n, 'internal'),
+        // Outgoing, a stranger's, an NFT, a reorged log, nothing moved.
+        token({ hash: tx(3), from: ALICE.address, to: STRANGER, contract: USDC }),
+        token({ hash: tx(4), from: STRANGER, to: STRANGER, contract: USDC }),
+        { ...token({ hash: tx(5), from: STRANGER, to: ALICE.address, contract: OTHER_TOKEN }), erc721TokenId: '0x1' },
+        token({ hash: tx(6), from: STRANGER, to: ALICE.address, contract: OTHER_TOKEN, removed: true }),
+        native(ALICE.address, 0n),
+      ]),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json<{ recorded: number }>()).toEqual({ recorded: 3 });
+    expect(await rows('SELECT address, chain_id, token, retry_at FROM foreign_balances ORDER BY address, token')).toEqual([
+      { address: ALICE.address, chain_id: 8453, token: '0x0000000000000000000000000000000000000000', retry_at: 0 },
+      { address: ALICE.address, chain_id: 8453, token: USDC, retry_at: 0 },
+      { address: BOB.address, chain_id: 8453, token: '0x0000000000000000000000000000000000000000', retry_at: 0 },
+    ]);
+    // Not AUSD on Monad: no transfer row, no alert.
+    expect(await rows('SELECT * FROM transfers')).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  test('a new transfer clears the wait on a balance that was skipped', async () => {
+    await env.DB.prepare('INSERT INTO foreign_balances (address, chain_id, token, seen_at, retry_at) VALUES (?, 8453, ?, 0, 9999999999)').bind(ALICE.address, USDC).run();
+    await deliver(base([token({ hash: tx(1), from: STRANGER, to: ALICE.address, contract: USDC })]));
+    expect(await rows('SELECT retry_at FROM foreign_balances')).toEqual([{ retry_at: 0 }]);
+  });
+
+  test("signed with the Base webhook's own key only", async () => {
+    const payload = base([native(ALICE.address)]);
+    expect((await deliver(payload, await hmac(JSON.stringify(payload), 'whsec_forged'))).status).toBe(401);
+    expect(await rows('SELECT * FROM foreign_balances')).toEqual([]);
   });
 });
