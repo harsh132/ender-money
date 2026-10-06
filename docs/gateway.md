@@ -807,6 +807,8 @@ row, not listed again. The gateway still texts a `Received` for it.
 
 ### Turning it on (owner steps)
 
+Funding the key and claiming fees step by step: [runbook-bridge.md](runbook-bridge.md).
+
 1. **Migration**: `bun run gateway:migrate:remote` applies
    `0009_bridge.sql` (`foreign_balances`, `bridges`).
 2. **Alchemy**: the next cron run makes the four new webhooks with every
