@@ -1,12 +1,12 @@
 /**
  * Alchemy webhooks with fetch mocked: Alchemy's Notify API, a JSON-RPC
- * stand-in that answers eth_call (balanceOf, for alerts) and what
- * /wallet/create reads, and an Ethereum one for reverse ENS (the Universal
+ * stand-in that answers eth_call (balanceOf, for alerts), and an Ethereum one for reverse ENS (the Universal
  * Resolver's answer per address). No real network calls.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { decodeFunctionData, encodeAbiParameters, pad, parseAbi, toHex, zeroAddress, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { loginMessage } from '../../protocol/auth';
 import { CALIBUR, NETWORKS } from '../../protocol/networks';
 import { d1, mockWorkers, relayStub, type Sent } from './test-env';
 
@@ -14,7 +14,7 @@ mockWorkers();
 const { alchemyWebhook, syncAlchemy, WEBHOOK_CAPACITY } = await import('./alchemy');
 const { ALERT_MAX_AGE } = await import('./activity');
 const { ENS_TTL_SECONDS } = await import('./names');
-const { createWallet } = await import('./auth');
+const { challenge, verifyAuth } = await import('./auth');
 const { openKey } = await import('./shielded');
 type Env = import('./env').Env;
 
@@ -148,21 +148,15 @@ describe('syncAlchemy', () => {
     expect(notifyCalls).toEqual([]);
   });
 
-  test('/wallet/create pushes the new address onto the existing webhooks', async () => {
+  test('the first sign-in pushes the new account onto the existing webhooks', async () => {
     await link(BOB);
     await syncAlchemy(env);
     notifyCalls = [];
 
     const owner = privateKeyToAccount(generatePrivateKey());
-    const authorizations = Object.fromEntries(
-      await Promise.all(
-        (['mainnet', 'testnet'] as const).map(async (n) => [
-          n,
-          await owner.signAuthorization({ contractAddress: CALIBUR, chainId: NETWORKS[n].chain.id, nonce: 0 }),
-        ]),
-      ),
-    );
-    await createWallet(env, ALICE.phone, { address: owner.address, authorizations, name: 'alice' });
+    const c = await challenge(env, owner.address);
+    const signature = await owner.signMessage({ message: loginMessage({ address: owner.address, ...c }) });
+    expect((await verifyAuth(env, { address: owner.address, signature }, 'test')).created).toBe(true);
 
     const me = owner.address.toLowerCase();
     const hooks = [1, 2, 3, 4, 5, 6].map((i) => `wh_${i}`);
@@ -277,6 +271,12 @@ describe('POST /webhooks/alchemy', () => {
     expect((await deliver(payload)).status).toBe(200);
     expect((await rows('SELECT * FROM transfers')).length).toBe(1);
     expect(sent.length).toBe(1);
+  });
+
+  test('an account without a phone number gets the transfer recorded, and no text', async () => {
+    await env.DB.prepare('UPDATE links SET phone = NULL WHERE address = ?').bind(ALICE.address).run();
+    expect(await (await deliver(delivery([token({ hash: tx(1), from: STRANGER, to: ALICE.address })]))).json<{ recorded: number }>()).toEqual({ recorded: 1 });
+    expect(sent).toEqual([]);
   });
 
   test('the alert names the sender by Ender ID, else full address; never by number, even when they are on Ender', async () => {

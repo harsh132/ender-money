@@ -6,16 +6,19 @@
  * Silence is a feature here. The relay SIM also receives carrier promos, bank
  * alerts and stray texts; replying to those costs money and invites loops. So
  * non-personal senders get nothing, and a number that isn't on Ender only gets
- * an answer if it sent a well-formed command.
+ * an answer if it sent a well-formed command (ERR not-registered).
+ *
+ * A text acts for the account holding the sender's verified number; an account
+ * without one has no SMS path at all.
  */
 import { isAddress } from 'viem';
 import { parseCommand, parseShieldedCommand, formatReply, isPhone, normalizePhone, shortHex, unb64, withRetrieverHash, type Parsed, type Reply, type ShieldedCommand } from '../../protocol/sms';
 import type { NetworkName } from '../../protocol/networks';
 import { parseEnderId } from '../../protocol/names';
 import { isPrivateAddress, shortPrivateAddress } from '../../protocol/recipient';
-import { account, GatewayError, quote, sign } from './core';
+import { account, accountOfPhone, GatewayError, quote, sign } from './core';
 import type { Env } from './env';
-import { idOfAddress, idOfPhone } from './names';
+import { idOfAddress } from './names';
 import * as shielded from './shielded';
 
 /** The only network with a pool: where an unprefixed (older app's) private command goes. */
@@ -44,34 +47,34 @@ export const handleInbound = async (env: Env, { from: rawFrom, body }: Inbound):
   // The network the reply is about, for its [Test] tag (an ERR too); unknown for a number or session that doesn't exist.
   let network: NetworkName | undefined;
   try {
+    // The prefix names the network: `[Test] SEND` is testnet, no prefix is mainnet; a SIG's quote says, once found.
+    network = command.kind === 'sig' ? command.network : (command.network ?? 'mainnet');
+    const me = await accountOfPhone(env, from);
     switch (command.kind) {
       case 'sync': {
-        network = command.network ?? 'mainnet';
-        const a = await account(env, from, network);
+        const a = await account(env, me, network);
         return reply(env, from, { kind: 'ok', nonce: BigInt(a.nonce), delegated: a.delegated, balance: a.balance, inr: a.inr }, a.network);
       }
       case 'send': {
-        // The prefix names the network: `[Test] SEND` is testnet, no prefix is mainnet.
-        network = command.network ?? 'mainnet';
-        const q = await quote(env, from, { network, to: command.to, amount: command.amount, deliver: command.deliver });
+        const q = await quote(env, me, { network, to: command.to, amount: command.amount, deliver: command.deliver });
         return reply(env, from, { kind: 'quote', id: q.id, nonce: BigInt(q.nonce), expires: q.deadline, fee: q.fee, to: q.to, out: q.out }, q.network);
       }
       case 'sig': {
         // A deposit's SIG has the public shape (a 65-byte EIP-3009 signature); its quote id says which it is.
-        const deposit = await shielded.quoteOf(env, from, command.id);
+        const deposit = await shielded.quoteOf(env, me, command.id);
         if (deposit?.kind === 'shield') {
           network = command.network ?? deposit.network;
           sameNetwork(command.network, deposit.network);
-          const r = await shielded.submit(env, from, { id: command.id, signature: command.signature });
+          const r = await shielded.submit(env, me, { id: command.id, signature: command.signature });
           if (r.pending || r.p === undefined) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' }, network);
           return reply(env, from, { kind: 'shielded', id: command.id, amount: r.amount, tx: shortHex(r.tx), p: r.p }, network);
         }
-        const session = await env.DB.prepare('SELECT network, recipient FROM sessions WHERE id = ? AND phone = ?')
-          .bind(command.id, from)
+        const session = await env.DB.prepare('SELECT network, recipient FROM sessions WHERE id = ? AND account = ?')
+          .bind(command.id, me)
           .first<{ network: NetworkName; recipient: string | null }>();
         network = command.network ?? session?.network;
         sameNetwork(command.network, session?.network);
-        const r = await sign(env, from, command.id, command.signature);
+        const r = await sign(env, me, command.id, command.signature);
         const to = await sentTo(env, session?.recipient, r.to);
         return reply(env, from, { kind: 'sent', id: command.id, amount: r.amount, to, tx: shortHex(r.txHash) }, network);
       }
@@ -88,13 +91,14 @@ export const handleInbound = async (env: Env, { from: rawFrom, body }: Inbound):
 const handleShielded = async (env: Env, from: string, command: Parsed<ShieldedCommand>): Promise<Outbound | null> => {
   const network = command.network ?? SHIELDED_NETWORK;
   try {
+    const me = await accountOfPhone(env, from);
     if (command.kind === 'shieldedSig') {
-      sameNetwork(command.network, (await shielded.quoteOf(env, from, command.id))?.network);
-      const r = await shielded.submit(env, from, { id: command.id, refs: command.refs, sig: command.signature });
+      sameNetwork(command.network, (await shielded.quoteOf(env, me, command.id))?.network);
+      const r = await shielded.submit(env, me, { id: command.id, refs: command.refs, sig: command.signature });
       // Sent but unconfirmed: a Sent now would carry no change position. A repeated SIG answers once it lands.
       if (r.pending) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' }, network);
-      // r.to: the number, Ender ID or ender1 address paid, the 0x address withdrawn to, or our own number (MERGE).
-      const to = await sentTo(env, r.to, r.to, r.toPhone);
+      // r.to: the number, Ender ID or ender1 address paid, the 0x address withdrawn to, or our own address (MERGE).
+      const to = await sentTo(env, r.to, r.to, r.toAccount);
       return reply(env, from, { kind: 'sent', id: command.id, amount: r.amount, to, tx: shortHex(r.tx), p: r.p }, network);
     }
     const req: shielded.ShieldedQuoteRequest =
@@ -103,7 +107,7 @@ const handleShielded = async (env: Env, from: string, command: Parsed<ShieldedCo
         : command.kind === 'shield'
           ? { network, kind: 'shield', amount: command.amount }
           : { network, kind: 'merge' };
-    const q = await shielded.quote(env, from, req); // warms the prover; the Relay object stays up while it runs
+    const q = await shielded.quote(env, me, req); // warms the prover; the Relay object stays up while it runs
     // A PAY to an ender1 address gets no to=: the phone already has that key, and checks the payment against it.
     const to = q.to === undefined || (command.kind === 'pay' && isPrivateAddress(command.to)) ? undefined : isAddress(q.to) ? q.to : unb64(q.to, 64)!;
     return reply(env, from, { kind: 'shieldedQuote', id: q.id, expires: q.exp, fee: q.fee, to }, network);
@@ -118,11 +122,11 @@ const handleShielded = async (env: Env, from: string, command: Parsed<ShieldedCo
 /**
  * Sent's to=: the number the payment was asked for by, else the recipient's Ender ID (also when it was paid by
  * 0x or ender1 address), else that address, short. `asked`: what the payment named (a number, an Ender ID, an
- * address); `owner`: the number behind a private address, used only to find its Ender ID.
+ * address); `owner`: the account behind a private address, used only to find its Ender ID.
  */
 export const sentTo = async (env: Env, asked: string | null | undefined, address: string, owner?: string | null) => {
   if (asked && (isPhone(asked) || parseEnderId(asked))) return asked;
-  const id = owner ? await idOfPhone(env, owner) : isAddress(address) ? await idOfAddress(env, address) : null;
+  const id = owner ? await idOfAddress(env, owner) : isAddress(address) ? await idOfAddress(env, address) : null;
   return id ?? (isAddress(address) ? shortHex(address) : isPrivateAddress(address) ? shortPrivateAddress(address) : address);
 };
 

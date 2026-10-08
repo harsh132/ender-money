@@ -1,11 +1,11 @@
-import { isAddress, isHex, type Hex, type SignedAuthorization } from 'viem';
+import { isAddress, isHex, type Address, type Hex, type SignedAuthorization } from 'viem';
 import { validateLabel } from '../../protocol/names';
 import { isPhone } from '../../protocol/sms';
 import { isNetwork } from './chain';
 import { activity, setAlerts } from './activity';
 import { alchemyWebhook, syncAlchemy } from './alchemy';
 import * as bridge from './bridge';
-import { createWallet, startAuth, verifyAuth, TOKEN_TTL_SECONDS } from './auth';
+import { challenge, createWallet, removePhone, startPhone, verifyAuth, verifyPhone, TOKEN_TTL_SECONDS } from './auth';
 import { handleCcip } from './ccip';
 import { account, delegate, GatewayError, quote, reconcile, sign, txStatus } from './core';
 import type { Env } from './env';
@@ -41,11 +41,12 @@ const body = async <T>(request: Request): Promise<T> => {
   }
 };
 
-const phoneFrom = async (env: Env, request: Request) => {
+/** The signed-in account: its address, lowercase. A token from before 0010 (a phone, no `sub`) is refused like an expired one. */
+const accountFrom = async (env: Env, request: Request): Promise<Address> => {
   const token = request.headers.get('authorization')?.replace(/^Bearer /, '');
   const claims = token ? await verifyJwt(env.JWT_SECRET, token) : null;
-  if (!claims) throw new GatewayError('unauthorized', 401);
-  return claims.phone;
+  if (!claims || typeof claims.sub !== 'string' || !isAddress(claims.sub)) throw new GatewayError('unauthorized', 401);
+  return claims.sub.toLowerCase() as Address;
 };
 
 /** Constant-time comparison, so the relay token can't be guessed byte by byte. */
@@ -80,8 +81,8 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
     return handleCcip(request, url, env);
   }
 
-  // Per-IP limit on everything a stranger can hammer: OTP sends and transfers.
-  if (/^\/(auth|tx|wallet|shielded|bridge)\//.test(url.pathname)) await limit(env, ip);
+  // Per-IP limit on everything a stranger can hammer: sign-in, OTP sends and transfers.
+  if (/^\/(auth|tx|wallet|shielded|bridge|account\/phone)\//.test(url.pathname)) await limit(env, ip);
 
   // Ender IDs. Public, per IP: availability (the signup screen, while typing) and name -> addresses.
   const label = /^\/names\/([^/]+)$/.exec(url.pathname)?.[1];
@@ -94,38 +95,50 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
   }
 
   const txId = /^\/tx\/([23456789A-Za-z]{4})$/.exec(url.pathname)?.[1];
-  if (request.method === 'GET' && txId) return json(await txStatus(env, await phoneFrom(env, request), txId.toUpperCase()));
+  if (request.method === 'GET' && txId) return json(await txStatus(env, await accountFrom(env, request), txId.toUpperCase()));
 
   switch (key) {
     case 'GET /health':
       return json({ ok: true });
 
-    case 'POST /auth/start': {
-      const req = await body<{ phone?: string }>(request);
-      return json(await startAuth(env, req.phone));
-    }
+    // Sign-in by wallet signature (auth.ts); the first one creates the account.
+    case 'POST /auth/challenge':
+      return json(await challenge(env, (await body<{ address?: unknown }>(request)).address));
 
-    case 'POST /auth/verify': {
-      const req = await body<{ phone?: string; code?: string }>(request);
-      return json(await verifyAuth(env, req.phone, req.code));
-    }
+    case 'POST /auth/verify':
+      return json(await verifyAuth(env, await body(request), ip));
 
     case 'POST /wallet/create': {
-      const phone = await phoneFrom(env, request);
-      return json(await createWallet(env, phone, await body(request)));
+      const me = await accountFrom(env, request);
+      return json(await createWallet(env, me, await body(request)));
     }
 
     case 'GET /account': {
       const network = url.searchParams.get('network') ?? undefined;
       if (network !== undefined && !isNetwork(network)) throw new GatewayError('bad-network');
-      return json(await account(env, await phoneFrom(env, request), network));
+      return json(await account(env, await accountFrom(env, request), network));
     }
 
+    // The account's phone number: OTP to add or move it here, and remove.
+    case 'POST /account/phone/start': {
+      await accountFrom(env, request);
+      return json(await startPhone(env, (await body<{ phone?: unknown }>(request)).phone));
+    }
+
+    case 'POST /account/phone/verify': {
+      const me = await accountFrom(env, request);
+      const req = await body<{ phone?: unknown; code?: unknown }>(request);
+      return json(await verifyPhone(env, me, req.phone, req.code));
+    }
+
+    case 'POST /account/phone/remove':
+      return json(await removePhone(env, await accountFrom(env, request)));
+
     case 'GET /activity': {
-      const phone = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       const network = url.searchParams.get('network') ?? undefined;
       if (network !== undefined && !isNetwork(network)) throw new GatewayError('bad-network');
-      return json(await activity(env, phone, network));
+      return json(await activity(env, me, network));
     }
 
     case 'GET /names/check': {
@@ -135,7 +148,7 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
 
     // Number -> Ender ID and addresses, for signed-in users only; limited per user and per IP. Never the other way.
     case 'GET /names/by-phone': {
-      const me = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       await limit(env, `lookup:${me}`);
       await limit(env, `names:${ip}`);
       const phone = url.searchParams.get('phone') ?? '';
@@ -145,53 +158,58 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       return json(found);
     }
 
-    // An account made before Ender IDs picks one, once.
+    // The account's one change of Ender ID: what it would take, and making it (by its number, or a $2 payment).
+    case 'GET /account/name': {
+      const { phoneNumber: _, ...status } = await names.nameStatus(env, await accountFrom(env, request));
+      return json(status);
+    }
+
     case 'POST /account/name': {
-      const phone = await phoneFrom(env, request);
-      return json(await names.claim(env, phone, (await body<{ name?: unknown }>(request)).name));
+      const me = await accountFrom(env, request);
+      return json(await names.customise(env, me, await body<{ name?: unknown; txHash?: unknown }>(request)));
     }
 
     case 'POST /account/alerts': {
-      const phone = await phoneFrom(env, request);
-      return json(await setAlerts(env, phone, (await body<{ on?: unknown }>(request)).on));
+      const me = await accountFrom(env, request);
+      return json(await setAlerts(env, me, (await body<{ on?: unknown }>(request)).on));
     }
 
     case 'POST /tx/quote': {
-      const phone = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       const req = await body<{ network?: string; to?: string; amount?: string; deliver?: string }>(request);
       if (req.network !== undefined && !isNetwork(req.network)) throw new GatewayError('bad-network');
       if (typeof req.to !== 'string' || typeof req.amount !== 'string') throw new GatewayError('bad-request');
       if (req.deliver !== undefined && req.deliver !== 'AUSD' && req.deliver !== 'CTK') throw new GatewayError('bad-request');
-      return json(await quote(env, phone, { network: req.network, to: req.to, amount: req.amount, deliver: req.deliver }));
+      return json(await quote(env, me, { network: req.network, to: req.to, amount: req.amount, deliver: req.deliver }));
     }
 
     case 'POST /tx/sign': {
-      const phone = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       const req = await body<{ id?: string; signature?: string }>(request);
       if (typeof req.id !== 'string' || !isHex(req.signature) || req.signature.length !== 132) throw new GatewayError('bad-request');
-      return json(await sign(env, phone, req.id.toUpperCase(), req.signature as Hex));
+      return json(await sign(env, me, req.id.toUpperCase(), req.signature as Hex));
     }
 
     // Shielded pool (testnet). `network` defaults to testnet, the only network with a pool.
     case 'POST /shielded/register': {
-      const phone = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       const req = await body<{ network?: string; keys?: Record<string, unknown> }>(request);
-      return json(await shielded.register(env, phone, shieldedNetwork(req.network), req.keys));
+      return json(await shielded.register(env, me, shieldedNetwork(req.network), req.keys));
     }
 
     case 'GET /shielded/notes': {
-      const phone = await phoneFrom(env, request);
-      return json(await shielded.notes(env, phone, shieldedNetwork(url.searchParams.get('network') ?? undefined)));
+      const me = await accountFrom(env, request);
+      return json(await shielded.notes(env, me, shieldedNetwork(url.searchParams.get('network') ?? undefined)));
     }
 
     case 'POST /shielded/quote': {
-      const phone = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       const req = await body<{ network?: string; kind?: string; to?: string; amount?: string }>(request);
       if (!['pay', 'withdraw', 'shield', 'merge'].includes(req.kind ?? '')) throw new GatewayError('bad-request');
       return json(
         await shielded.quote(
           env,
-          phone,
+          me,
           { network: shieldedNetwork(req.network), kind: req.kind as shielded.ShieldedKind, to: req.to, amount: req.amount },
           (p) => ctx.waitUntil(p),
         ),
@@ -199,7 +217,7 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
     }
 
     case 'POST /shielded/submit': {
-      const phone = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       const req = await body<{ id?: unknown; refs?: unknown; sig?: unknown; signature?: unknown }>(request);
       if (typeof req.id !== 'string') throw new GatewayError('bad-request');
       const sig = req.sig === undefined ? undefined : shielded.sigFromBase64(req.sig);
@@ -207,14 +225,14 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       if (req.refs !== undefined && (!Array.isArray(req.refs) || req.refs.length > 12)) throw new GatewayError('bad-request');
       if (req.signature !== undefined && (!isHex(req.signature) || req.signature.length !== 132)) throw new GatewayError('bad-request');
       // Finish even if the app gives up waiting (it then texts the SIG, which waits for this same outcome).
-      const settled = shielded.submit(env, phone, { id: req.id.toUpperCase(), refs: req.refs as number[] | undefined, sig, signature: req.signature as Hex | undefined });
+      const settled = shielded.submit(env, me, { id: req.id.toUpperCase(), refs: req.refs as number[] | undefined, sig, signature: req.signature as Hex | undefined });
       ctx.waitUntil(settled.catch(() => {}));
       const r = await settled;
       return json({ tx: r.tx, ...(r.p !== undefined ? { p: r.p } : {}), ...(r.pending ? { pending: true } : {}) });
     }
 
     case 'GET /shielded/address': {
-      await phoneFrom(env, request);
+      await accountFrom(env, request);
       const phone = url.searchParams.get('phone') ?? '';
       if (!isPhone(phone)) throw new GatewayError('bad-phone');
       return json(await shielded.shieldedAddress(env, shieldedNetwork(url.searchParams.get('network') ?? undefined), phone));
@@ -222,17 +240,17 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
 
     // Auto-bridge (bridge.ts): tokens at the user's address on Ethereum, Base, Arbitrum and Polygon, into AUSD on Monad.
     case 'GET /bridge/pending':
-      return json(await bridge.pending(env, await phoneFrom(env, request)));
+      return json(await bridge.pending(env, await accountFrom(env, request)));
 
     case 'POST /bridge/prepare': {
-      const phone = await phoneFrom(env, request);
-      return json(await bridge.prepare(env, phone, await body(request)));
+      const me = await accountFrom(env, request);
+      return json(await bridge.prepare(env, me, await body(request)));
     }
 
     case 'POST /bridge/submit': {
-      const phone = await phoneFrom(env, request);
+      const me = await accountFrom(env, request);
       // Finish even if the app gives up waiting: it learns the outcome from Relay's status.
-      const settled = bridge.submit(env, phone, await body(request));
+      const settled = bridge.submit(env, me, await body(request));
       ctx.waitUntil(settled.catch(() => {}));
       return json(await settled);
     }
@@ -257,19 +275,20 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       return json({ reply: await handleInbound(env, { from: req.from, body: req.body }) });
     }
 
-    // Dev only: link a phone to an address without OTP and hand back a token. Replaced by /auth/* on 5 Oct.
+    // Dev only: an account for an address without a signature (a random Ender ID, and the number if given, moved here
+    // without OTP) and a token for it.
     case 'POST /dev/link': {
       if (env.DEV !== '1') break;
       const req = await body<{ phone?: string; address?: string; network?: string }>(request);
-      if (!req.phone || !isPhone(req.phone) || !req.address || !isAddress(req.address)) throw new GatewayError('bad-request');
+      if ((req.phone !== undefined && !isPhone(req.phone)) || !req.address || !isAddress(req.address)) throw new GatewayError('bad-request');
+      const address = req.address.toLowerCase();
       const network = isNetwork(req.network) ? req.network : 'mainnet';
-      await env.DB.prepare(
-        `INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT (phone) DO UPDATE SET address = excluded.address, network = excluded.network`,
-      )
-        .bind(req.phone, req.address.toLowerCase(), network, Math.floor(Date.now() / 1000))
-        .run();
-      return json({ token: await signJwt(env.JWT_SECRET, { phone: req.phone, address: req.address.toLowerCase() }, TOKEN_TTL_SECONDS) });
+      await names.ensureLabel(env, address, { network });
+      await env.DB.batch([
+        env.DB.prepare('UPDATE links SET phone = NULL WHERE phone = ? AND address != ?').bind(req.phone ?? null, address),
+        env.DB.prepare('UPDATE links SET network = ?, phone = coalesce(?, phone) WHERE address = ?').bind(network, req.phone ?? null, address),
+      ]);
+      return json({ token: await signJwt(env.JWT_SECRET, { sub: address }, TOKEN_TTL_SECONDS) });
     }
 
     // Dev only: queue a delegation without signup. /wallet/create (5 Oct) wraps the same core call.
@@ -308,7 +327,7 @@ export default {
     ctx.waitUntil(
       Promise.all([
         reconcile(env).catch(log('reconcile')),
-        // Pushes what /wallet/create couldn't, and makes each network's first webhook.
+        // Pushes what a first sign-in couldn't, and makes each network's first webhook.
         syncAlchemy(env),
       ]),
     );

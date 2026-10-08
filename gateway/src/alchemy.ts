@@ -7,7 +7,7 @@
  *
  * Outbound: the gateway creates its own webhooks through Alchemy's Notify API,
  * one per network until it holds 100,000 addresses, and pushes every linked
- * address to each network's webhook: on /wallet/create, and from the cron for
+ * address to each network's webhook: on an account's first sign-in, and from the cron for
  * whatever that missed. The first webhook is created with every address
  * already linked. Its signing key comes back in the create response and is
  * stored sealed under SHIELDED_KEY_SECRET, so nobody handles it by hand.

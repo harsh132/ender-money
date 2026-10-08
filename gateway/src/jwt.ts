@@ -1,8 +1,10 @@
 /**
  * HS256 session tokens: the gateway both signs and verifies, so one shared
  * secret is enough. The algorithm is fixed here, never read from the header.
+ * `sub` is the account: its wallet address, lowercase. Tokens from before
+ * 0010 carry a phone instead and are refused (index.ts accountFrom).
  */
-export type Claims = { phone: string; address: string; exp: number };
+export type Claims = { sub: string; exp: number };
 
 const enc = new TextEncoder();
 const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');

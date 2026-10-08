@@ -8,10 +8,11 @@ import { isPrivateAddress } from '../../../protocol/recipient';
 import { owner, packAddress, provingKeys, type User } from '../../../protocol/shielded';
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
 import { api, ApiError, OfflineError, type ActivityItem, type AuthorizationJson } from './api';
+import { signIn } from './auth';
 import { bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge } from './bridge';
 import { MAX_FEE } from './config';
 import { fileReceived, smsTwin, type Received } from './inbox';
-import { quickSend, type Unlocked } from './keys';
+import { lock, quickSend, unlockWallet, type Unlocked } from './keys';
 import {
   autoShieldOn,
   checkShieldedQuote,
@@ -45,8 +46,8 @@ export const sync = async (network = getState().network): Promise<boolean> => {
     setState((s) => ({
       account: { ...s.account, [network]: { balance: a.balance, nonce: a.nonce, delegated: a.delegated, syncedAt: Date.now() } },
       ...(a.inr ? { inr: a.inr } : {}),
-      // null: an account made before Ender IDs, which Home then asks to pick one. An older gateway says nothing.
-      ...(a.name !== undefined && s.wallet ? { wallet: { ...s.wallet, enderId: a.name } } : {}),
+      // The Ender ID (it may have changed on another phone) and the number, which turns SMS features on. An older gateway says neither.
+      ...(s.wallet ? { wallet: { ...s.wallet, ...(a.name !== undefined ? { enderId: a.name } : {}), ...(a.phone !== undefined ? { phone: a.phone } : {}) } } : {}),
     }));
     return true;
   } catch (e) {
@@ -155,29 +156,38 @@ export const cache = (network: NetworkName) => cacheOf(getState(), network);
 /**
  * Hands the gateway what it needs to prove for us (never the spending key) on
  * every network with a pool. Idempotent; skipped once done. Runs after
- * create/restore and after any unlock while it's missing; failures (offline,
- * older gateway) wait for the next unlock.
+ * sign-up and after any unlock while it's missing; failures (offline, older
+ * gateway) wait for the next unlock. The keys are read at once, since the
+ * caller may wipe authSk right after; the returned call sends them.
  */
-export const registerShielded = async (user: User) => {
-  // Before any await: the caller may wipe authSk right after.
+const registration = (user: User) => {
   const pk = provingKeys(user);
   const mine = b64(packAddress(owner(pk)));
   const keys = { Ax: pk.Ax.toString(), Ay: pk.Ay.toString(), nk: pk.nk.toString(), viewSk: bytesToBigInt(pk.viewSk).toString() };
-  for (const network of POOL_NETWORKS) {
-    const s = getState().shielded;
-    if (s?.owner === mine && s.registered.includes(network)) continue;
-    try {
-      const r = await api.shieldedRegister(network, keys);
-      if (r.owner.replace(/=+$/, '') !== mine) continue;
-      setState((st) => ({ shielded: { owner: mine, registered: [...(st.shielded?.owner === mine ? st.shielded.registered : []), network] } }));
-    } catch {
-      // Retried on the next unlock.
+  return async () => {
+    for (const network of POOL_NETWORKS) {
+      const s = getState().shielded;
+      if (s?.owner === mine && s.registered.includes(network)) continue;
+      try {
+        const r = await api.shieldedRegister(network, keys);
+        if (r.owner.replace(/=+$/, '') !== mine) continue;
+        setState((st) => ({ shielded: { owner: mine, registered: [...(st.shielded?.owner === mine ? st.shielded.registered : []), network] } }));
+      } catch {
+        // Retried on the next unlock.
+      }
     }
-  }
+  };
 };
 
-export const ensureRegistered = (u: Unlocked) => {
-  if (!POOL_NETWORKS.every((n) => isRegistered(n))) void registerShielded(u.shielded);
+/**
+ * After any passkey unlock: sign in again if the gateway token is gone (it
+ * expired, or predates sign-in by signature), then register the private keys
+ * while they're missing. Await it before locking `u`.
+ */
+export const afterUnlock = async (u: Unlocked) => {
+  const register = POOL_NETWORKS.every((n) => isRegistered(n)) ? null : registration(u.shielded);
+  if (!getState().token) await signIn(u).catch(() => {});
+  await register?.();
 };
 
 /** Online: the gateway's index of our notes replaces the cache; waiting payments settle or expire. */
@@ -568,11 +578,11 @@ export const applyOkReply = (r: Extract<Reply, { kind: 'ok' }>) =>
 // ---------------------------------------------------------------- signup
 
 /**
- * N2: sign a 7702 authorization to Calibur on each network (no extra prompt:
- * the key is already unlocked) and hand them to /wallet/create, which sends
- * the sponsored delegations and links the number.
+ * Sign a 7702 authorization to Calibur on each network (no extra prompt: the
+ * key is already unlocked) and hand them to /wallet/create, which sends the
+ * sponsored delegations (a network already delegated answers at once).
  */
-export const createWallet = async (u: Unlocked, token: string, relink = false, name?: string) => {
+export const createWallet = async (u: Unlocked) => {
   const authorizations: Partial<Record<NetworkName, AuthorizationJson>> = {};
   for (const name of Object.keys(NETWORKS) as NetworkName[]) {
     const { chain } = NETWORKS[name];
@@ -580,7 +590,51 @@ export const createWallet = async (u: Unlocked, token: string, relink = false, n
     const a = await u.account.signAuthorization!({ contractAddress: CALIBUR, chainId: chain.id, nonce });
     authorizations[name] = { address: a.address, chainId: a.chainId, nonce: a.nonce, r: a.r, s: a.s, yParity: a.yParity! };
   }
-  return api.createWallet(token, { address: u.address, authorizations, relink, ...(name ? { name } : {}) });
+  return api.createWallet({ authorizations });
+};
+
+/**
+ * Onboarding with an unlocked passkey, new or existing: sign in (the first
+ * time creates the account and its random Ender ID), make sure the wallet is
+ * delegated, keep it, and register the private keys. The caller locks `u` after.
+ */
+export const setUpWallet = async (u: Unlocked) => {
+  const register = registration(u.shielded);
+  const r = await signIn(u);
+  await createWallet(u);
+  const prev = getState().wallet;
+  const same = prev?.address.toLowerCase() === r.address.toLowerCase();
+  setState({
+    wallet: { address: u.address, enderId: r.name, phone: same ? prev.phone : undefined, credentialId: u.credential.credentialId, transports: u.credential.transports as string[] | undefined },
+    ...(same ? {} : { network: 'mainnet', account: {}, activity: [] }),
+  });
+  void register();
+  void sync();
+  return r;
+};
+
+/**
+ * The Ender ID change by payment (Settings): `fee` AUSD to the treasury on mainnet, a normal public transfer
+ * (quote, passkey, sign). Returns its hash for POST /account/name.
+ */
+export const payNameFee = async (fee: string, treasury: Address): Promise<Hex> => {
+  const wallet = getState().wallet!;
+  const draft: Draft = { network: 'mainnet', to: treasury, toAddress: treasury, amount: fee, deliver: 'AUSD', label: 'Ender ID change' };
+  const q = await api.quote({ network: 'mainnet', to: treasury, amount: fee });
+  const quote: Quote = { id: q.id, to: q.to, fee: q.fee, nonce: BigInt(q.nonce), deadline: q.deadline, pipe: 'internet' };
+  checkQuote(draft, quote);
+  quickSend.end();
+  const u = await unlockWallet({ credentialId: wallet.credentialId });
+  let signature: Hex;
+  try {
+    if (u.address.toLowerCase() !== wallet.address.toLowerCase()) throw new TransferError('wrong-passkey', 'That passkey belongs to another wallet. Pick your Ender passkey.');
+    signature = await signQuote(u.account, draft, quote);
+  } finally {
+    lock(u);
+  }
+  const r = await api.sign(q.id, signature);
+  upsertTx({ id: q.id, network: 'mainnet', direction: 'out', amount: fee, fee: q.fee, counterparty: treasury, label: draft.label, status: r.pending ? 'sending' : 'sent', txHash: r.txHash, at: Date.now(), deadline: q.deadline });
+  return r.txHash;
 };
 
 // ---------------------------------------------------------------- transfer
@@ -649,7 +703,7 @@ const ERRORS: Record<string, string> = {
   'bad-recipient': "That isn't a phone number, Ender ID, wallet address or private address.",
   'bad-amount': 'Check the amount.',
   'not-delegated': 'Your wallet is still being set up on this network. Try again in a minute.',
-  'not-registered': 'This number has no wallet. Log in again.',
+  'not-registered': 'This wallet has no Ender account yet. Log in again.',
   'rate-limited': 'Too many tries. Wait a minute.',
   expired: 'That quote has expired. Try again.',
   'bad-sig': "The signature didn't match. Nothing was sent.",
@@ -659,18 +713,23 @@ const ERRORS: Record<string, string> = {
   'send-failed': "The gateway couldn't send it. Try again.",
   'in-progress': 'Already sending.',
   unsupported: 'Not supported yet.',
-  unauthorized: 'Your login expired. Log in again.',
+  unauthorized: 'Your login expired. Unlock with your passkey to continue.',
+  'challenge-expired': 'That took too long. Try again.',
+  'bad-signature': "The signature didn't match. Try again.",
+  'captcha-failed': "We couldn't check you're human. Try again.",
   'sms-unavailable': "Ender can't text this country yet.",
-  'number-linked': 'This number already has a wallet.',
-  'address-linked': 'This passkey already belongs to another number.',
   'bad-code': "That code isn't right.",
   'code-expired': 'That code has expired. Send a new one.',
   'bad-phone': 'Check the number.',
   'unknown-name': 'No one has that Ender ID.',
   'name-taken': 'That Ender ID was just taken. Pick another.',
-  'name-required': 'Choose your Ender ID first.',
   'bad-name': `That Ender ID isn't allowed. Use ${MIN_LABEL} to ${MAX_LABEL} letters, numbers or hyphens.`,
-  'name-already-set': 'You already have an Ender ID.',
+  'name-already-set': "You've already changed your Ender ID.",
+  'unlock-required': 'Verify a phone number or pay to change your Ender ID.',
+  'phone-used': 'This number has already changed an Ender ID.',
+  'payment-used': 'That payment was already used.',
+  'bad-payment': "That payment doesn't cover the change.",
+  'payment-not-found': "The payment hasn't landed yet. Try again in a moment.",
   // Private payments (shielded pool).
   NOUSER: "This number can't take private payments yet.",
   FUNDS: 'Not enough private balance for this amount plus the fee.',

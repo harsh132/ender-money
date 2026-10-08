@@ -1,89 +1,54 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { View } from 'react-native';
-import { phoneDisplay } from '../lib/format';
 import { createWalletKey, lock, passkeyError, quickSend, unlockWallet, type Unlocked } from '../lib/keys';
-import { onboarding } from '../lib/onboarding';
-import { getState, setState } from '../lib/store';
 import { c } from '../lib/theme';
-import { ApiError } from '../lib/api';
-import { createWallet, errorText, registerShielded, sync } from '../lib/wallet';
-import { ChooseName } from '../ui/ChooseName';
+import { errorText, setUpWallet } from '../lib/wallet';
 import { Check, Fingerprint } from '../ui/icons';
 import { BackHeader, Banner, Button, Card, KV, Screen, Spinner, Steps, T } from '../ui/kit';
 
-type Phase = 'intro' | 'name' | 'setting' | 'ready';
-
-/** The gateway refused the Ender ID: back to choosing one. */
-const NAME_ERRORS = new Set(['name-taken', 'name-required', 'bad-name']);
+type Phase = 'intro' | 'setting' | 'ready';
 
 /**
- * N1 -> Ender ID -> N2 -> N3. A new wallet picks its Ender ID after the passkey and before /wallet/create, which
- * takes it; a relink keeps the one the number or wallet has (or asks, if the gateway says it needs one). Modes:
- * - new (default): fresh passkey, or "I already have an Ender passkey" to move this number to it
- * - relink: E2, a fresh wallet that takes the number over from a lost one
- * - change: Settings, the current wallet takes over a new number
+ * N1 -> N2 -> "Your Ender ID". A fresh passkey (or an Ender passkey from
+ * another phone), then sign-in by signature, which creates the account with a
+ * random Ender ID the first time, and the wallet's delegation. A lost passkey
+ * is just a new wallet: the number, if any, moves to it from Settings by a new
+ * code.
  */
 export default function Create() {
-  const { mode = 'new' } = useLocalSearchParams<{ mode?: 'new' | 'relink' | 'change' }>();
-  const verified = onboarding.verified;
+  const [existing, setExisting] = useState(false);
   const [phase, setPhase] = useState<Phase>('intro');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [name, setName] = useState<string>();
   const key = useRef<Unlocked | null>(null);
-  const [label, setLabel] = useState<string>();
-  const [nameError, setNameError] = useState<string>();
-  const [existing, setExisting] = useState(false);
 
-  if (!verified) {
-    router.replace('/');
-    return null;
-  }
-
-  const setUp = async (useExisting = existing, name = label) => {
+  const setUp = async () => {
     const u = key.current!;
     setPhase('setting');
     setError(undefined);
     try {
-      const relink = mode !== 'new' || useExisting;
-      const res = await createWallet(u, verified.token, relink, name);
-      const prev = getState().wallet;
-      setState({
-        wallet: {
-          phone: verified.phone,
-          address: res.address,
-          credentialId: u.credential.credentialId,
-          transports: u.credential.transports as string[] | undefined,
-          enderId: res.name,
-        },
-        token: res.token,
-        ...(prev?.address.toLowerCase() === res.address.toLowerCase() ? {} : { network: 'mainnet', account: {}, activity: [] }),
-      });
-      onboarding.verified = undefined;
-      void registerShielded(u.shielded);
+      const r = await setUpWallet(u);
       lock(u);
       key.current = null;
-      void sync();
-      if (mode === 'change') router.dismissTo('/settings');
-      else setPhase('ready');
+      // Someone coming back to their wallet goes straight home; a new one first sees its Ender ID.
+      if (!r.created) return router.replace('/home');
+      setName(r.name);
+      setPhase('ready');
     } catch (e) {
-      if (e instanceof ApiError && NAME_ERRORS.has(e.code)) {
-        setNameError(e.code === 'name-required' ? undefined : errorText(e));
-        return setPhase('name');
-      }
       setError(errorText(e));
     }
   };
 
-  const withPasskey = async (open: () => Promise<Unlocked>, useExisting: boolean) => {
+  const withPasskey = async (open: () => Promise<Unlocked>, restoring: boolean) => {
     setBusy(true);
     setError(undefined);
+    setExisting(restoring);
     try {
       quickSend.end();
       key.current = await open();
-      setExisting(useExisting);
-      if (mode === 'new' && !useExisting) setPhase('name');
-      else await setUp(useExisting);
+      await setUp();
     } catch (e) {
       const msg = passkeyError(e);
       if (msg) setError(msg);
@@ -92,32 +57,15 @@ export default function Create() {
     }
   };
 
-  const current = getState().wallet;
-
-  if (phase === 'name')
-    return (
-      <ChooseName
-        step={3}
-        error={nameError}
-        onSubmit={(l) => {
-          setLabel(l);
-          setNameError(undefined);
-          void setUp(existing, l);
-        }}
-      />
-    );
-
   if (phase === 'setting')
     return (
       <Screen>
         <View style={{ height: 64 }} />
-        <Steps at={3} />
+        <Steps at={1} of={2} />
         <T v="headline" style={{ fontSize: 36 }}>Setting up your wallet</T>
         <T v="meta" style={{ fontSize: 18, marginTop: 12 }}>A few seconds.</T>
         <View style={{ marginTop: 32, gap: 4 }}>
-          <Progress done title="Number verified" sub={phoneDisplay(verified.phone)} />
-          <Progress done title={existing || mode === 'change' ? 'Passkey checked' : 'Passkey created'} />
-          {label ? <Progress done title="Ender ID" sub={`${label}.ender.my`} /> : null}
+          <Progress done title={existing ? 'Passkey checked' : 'Passkey created'} />
           <Progress done={false} failed={!!error} title="Setting up your wallet on Monad" sub="No fees for you. Ender covers it." last />
         </View>
         {error ? (
@@ -138,47 +86,24 @@ export default function Create() {
             <Check size={52} color={c.accent} />
           </View>
         </View>
-        <T v="headline" style={{ textAlign: 'center', fontSize: 36 }}>You're all set</T>
+        <T v="headline" style={{ textAlign: 'center', fontSize: 36 }}>Your Ender ID</T>
         <T v="meta" style={{ fontSize: 18, lineHeight: 27, textAlign: 'center', marginTop: 12, marginHorizontal: 8 }}>
-          Anyone can pay you at your {getState().wallet?.enderId ? 'Ender ID or number' : 'number'}, and we'll text you when money arrives.
+          Anyone can pay you at it, from Ender or any wallet.
         </T>
         <Card style={{ marginTop: 28 }}>
-          {getState().wallet?.enderId ? <KV k="Ender ID" v={getState().wallet!.enderId!} /> : null}
-          <KV k="Number" v={phoneDisplay(verified.phone)} />
-          <KV k="Balance" v={`$${getState().account.mainnet?.balance ?? '0.00'}`} last />
+          <KV k="Ender ID" v={name ?? ''} last />
         </Card>
-        <View style={{ marginTop: 20 }}><Banner>Now try it with mobile data off. Ender only needs signal.</Banner></View>
+        <T v="meta" style={{ textAlign: 'center', marginTop: 16 }}>You can change it once in Settings.</T>
         <View style={{ flex: 1, minHeight: 24 }} />
         <Button title="Add money" onPress={() => { router.replace('/home'); router.push('/receive'); }} />
         <Button title="Go to home" kind="text" onPress={() => router.replace('/home')} style={{ marginBottom: 4 }} />
       </Screen>
     );
 
-  if (mode === 'change')
-    return (
-      <Screen>
-        <BackHeader />
-        <Steps at={2} />
-        <T v="headline" style={{ fontSize: 36 }}>Move your wallet to this number</T>
-        <T v="meta" style={{ fontSize: 18, lineHeight: 27, marginTop: 12 }}>
-          {phoneDisplay(verified.phone)} is verified. Approve with your passkey and people can pay you there. Your old number stops working for Ender.
-        </T>
-        {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
-        <View style={{ flex: 1, minHeight: 24 }} />
-        <Button
-          title="Use my passkey"
-          icon={<Fingerprint size={22} color={c.accentInk} />}
-          busy={busy}
-          onPress={() => withPasskey(() => unlockWallet(current ? { credentialId: current.credentialId } : undefined), true)}
-          style={{ marginBottom: 12 }}
-        />
-      </Screen>
-    );
-
   return (
     <Screen>
       <BackHeader />
-      <Steps at={2} />
+      <Steps at={0} of={2} />
       <View style={{ alignItems: 'center', marginTop: 24, marginBottom: 28 }}>
         <View style={{ width: 120, height: 120, borderRadius: 60, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line, alignItems: 'center', justifyContent: 'center' }}>
           <Fingerprint size={56} color={c.accent} width={1.6} />
@@ -186,17 +111,12 @@ export default function Create() {
       </View>
       <T v="headline" style={{ fontSize: 36, textAlign: 'center' }}>Your fingerprint is your key</T>
       <T v="meta" style={{ fontSize: 18, lineHeight: 27, marginTop: 14, textAlign: 'center' }}>
-        {mode === 'relink' ? 'A new wallet for your number. ' : 'Number verified. '}
-        Now we'll make a passkey on this phone. No seed phrase, nothing to write down. It's saved to your Google account as “Ender”, so a new phone can get your wallet back.
+        We'll make a passkey on this phone. No seed phrase, nothing to write down. It's saved to your Google account as “Ender”, so a new phone can get your wallet back.
       </T>
       {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
       <View style={{ flex: 1, minHeight: 24 }} />
-      <Button title="Create passkey" busy={busy} onPress={() => withPasskey(createWalletKey, false)} />
-      {mode === 'new' ? (
-        <Button title="I already have an Ender passkey" kind="text" onPress={() => withPasskey(() => unlockWallet(), true)} style={{ marginBottom: 4 }} />
-      ) : (
-        <View style={{ height: 12 }} />
-      )}
+      <Button title="Create passkey" busy={busy && !existing} disabled={busy} onPress={() => withPasskey(createWalletKey, false)} />
+      <Button title="I already have an Ender passkey" kind="text" disabled={busy} onPress={() => withPasskey(() => unlockWallet(), true)} style={{ marginBottom: 4 }} />
     </Screen>
   );
 }

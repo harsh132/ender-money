@@ -58,6 +58,7 @@ let env: Env;
 beforeEach(async () => {
   env = { DB: d1(), RESOLVER_ADDRESS: RESOLVER, RESOLVER_SIGNER_KEY: SIGNER_KEY, IP_LIMITER: { limit: async () => ({ success: true }) } } as unknown as Env;
   await env.DB.prepare('INSERT INTO links (phone, address, network, created_at, label) VALUES (?, ?, ?, 0, ?)').bind(ALICE.phone, ALICE.address, 'mainnet', ALICE.label).run();
+  await env.DB.prepare('INSERT INTO names (label, address, created_at) VALUES (?, ?, 0)').bind(ALICE.label, ALICE.address).run();
 });
 
 /** What `EnderResolver.resolveCallback` checks, so passing means the contract accepts it. */

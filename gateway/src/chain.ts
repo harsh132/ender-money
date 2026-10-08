@@ -1,6 +1,10 @@
-import { createPublicClient, fallback, http, parseAbi, parseEventLogs, type Address, type Chain, type TransactionReceipt } from 'viem';
+import { createPublicClient, fallback, http, parseAbi, parseEventLogs, type Address, type Chain, type Hex, type TransactionReceipt } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { BRIDGE_CHAINS, NETWORKS, type BridgeChainName, type NetworkName } from '../../protocol/networks';
 import type { Env } from './env';
+
+/** The gateway key's address: the Sponsor's sender, and the default auto-bridge fee recipient and name-fee treasury. */
+export const sponsorAddress = (env: Env) => privateKeyToAccount(env.GATEWAY_PRIVATE_KEY as Hex).address;
 
 export const isNetwork = (n: unknown): n is NetworkName => n === 'mainnet' || n === 'testnet';
 
@@ -39,7 +43,7 @@ export const publicClient = (env: Env, n: ChainName) => {
   return createPublicClient({ chain: chainOf(n), transport });
 };
 
-const transferEvent = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)']);
+export const transferEvent = parseAbi(['event Transfer(address indexed from, address indexed to, uint256 value)']);
 
 /**
  * Addresses that sent `token` in this receipt. Each user's Calibur batch is

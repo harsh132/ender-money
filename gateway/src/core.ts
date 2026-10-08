@@ -1,7 +1,8 @@
 /**
  * The session core: account, quote and sign, the same for HTTPS and SMS.
- * Callers pass the phone number they've authenticated (JWT claim or SMS
- * sender); everything else is checked here.
+ * Callers pass the account they've authenticated: its address, lowercase
+ * (the JWT's subject, or the account an SMS sender's number belongs to);
+ * everything else is checked here.
  */
 import { encodeFunctionData, formatUnits, isAddress, parseUnits, recoverTypedDataAddress, type Address, type Hex, type SignedAuthorization } from 'viem';
 import { recoverAuthorizationAddress } from 'viem/utils';
@@ -21,6 +22,7 @@ import { AUSD_DECIMALS, CALIBUR, CTK_DECIMALS, FEE_RECIPIENT, MULTICALL3, NETWOR
 import { enderId, parseEnderId } from '../../protocol/names';
 import { isPhone, SESSION_ID_ALPHABET, type Deliver } from '../../protocol/sms';
 import { publicClient, tokenSenders } from './chain';
+import { accountOfLabel } from './names';
 import { inrPerUsd } from './fx';
 import type { Env } from './env';
 
@@ -36,10 +38,11 @@ export class GatewayError extends Error {
 const QUOTE_TTL_SECONDS = 300;
 const now = () => Math.floor(Date.now() / 1000);
 
-type Link = { phone: string; address: Address; network: NetworkName; label: string | null };
+type Link = { phone: string | null; address: Address; network: NetworkName; label: string | null };
 type SessionRow = {
   id: string;
-  phone: string;
+  /** The account that asked: the same as from_address. */
+  account: string;
   network: NetworkName;
   from_address: Address;
   to_address: Address;
@@ -70,16 +73,16 @@ export type Quote = {
   calls: Array<{ to: Address; value: string; data: Hex }>;
 };
 
-const linkFor = async (env: Env, phone: string): Promise<Link> => {
-  const link = await env.DB.prepare('SELECT phone, address, network, label FROM links WHERE phone = ?').bind(phone).first<Link>();
+const linkFor = async (env: Env, account: string): Promise<Link> => {
+  const link = await env.DB.prepare('SELECT phone, address, network, label FROM links WHERE address = ?').bind(account).first<Link>();
   if (!link) throw new GatewayError('not-registered', 403);
   return link;
 };
 
-/** Remember the network the phone last used, so the SMS path follows it. */
+/** Remember the network the account last used, so the SMS path follows it. */
 const useNetwork = async (env: Env, link: Link, network: NetworkName | undefined) => {
   if (!network || network === link.network) return link.network;
-  await env.DB.prepare('UPDATE links SET network = ? WHERE phone = ?').bind(network, link.phone).run();
+  await env.DB.prepare('UPDATE links SET network = ? WHERE address = ?').bind(network, link.address).run();
   return network;
 };
 
@@ -137,14 +140,23 @@ const newSessionId = () => {
 
 // ---------------------------------------------------------------- account
 
-export const account = async (env: Env, phone: string, requested?: NetworkName) => {
-  const link = await linkFor(env, phone);
+/** The account an SMS comes from: the one holding the sender's verified number. */
+export const accountOfPhone = async (env: Env, phone: string) => {
+  const link = await env.DB.prepare('SELECT address FROM links WHERE phone = ?').bind(phone).first<{ address: string }>();
+  if (!link) throw new GatewayError('not-registered', 403);
+  return link.address;
+};
+
+export const account = async (env: Env, accountId: string, requested?: NetworkName) => {
+  const link = await linkFor(env, accountId);
   const network = await useNetwork(env, link, requested);
   const [a, inr] = await Promise.all([readAccount(env, network, link.address), inrPerUsd()]);
   return {
     address: link.address,
-    /** The Ender ID; null for an account made before names (the app then asks for one). */
+    /** The Ender ID; null only for an account made before names that hasn't signed in since. */
     name: link.label ? enderId(link.label) : null,
+    /** The account's verified number, null without one: the app shows SMS features only with one. */
+    phone: link.phone,
     network,
     balance: formatUnits(a.balance, AUSD_DECIMALS),
     nonce: a.nonce.toString(),
@@ -157,8 +169,8 @@ export const account = async (env: Env, phone: string, requested?: NetworkName) 
 
 export type QuoteRequest = { network?: NetworkName; to: string; amount: string; deliver?: Deliver };
 
-export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise<Quote> => {
-  const link = await linkFor(env, phone);
+export const quote = async (env: Env, accountId: string, req: QuoteRequest): Promise<Quote> => {
+  const link = await linkFor(env, accountId);
   const network = await useNetwork(env, link, req.network);
   const deliver = req.deliver ?? 'AUSD';
   // CTK delivery uses Agora's testnet pair; the mainnet pair needs Agora KYC.
@@ -175,20 +187,20 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
     if (!recipient) throw new GatewayError('not-on-ender', 404);
     to = recipient.address;
   } else if (label) {
-    const recipient = await env.DB.prepare('SELECT address FROM links WHERE label = ?').bind(label).first<{ address: Address }>();
+    const recipient = await accountOfLabel(env, label);
     if (!recipient) throw new GatewayError('unknown-name', 404);
-    to = recipient.address;
+    to = recipient;
   } else throw new GatewayError('bad-recipient');
   if (to === link.address.toLowerCase()) throw new GatewayError('self-transfer');
   // What it was asked for when a number or an Ender ID, which its Sent text names (sms.ts); null for an address.
   const recipient = isAddress(req.to) ? null : label ? enderId(label) : req.to;
 
   // A repeated request (say, the same SEND delivered twice) gets the quote that's still open.
-  const requestHash = await sha256([phone, network, to, amount, deliver].join('|'));
+  const requestHash = await sha256([link.address, network, to, amount, deliver].join('|'));
   const open = await env.DB.prepare(
-    `SELECT * FROM sessions WHERE phone = ? AND request_hash = ? AND state = 'open' AND expires_at > ? LIMIT 1`,
+    `SELECT * FROM sessions WHERE account = ? AND request_hash = ? AND state = 'open' AND expires_at > ? LIMIT 1`,
   )
-    .bind(phone, requestHash, now())
+    .bind(link.address, requestHash, now())
     .first<SessionRow>();
   if (open) return toQuote(env, open);
 
@@ -204,7 +216,7 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
     const id = newSessionId();
     const row: SessionRow = {
       id,
-      phone,
+      account: link.address,
       network,
       from_address: link.address.toLowerCase() as Address,
       to_address: to,
@@ -220,10 +232,10 @@ export const quote = async (env: Env, phone: string, req: QuoteRequest): Promise
       expires_at: deadline,
     };
     const inserted = await env.DB.prepare(
-      `INSERT OR IGNORE INTO sessions (id, phone, network, from_address, to_address, amount, fee, deliver, min_out, nonce, deadline, request_hash, expires_at, recipient)
+      `INSERT OR IGNORE INTO sessions (id, account, network, from_address, to_address, amount, fee, deliver, min_out, nonce, deadline, request_hash, expires_at, recipient)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-      .bind(id, phone, network, row.from_address, to, row.amount, row.fee, deliver, row.min_out, row.nonce, deadline, requestHash, deadline, recipient)
+      .bind(id, link.address, network, row.from_address, to, row.amount, row.fee, deliver, row.min_out, row.nonce, deadline, requestHash, deadline, recipient)
       .run();
     if (inserted.meta.changes === 1) return toQuote(env, row);
   }
@@ -257,18 +269,18 @@ const ctkQuote = async (env: Env, network: NetworkName, from: Address, amount: b
 
 export type SignResult = { id: string; txHash: Hex; amount: string; to: Address; pending?: true };
 
-export const sign = async (env: Env, phone: string, id: string, signature: Hex): Promise<SignResult> => {
+export const sign = async (env: Env, accountId: string, id: string, signature: Hex): Promise<SignResult> => {
   // Claim the session in one statement: of two racing signs, only one gets a row back.
   const session = await env.DB.prepare(
     `UPDATE sessions SET state = 'sending', error = NULL
-     WHERE id = ? AND phone = ? AND state = 'open' AND expires_at > ? RETURNING *`,
+     WHERE id = ? AND account = ? AND state = 'open' AND expires_at > ? RETURNING *`,
   )
-    .bind(id, phone, now())
+    .bind(id, accountId, now())
     .first<SessionRow>();
 
   if (!session) {
-    const existing = await env.DB.prepare('SELECT state, tx_hash, amount, to_address, expires_at FROM sessions WHERE id = ? AND phone = ?')
-      .bind(id, phone)
+    const existing = await env.DB.prepare('SELECT state, tx_hash, amount, to_address, expires_at FROM sessions WHERE id = ? AND account = ?')
+      .bind(id, accountId)
       .first<Pick<SessionRow, 'state' | 'tx_hash' | 'amount' | 'to_address' | 'expires_at'>>();
     if (!existing) throw new GatewayError('unknown-session', 404);
     if (existing.tx_hash) {
@@ -348,11 +360,11 @@ export const delegate = async (env: Env, network: NetworkName, address: Address,
 
 // ---------------------------------------------------------------- status and housekeeping
 
-export const txStatus = async (env: Env, phone: string, id: string) => {
+export const txStatus = async (env: Env, accountId: string, id: string) => {
   const s = await env.DB.prepare(
-    'SELECT id, network, state, tx_hash, error, amount, to_address, expires_at FROM sessions WHERE id = ? AND phone = ?',
+    'SELECT id, network, state, tx_hash, error, amount, to_address, expires_at FROM sessions WHERE id = ? AND account = ?',
   )
-    .bind(id, phone)
+    .bind(id, accountId)
     .first<Pick<SessionRow, 'id' | 'network' | 'state' | 'tx_hash' | 'error' | 'amount' | 'to_address' | 'expires_at'> & { state: string }>();
   if (!s) throw new GatewayError('unknown-session', 404);
   return {

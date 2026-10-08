@@ -4,18 +4,21 @@
  * Android (modules/sms-retriever: the SMS Retriever, re-armed while open; wired
  * in the root layout), and everywhere through the clipboard (the user copies
  * the gateway's reply; the app reads it on focus) or Paste reply.
+ *
+ * All of it needs a verified phone number on the account (Settings), and none
+ * of it exists on the web.
  */
 import NetInfo from '@react-native-community/netinfo';
 import * as Clipboard from 'expo-clipboard';
 import * as SMS from 'expo-sms';
 import { useEffect, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { pump } from '../../modules/sms-retriever';
 import type { NetworkName } from '../../../protocol/networks';
 import { formatCommand, formatShieldedCommand, parseReply, type Command, type Reply, type ShieldedCommand } from '../../../protocol/sms';
 import { GATEWAY_SMS } from './config';
 import { whileOwnScreen } from './keys';
-import { getState } from './store';
+import { getState, type State } from './store';
 
 export type Pipe = 'internet' | 'text';
 
@@ -34,6 +37,9 @@ export const useOnline = () => {
   return up;
 };
 
+/** SMS features (alerts, offline sending, paying and being paid by number): with a verified number, never on the web. */
+export const smsOn = (s: Pick<State, 'wallet'> = getState()) => Platform.OS !== 'web' && !!s.wallet?.phone;
+
 export const gatewayNumber = (): string | undefined => {
   const { gateway, wallet } = getState();
   const india = gateway === 'india' || (gateway === 'auto' && (wallet?.phone ?? '+91').startsWith('+91'));
@@ -51,6 +57,7 @@ const format = (c: Command | ShieldedCommand, network: NetworkName) =>
  * three-field SIG. `network`: the payment's own (testnet texts start with `[Test] `), never just the mode shown.
  */
 export const textGateway = async (command: Command | ShieldedCommand, network: NetworkName) => {
+  if (!smsOn()) throw new NoSmsError('Add your phone number in Settings to pay by text.');
   const to = gatewayNumber();
   if (!to) throw new NoSmsError('No gateway number for texts is set up in this build.');
   if (!(await SMS.isAvailableAsync())) throw new NoSmsError("This phone can't send texts.");

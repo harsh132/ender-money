@@ -22,7 +22,7 @@ export default function Welcome() {
         <Feature icon={<Fingerprint size={22} color={c.accent} />} text="No seed phrase" />
       </View>
       <View style={{ flex: 1, minHeight: 24 }} />
-      <Button title="Log in" onPress={() => router.push('/phone')} style={{ marginBottom: 12 }} />
+      <Button title="Get started" onPress={() => router.push('/create')} style={{ marginBottom: 12 }} />
     </Screen>
   );
 }

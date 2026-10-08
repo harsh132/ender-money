@@ -1,9 +1,9 @@
 /**
  * A brand-new user through real onboarding, then their first transfers:
  *
- *   /auth/start -> /auth/verify (new) -> sign 7702 authorizations -> /wallet/create
- *   -> fund from the demo user -> transfer over HTTPS -> /tx/:id -> transfer by SMS
- *   -> log in again (existing)
+ *   /auth/challenge -> /auth/verify (new account, random Ender ID) -> sign 7702 authorizations
+ *   -> /wallet/create -> add a phone number (OTP) -> fund from the demo user -> transfer over
+ *   HTTPS -> /tx/:id -> transfer by SMS -> sign in again (existing)
  *
  *   bun run signup [--gateway http://127.0.0.1:8787]
  *
@@ -14,6 +14,7 @@ import { createPublicClient, createWalletClient, encodeFunctionData, http, parse
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { caliburAbi, encodeExecute, erc20Abi, signedBatchTypedData, transferWithFee } from '../protocol/calibur';
 import { AUSD_DECIMALS, CALIBUR, FEE_RECIPIENT, NETWORKS } from '../protocol/networks';
+import { loginMessage } from '../protocol/auth';
 import { formatCommand, parseReply } from '../protocol/sms';
 
 const args = process.argv.slice(2);
@@ -39,25 +40,34 @@ const api = async <T>(method: string, path: string, payload?: unknown, token?: s
 
 console.log(`new user  ${user.address}  ${phone}`);
 
-// Onboarding.
-const start = await api<{ devCode?: string; queued: boolean }>('POST', '/auth/start', { phone });
-if (!start.devCode) throw new Error('gateway is not in DEV mode');
-await api('POST', '/auth/verify', { phone, code: start.devCode === '000000' ? '111111' : '000000' }).catch(() => {}); // a wrong guess first
-const verified = await api<{ token: string; status: string }>('POST', '/auth/verify', { phone, code: start.devCode });
-if (verified.status !== 'new') throw new Error(`expected a new number, got ${verified.status}`);
+// Onboarding: sign in by signature, which creates the account.
+const signIn = async () => {
+  const c = await api<{ nonce: string; expires: number }>('POST', '/auth/challenge', { address: user.address });
+  const signature = await user.signMessage({ message: loginMessage({ address: user.address, ...c }) });
+  return api<{ token: string; name: string; created: boolean }>('POST', '/auth/verify', { address: user.address, signature });
+};
+const verified = await signIn();
+if (!verified.created) throw new Error('expected a new account');
+console.log(`          Ender ID ${verified.name}`);
+const token = verified.token;
 const { v: _v, ...authorization } = await createWalletClient({ account: user, chain: net.chain, transport: http() }).signAuthorization({
   contractAddress: CALIBUR,
   chainId: net.chain.id,
   nonce: 0,
 });
-const created = await api<{ token: string; delegations: Array<{ txHash?: Hex }> }>(
+const created = await api<{ delegations: Array<{ txHash?: Hex }> }>(
   'POST',
   '/wallet/create',
-  { address: user.address, authorizations: { testnet: authorization } },
-  verified.token,
+  { authorizations: { testnet: authorization } },
+  token,
 );
 console.log(`          delegated: ${net.explorer}/tx/${created.delegations[0]?.txHash}`);
-const token = created.token;
+
+// A phone number, for the SMS path.
+const start = await api<{ devCode?: string; queued: boolean }>('POST', '/account/phone/start', { phone }, token);
+if (!start.devCode) throw new Error('gateway is not in DEV mode');
+await api('POST', '/account/phone/verify', { phone, code: start.devCode === '000000' ? '111111' : '000000' }, token).catch(() => {}); // a wrong guess first
+await api('POST', '/account/phone/verify', { phone, code: start.devCode }, token);
 
 // Fund it from the demo user (a one-off Calibur batch the gateway key sends directly).
 const pub = createPublicClient({ chain: net.chain, transport: http() });
@@ -95,7 +105,6 @@ const smsCalls = transferWithFee(net.ausd, recipient, parseUnits('0.03', AUSD_DE
 const smsSig = await user.signTypedData(signedBatchTypedData(user.address, net.chain.id, smsCalls, sq.nonce, BigInt(sq.expires)));
 await text(formatCommand({ kind: 'sig', id: sq.id, signature: smsSig }, 'testnet'));
 
-// Logging in again finds the wallet.
-const again = await api<{ devCode?: string }>('POST', '/auth/start', { phone });
-const back = await api<{ status: string; address: string; balance: string }>('POST', '/auth/verify', { phone, code: again.devCode });
-console.log(`          login again: ${back.status} ${back.address} ${back.balance} AUSD`);
+// Signing in again finds the account.
+const back = await signIn();
+console.log(`          sign in again: created=${back.created} ${back.name}`);

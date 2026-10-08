@@ -32,7 +32,6 @@ import {
   type PublicClient,
   type SignedAuthorization,
 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
 import { recoverAuthorizationAddress } from 'viem/utils';
 import {
   BRIDGE_FEE_RECIPIENT,
@@ -47,7 +46,7 @@ import {
 import { caliburAbi, encodeExecute, erc20Abi, isDelegatedToCalibur, signedBatchTypedData, type Call } from '../../protocol/calibur';
 import { BRIDGE_CHAINS, bridgeChainOf, CALIBUR, MULTICALL3, type BridgeChainName } from '../../protocol/networks';
 import { parseAuthorization } from './auth';
-import { publicClient } from './chain';
+import { publicClient, sponsorAddress } from './chain';
 import { GatewayError } from './core';
 import type { Env } from './env';
 
@@ -156,8 +155,6 @@ const nativeUsd = async (chainId: number) => {
   return price;
 };
 
-const sponsorAddress = (env: Env) => privateKeyToAccount(env.GATEWAY_PRIVATE_KEY as Hex).address;
-
 /** The gateway key can't pay this: a clear refusal, and a log line for whoever funds it. */
 const requireFunds = async (pub: PublicClient, env: Env, chain: BridgeChainName, need: bigint) => {
   const balance = await pub.getBalance({ address: sponsorAddress(env) });
@@ -166,8 +163,8 @@ const requireFunds = async (pub: PublicClient, env: Env, chain: BridgeChainName,
   throw new GatewayError('sponsor-low', 503);
 };
 
-const linkOf = async (env: Env, phone: string) => {
-  const link = await env.DB.prepare('SELECT address FROM links WHERE phone = ?').bind(phone).first<{ address: Address }>();
+const linkOf = async (env: Env, account: string) => {
+  const link = await env.DB.prepare('SELECT address FROM links WHERE address = ?').bind(account).first<{ address: Address }>();
   if (!link) throw new GatewayError('not-registered', 403);
   return link.address.toLowerCase() as Address;
 };
@@ -175,8 +172,8 @@ const linkOf = async (env: Env, phone: string) => {
 // ---------------------------------------------------------------- GET /bridge/pending
 
 /** Balances to bridge: what arrived on the four chains and isn't waiting out a refusal. */
-export const pending = async (env: Env, phone: string) => {
-  const address = await linkOf(env, phone);
+export const pending = async (env: Env, account: string) => {
+  const address = await linkOf(env, account);
   const { results } = await env.DB.prepare('SELECT chain_id, token FROM foreign_balances WHERE address = ? AND retry_at <= ? ORDER BY seen_at LIMIT 20')
     .bind(address, now())
     .all<{ chain_id: number; token: Address }>();
@@ -208,8 +205,8 @@ const parseChain = (chainId: unknown) => {
   return chain;
 };
 
-export const prepare = async (env: Env, phone: string, req: { chainId?: unknown; token?: unknown }): Promise<Prepared> => {
-  const user = await linkOf(env, phone);
+export const prepare = async (env: Env, account: string, req: { chainId?: unknown; token?: unknown }): Promise<Prepared> => {
+  const user = await linkOf(env, account);
   const chain = parseChain(req.chainId);
   const chainId = BRIDGE_CHAINS[chain].chain.id;
   if (typeof req.token !== 'string' || !isAddress(req.token)) throw new GatewayError('bad-token');
@@ -320,8 +317,8 @@ const parseCalls = (calls: unknown): Call[] => {
  * gateway key. Refuses if it would revert, or cost more than the fee pays for
  * (the app prepares again), or the gateway key can't pay.
  */
-export const submit = async (env: Env, phone: string, req: SubmitRequest): Promise<{ txHash: Hex; pending?: true }> => {
-  const user = await linkOf(env, phone);
+export const submit = async (env: Env, account: string, req: SubmitRequest): Promise<{ txHash: Hex; pending?: true }> => {
+  const user = await linkOf(env, account);
   if (typeof req.id !== 'string') throw new GatewayError('bad-request');
   const calls = parseCalls(req.calls);
   if (typeof req.nonce !== 'string' || !/^\d+$/.test(req.nonce) || !Number.isInteger(req.deadline)) throw new GatewayError('bad-request');

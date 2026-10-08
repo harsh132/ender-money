@@ -22,7 +22,13 @@ export class OfflineError extends Error {
   }
 }
 
-const request = async <T,>(method: 'GET' | 'POST', path: string, body?: unknown, token = getState().token, timeoutMs = HTTP_TIMEOUT_MS): Promise<T> => {
+/** What a 401 on our own token does (lib/auth.ts): sign in again when it can (true), else drop the token. */
+let reauth: (() => Promise<boolean>) | undefined;
+export const onUnauthorized = (f: () => Promise<boolean>) => {
+  reauth = f;
+};
+
+const request = async <T,>(method: 'GET' | 'POST', path: string, body?: unknown, token = getState().token, timeoutMs = HTTP_TIMEOUT_MS, retried = false): Promise<T> => {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res: Response;
@@ -39,14 +45,19 @@ const request = async <T,>(method: 'GET' | 'POST', path: string, body?: unknown,
     clearTimeout(timer);
   }
   const json = (await res.json().catch(() => ({}))) as T & { error?: string };
+  // Expired, or a phone-number token from before sign-in by signature: once more with a fresh one, if one can be had.
+  if (res.status === 401 && token && token === getState().token && !retried && reauth && (await reauth()))
+    return request<T>(method, path, body, getState().token, timeoutMs, true);
   if (!res.ok) throw new ApiError(json.error ?? `http-${res.status}`, res.status);
   return json;
 };
 
 export type AccountInfo = {
   address: Address;
-  /** The Ender ID (`label.ender.my`); null for an account made before names, absent from an older gateway. */
+  /** The Ender ID (`label.ender.my`); null only for an account made before names that hasn't signed in since. */
   name?: string | null;
+  /** The account's verified number: SMS features only with one. */
+  phone?: string | null;
   network: NetworkName;
   balance: string;
   nonce: string;
@@ -95,16 +106,18 @@ export type ShieldedQuoteInfo = { id: string; exp: number; fee: string; to?: str
 export type ShieldedKind = 'pay' | 'withdraw' | 'shield' | 'merge';
 
 export const api = {
-  startAuth: (phone: string) => request<{ sent: true; queued: boolean; expiresIn: number; devCode?: string }>('POST', '/auth/start', { phone }, ''),
-  verifyAuth: (phone: string, code: string) =>
-    request<
-      | { token: string; status: 'new' }
-      | { token: string; status: 'existing'; address: Address; network: NetworkName; balance: string; name?: string | null }
-    >('POST', '/auth/verify', { phone, code }, ''),
-  /** `name`: the new account's Ender ID label (required unless the number or wallet already has one). */
-  createWallet: (token: string, body: { address: Address; authorizations: Partial<Record<NetworkName, AuthorizationJson>>; relink?: boolean; name?: string }) =>
-    request<{ token: string; address: Address; name?: string | null }>('POST', '/wallet/create', body, token),
+  // Sign-in by wallet signature (lib/auth.ts); the first one creates the account and its random Ender ID.
+  challenge: (address: Address) => request<{ nonce: string; expires: number }>('POST', '/auth/challenge', { address }, ''),
+  verifyAuth: (body: { address: Address; signature: Hex; turnstile?: string }) =>
+    request<{ token: string; address: Address; name: string; created: boolean }>('POST', '/auth/verify', body, ''),
+  /** The signed-in wallet's 7702 delegation on each network; idempotent. */
+  createWallet: (body: { authorizations: Partial<Record<NetworkName, AuthorizationJson>> }) =>
+    request<{ address: Address }>('POST', '/wallet/create', body, undefined, 30_000),
   account: (network: NetworkName) => request<AccountInfo>('GET', `/account?network=${network}`),
+  // The phone number: a code by text to add it (or move it from another account), and remove.
+  phoneStart: (phone: string) => request<{ sent: true; queued: boolean; expiresIn: number; devCode?: string }>('POST', '/account/phone/start', { phone }),
+  phoneVerify: (phone: string, code: string) => request<{ phone: string; moved: boolean }>('POST', '/account/phone/verify', { phone, code }),
+  phoneRemove: () => request<{ phone: null }>('POST', '/account/phone/remove', {}),
   quote: (body: { network: NetworkName; to: string; amount: string; deliver?: 'AUSD' | 'CTK' }) => request<QuoteInfo>('POST', '/tx/quote', body),
   sign: (id: string, signature: Hex) => request<SignInfo>('POST', '/tx/sign', { id, signature }),
   tx: (id: string) => request<TxInfo>('GET', `/tx/${id}`),
@@ -113,7 +126,10 @@ export const api = {
   checkName: (label: string) => request<{ available: boolean; reason?: string }>('GET', `/names/check?label=${encodeURIComponent(label)}`, undefined, ''),
   name: (label: string) => request<NameInfo>('GET', `/names/${encodeURIComponent(label)}`, undefined, ''),
   nameByPhone: (phone: string) => request<NameInfo>('GET', `/names/by-phone?phone=${encodeURIComponent(phone)}`),
-  claimName: (name: string) => request<{ name: string }>('POST', '/account/name', { name }),
+  /** The one change of Ender ID: whether it's used, whether our number can unlock it, and the fee (mainnet) otherwise. */
+  nameStatus: () => request<{ name: string | null; locked: boolean; phone: boolean; fee: string; treasury: Address }>('GET', '/account/name'),
+  /** By our number, or with the hash of the fee's payment. */
+  changeName: (name: string, txHash?: Hex) => request<{ name: string }>('POST', '/account/name', { name, ...(txHash ? { txHash } : {}) }),
   activity: (network: NetworkName) => request<{ items: ActivityItem[] }>('GET', `/activity?network=${network}`),
 
   // Private balance (shielded pool). Bigints travel as decimal strings.

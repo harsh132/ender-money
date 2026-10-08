@@ -11,6 +11,14 @@ side is `app/src/lib/transport.ts`, `wallet.ts`, `private.ts`, `inbox.ts` and
 `app/modules/sms-retriever`. Gateway design: [gateway.md](gateway.md).
 Private-payment design and threat model: [splitkey-spike.md](splitkey-spike.md).
 
+**Only accounts with a verified phone number have any of this.** An account
+is a wallet address (sign-in by signature, [gateway.md](gateway.md) "HTTPS
+API"); a number is optional, added in Settings by an OTP, and held by one
+account at a time. Without one the gateway sends the account no texts (no
+`Received`, no OTP but the one that adds a number) and a text from a number
+no account holds gets `ERR not-registered`; the app hides offline sending,
+alerts, paying numbers and the number on Receive. The web app has none of it.
+
 Examples below were printed by the real formatters (`formatCommand`,
 `formatShieldedCommand`, `formatReply`, `formatOtp`, `withRetrieverHash`)
 and counted with `septets`. Lengths are GSM-7 septets; "+hash" is the same
@@ -26,8 +34,9 @@ text with the Retriever hash line appended, as the gateway sends it.
 | International | Not built. `GATEWAY_SMS.international` comes from `EXPO_PUBLIC_GATEWAY_SMS_INTL` and is unset, so `textGateway` throws `NoSmsError` ("No gateway number for texts is set up in this build."). The gateway's `canText` is `to.startsWith('+91')`; `sendSms` to any other number throws `sms-unavailable` (503). |
 
 The app picks the number in `gatewayNumber()`: India when the Settings
-choice is `india`, or `auto` and the wallet's number starts with `+91` (or
-there is no wallet yet); otherwise international.
+choice is `india`, or `auto` and the account's number starts with `+91`;
+otherwise international. `textGateway` refuses (`NoSmsError`) for an account
+without a number, and on the web.
 
 Outbound texts the gateway starts itself (OTP, `Received`) go through
 `sendSms`, which only texts `+91` numbers. If the relay phone is offline they
@@ -221,12 +230,13 @@ screen while it waits (`Q`, `ERR`, `Sent`, `Shielded`, matched by id):
 The OTP is not a reply: `listenForCode` matches `Ender code: (\d{6})` on the
 same `onSms` stream.
 
-## Onboarding
+## Adding a number
 
 ### OTP (gateway → phone)
 
-Sent when the app calls `POST /auth/start {phone}` (`startAuth`). Sign-in has
-no SMS command; it needs the app online.
+Sent when the app calls `POST /account/phone/start {phone}` (`startPhone`)
+from Settings, signed in. Sign-in itself is by passkey signature, never by
+text, and there is no SMS command for either; both need the app online.
 
 ```
 Ender code: <6 digits>. Don't share it.
@@ -246,12 +256,14 @@ IaTP8lLJOvM
 Gateway rules: `bad-phone` unless E.164; `sms-unavailable` (503) unless `+91`;
 `rate-limited` (429) after 3 sends per number per hour. The code lives 10
 minutes, 5 tries (`OTP_MAX_ATTEMPTS`), stored as SHA-256 of
-`phone:code:JWT_SECRET`. `startAuth` returns `queued: true` if the relay was
+`phone:code:JWT_SECRET`. `startPhone` returns `queued: true` if the relay was
 offline (the text waits up to 10 minutes).
 
 App: the code screen fills and verifies the code by itself when it arrives
 through RECEIVE_SMS or the Retriever; otherwise the user types it.
-`POST /auth/verify` answers `bad-code` or `code-expired` (401).
+`POST /account/phone/verify` answers `bad-code` or `code-expired` (401), else
+the number is the account's from then on (moved from another account if it
+had it).
 
 ## Account
 
@@ -810,11 +822,11 @@ the gateway's texts that it starts itself (OTP, `Received`) go out
 either way. Steps can mix: a quote fetched online can be signed and sent by
 text if the connection drops.
 
-**Sign-in**
+**Adding a number** (Settings; sign-in is by passkey, no texts)
 
-1. App → `POST /auth/start {phone}` (HTTP only).
+1. App → `POST /account/phone/start {phone}` (HTTP only).
 2. Gateway → phone: `Ender code: 481926. Don't share it.` + hash.
-3. App reads it (RECEIVE_SMS or Retriever) or the user types it → `POST /auth/verify` (HTTP).
+3. App reads it (RECEIVE_SMS or Retriever) or the user types it → `POST /account/phone/verify` (HTTP).
 
 **Public send, online**: `POST /tx/quote` → `checkQuote` → sign →
 `POST /tx/sign` (polls `GET /tx/:id` if `pending`). No texts, except the
@@ -881,7 +893,7 @@ waiting for `Sent`, any `ERR` with that id or no id) fails the step.
 | Code | Path | Meaning | App |
 | --- | --- | --- | --- |
 | `bad-command` | any | Unparseable text from a linked number (unlinked numbers get nothing) | Gateway said |
-| `not-registered` | `SYNC`, `SEND` | Number has no wallet | "This number has no wallet. Log in again." |
+| `not-registered` | `SYNC`, `SEND` | Number has no wallet | "This wallet has no Ender account yet. Log in again." (the app; by text the number belongs to no account, or was removed from one) |
 | `rpc-unavailable` | `SYNC`, `SEND`, `SIG` | Balance read failed | Gateway said |
 | `unsupported` | `SEND … > CTK` | No CTK pair on this network | "Not supported yet." |
 | `bad-amount` | `SEND`, `PAY`, `SHIELD` | Amount invalid (the parser catches it first) | "Check the amount." |
@@ -941,5 +953,5 @@ of a reply for the other network than the payment's.
 - **Twilio.** [gateway.md](gateway.md) lists `POST /webhooks/twilio`; there is
   no such route yet, so inbound SMS only comes through the relay.
 - **Retriever timing.** `listenForCode` starts on the code screen, after
-  `/auth/start`; a code that arrived first would be missed by the Retriever
+  `/account/phone/start`; a code that arrived first would be missed by the Retriever
   (RECEIVE_SMS still queues it).

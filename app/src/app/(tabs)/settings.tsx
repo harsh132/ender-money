@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useState, type ReactNode } from 'react';
-import { Alert, Pressable, ScrollView, Switch, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
@@ -10,8 +10,8 @@ import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
 import { AUTO_SHIELD_MIN, autoShieldOn, hasPool } from '../../lib/private';
 import { getState, setState, signOut, useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
-import { online } from '../../lib/transport';
-import { autoMerge, autoShield, ensureRegistered, errorText, refresh, syncByText } from '../../lib/wallet';
+import { online, smsOn } from '../../lib/transport';
+import { afterUnlock, autoMerge, autoShield, errorText, refresh, syncByText } from '../../lib/wallet';
 import { Chevron } from '../../ui/icons';
 import { Banner, T, TestnetPill } from '../../ui/kit';
 
@@ -26,11 +26,12 @@ export default function Settings() {
   const merge = useStore((s) => !!s.autoMerge);
   const shieldOn = useStore(autoShieldOn);
   const snapshot = useStore((s) => s.account[s.network]);
+  const sms = useStore(smsOn);
   const [busy, setBusy] = useState<string>();
   const [note, setNote] = useState<{ text: string; tone: 'plain' | 'negative' }>();
 
   if (!wallet) return null;
-  const autoPick = wallet.phone.startsWith('+91') ? 'India' : 'International';
+  const autoPick = (wallet.phone ?? '').startsWith('+91') ? 'India' : 'International';
 
   /** Test mode always asks for the passkey, so a borrowed unlocked phone can't flip what "balance" means. */
   const toggleTestMode = async (on: boolean) => {
@@ -39,7 +40,7 @@ export default function Settings() {
     try {
       quickSend.end();
       const u = await unlockWallet({ credentialId: wallet.credentialId });
-      ensureRegistered(u);
+      await afterUnlock(u);
       lock(u);
       const next: NetworkName = on ? 'testnet' : 'mainnet';
       setState({ network: next });
@@ -80,6 +81,7 @@ export default function Settings() {
     setNote(undefined);
     try {
       if ((await online()) && (await refresh())) return;
+      if (!sms) return setNote({ text: 'No internet.', tone: 'negative' });
       await syncByText();
       setNote({ text: 'Sent SYNC by text. When the reply arrives, copy it and come back.', tone: 'plain' });
     } catch (e) {
@@ -89,8 +91,27 @@ export default function Settings() {
     }
   };
 
+  /** Change it (a new code), or give it up: no more texts, and SMS features go. */
+  const phoneOptions = () =>
+    Alert.alert(phoneMasked(wallet.phone!), 'Your number gets texts when you are paid and lets you pay by text offline.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Change number', onPress: () => router.push('/phone') },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await api.phoneRemove();
+            setState((s) => (s.wallet ? { wallet: { ...s.wallet, phone: null } } : {}));
+          } catch (e) {
+            setNote({ text: `Couldn't remove it. ${errorText(e)}`, tone: 'negative' });
+          }
+        },
+      },
+    ]);
+
   const logOut = () =>
-    Alert.alert('Log out of this phone?', 'Your wallet stays safe. Log in again with your number and passkey to get it back.', [
+    Alert.alert('Log out of this phone?', 'Your wallet stays safe. Log in again with your passkey to get it back.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Log out',
@@ -113,18 +134,23 @@ export default function Settings() {
 
         <Label>Account</Label>
         <Group>
-          {wallet.enderId ? (
-            <Row title="Ender ID" sub={wallet.enderId} onPress={() => router.push('/receive')} />
-          ) : wallet.enderId === null ? (
-            <Row title="Ender ID" sub="Choose yours" onPress={() => router.push('/name')} />
+          {wallet.enderId ? <Row title="Ender ID" sub={wallet.enderId} onPress={() => router.push('/name')} /> : null}
+          {/* The web has no texts: no number, and none of what it turns on. */}
+          {Platform.OS === 'web' ? null : (
+            <Row
+              title="Phone number"
+              sub={wallet.phone ? phoneMasked(wallet.phone) : 'Add one to get texts and pay offline'}
+              onPress={() => (wallet.phone ? phoneOptions() : router.push('/phone'))}
+            />
+          )}
+          <Row title="Wallet" sub={short(wallet.address)} mono onPress={() => router.push('/receive')} last={!sms} />
+          {sms ? (
+            <Row
+              title="Text me when I get paid"
+              right={<Switch value={alerts} disabled={busy === 'alerts'} onValueChange={toggleAlerts} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={alerts ? '#fff' : c.fg3} />}
+              last
+            />
           ) : null}
-          <Row title="Phone number" sub={phoneMasked(wallet.phone)} onPress={() => router.push({ pathname: '/phone', params: { change: '1' } })} />
-          <Row title="Wallet" sub={short(wallet.address)} mono onPress={() => router.push('/receive')} />
-          <Row
-            title="Text me when I get paid"
-            right={<Switch value={alerts} disabled={busy === 'alerts'} onValueChange={toggleAlerts} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={alerts ? '#fff' : c.fg3} />}
-            last
-          />
         </Group>
 
         <Label>Network</Label>
@@ -142,11 +168,13 @@ export default function Settings() {
               />
             }
           />
-          <Row
-            title="Gateway"
-            sub={gateway === 'auto' ? `Auto · ${autoPick}` : GATEWAY_LABEL[gateway]}
-            onPress={() => setState({ gateway: GATEWAYS[(GATEWAYS.indexOf(getState().gateway) + 1) % GATEWAYS.length]! })}
-          />
+          {sms ? (
+            <Row
+              title="Gateway"
+              sub={gateway === 'auto' ? `Auto · ${autoPick}` : GATEWAY_LABEL[gateway]}
+              onPress={() => setState({ gateway: GATEWAYS[(GATEWAYS.indexOf(getState().gateway) + 1) % GATEWAYS.length]! })}
+            />
+          ) : null}
           <Row title={busy === 'sync' ? 'Syncing…' : 'Sync now'} sub={snapshot ? `Last synced ${ago(snapshot.syncedAt)}` : 'Not synced yet'} onPress={syncNow} last />
         </Group>
 

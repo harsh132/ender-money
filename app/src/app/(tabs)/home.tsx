@@ -1,24 +1,22 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, Mask, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { MAX_FEE } from '../../lib/config';
 import { ago, inr, usd } from '../../lib/format';
-import { quickSend } from '../../lib/keys';
+import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
 import { autoShieldOn, canMerge, privateBalance } from '../../lib/private';
 import { listed, useStore } from '../../lib/store';
 import { c, f } from '../../lib/theme';
-import { useOnline } from '../../lib/transport';
-import { isRegistered, refresh } from '../../lib/wallet';
+import { smsOn, useOnline } from '../../lib/transport';
+import { afterUnlock, errorText, isRegistered, refresh } from '../../lib/wallet';
 import { ArrowDown, ArrowUp, Bolt, Merge, Scan, Shield, Signal } from '../../ui/icons';
-import { Banner, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
+import { Banner, Button, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
 import { Sigil } from '../../ui/Sigil';
 import { TxRow } from '../../ui/TxRow';
 import { useQuickSend } from '../../ui/useQuickSend';
 
-/** Asked once per launch, for an account the gateway says has no Ender ID yet. */
-let askedForName = false;
 
 /** The faint dot grid behind the balance, fading out from the centre. */
 const DotGrid = () => (
@@ -56,13 +54,25 @@ export default function Home() {
   const shieldOn = useStore(autoShieldOn);
   const splittable = priv !== undefined && !shieldOn;
   const [split, setSplit] = useState(false);
-  const needsName = useStore((s) => s.wallet?.enderId === null);
-
-  useEffect(() => {
-    if (!needsName || askedForName) return;
-    askedForName = true;
-    router.push('/name');
-  }, [needsName]);
+  const sms = useStore(smsOn);
+  // No gateway token (it expired, or predates sign-in by signature) and no open key to renew it: a passkey unlock does.
+  const signedOut = useStore((s) => !s.token);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectError, setReconnectError] = useState<string>();
+  const reconnect = async () => {
+    setReconnecting(true);
+    setReconnectError(undefined);
+    try {
+      const u = await unlockWallet({ credentialId: wallet!.credentialId });
+      await afterUnlock(u);
+      lock(u);
+      if (!(await refresh())) setReconnectError(errorText('unauthorized'));
+    } catch (e) {
+      setReconnectError(passkeyError(e));
+    } finally {
+      setReconnecting(false);
+    }
+  };
 
   const recent = useMemo(() => activity.filter((t) => t.network === network && listed(t)).sort((a, b) => b.at - a.at).slice(0, 5), [activity, network]);
   const publicBalance = snapshot?.balance ?? '0';
@@ -141,7 +151,13 @@ export default function Home() {
 
         {online === false ? (
           <View style={{ marginBottom: 16 }}>
-            <Banner icon={<Signal size={20} color={c.warning} />} tone="warning">No internet, payments go by text</Banner>
+            <Banner icon={<Signal size={20} color={c.warning} />} tone="warning">{sms ? 'No internet, payments go by text' : 'No internet'}</Banner>
+          </View>
+        ) : signedOut ? (
+          <View style={{ marginBottom: 16, gap: 8 }}>
+            <Banner tone="warning">Unlock with your passkey to see your latest balance.</Banner>
+            {reconnectError ? <Banner tone="negative">{reconnectError}</Banner> : null}
+            <Button title="Unlock" kind="ghost" busy={reconnecting} onPress={reconnect} />
           </View>
         ) : null}
 

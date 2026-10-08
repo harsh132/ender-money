@@ -9,6 +9,7 @@ import { MAX_FEE } from '../lib/config';
 import { phoneDisplay } from '../lib/format';
 import { autoShieldOn } from '../lib/private';
 import { useStore } from '../lib/store';
+import { smsOn } from '../lib/transport';
 import { isRegistered } from '../lib/wallet';
 import { c, f } from '../lib/theme';
 import { Copy, Share as ShareIcon } from '../ui/icons';
@@ -24,6 +25,7 @@ type Mode = 'public' | 'private';
  */
 export default function Receive() {
   const wallet = useStore((s) => s.wallet);
+  const sms = useStore((s) => smsOn(s));
   const network = useStore((s) => s.network);
   const owner = useStore((s) => (isRegistered(s.network, s) ? s.shielded?.owner : undefined));
   // With Auto Shield on the public balance moves by itself.
@@ -94,9 +96,9 @@ export default function Receive() {
       <T style={{ fontFamily: f.mono, fontSize: priv ? 13 : 16, lineHeight: priv ? 19 : 24, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
         {shown}
       </T>
-      {priv ? null : (
+      {priv || !sms ? null : (
         <T v="meta" style={{ textAlign: 'center', marginTop: 12 }}>
-          {wallet.enderId ? 'Or your number' : 'Or just your number'}: {phoneDisplay(wallet.phone)}. We'll text you when money arrives.
+          {wallet.enderId ? 'Or your number' : 'Or just your number'}: {phoneDisplay(wallet.phone!)}. We'll text you when money arrives.
         </T>
       )}
       <View style={{ flex: 1, minHeight: 24 }} />
@@ -121,7 +123,9 @@ export default function Receive() {
                 ? `Pay me privately on Ender: ${shown}`
                 : link
                   ? `Pay me on Ender: ${link}\nOr send AUSD on Monad to ${wallet.address}`
-                  : `Pay me on Ender: ${phoneDisplay(wallet.phone)}\nOr send AUSD on Monad to ${wallet.address}`,
+                  : sms
+                    ? `Pay me on Ender: ${phoneDisplay(wallet.phone!)}\nOr send AUSD on Monad to ${wallet.address}`
+                    : `Pay me in AUSD on Monad: ${wallet.address}`,
             })
           }
           style={{ flex: 1 }}

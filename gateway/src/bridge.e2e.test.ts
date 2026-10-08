@@ -75,16 +75,16 @@ test.skipIf(!ready)(
       idFromName: (n: string) => n,
       get: (n: string) => sponsors.get(n) ?? sponsors.set(n, new Sponsor({} as DurableObjectState, env)).get(n)!,
     };
-    await env.DB.prepare('INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, 0)').bind('+919800000001', me, 'mainnet').run();
+    await env.DB.prepare('INSERT INTO links (address, network, created_at) VALUES (?, ?, 0)').bind(me, 'mainnet').run();
 
-    const p = await bridge.prepare(env, '+919800000001', { chainId: 8453, token: USDC });
+    const p = await bridge.prepare(env, me, { chainId: 8453, token: USDC });
     expect(p).toMatchObject({ amount: AMOUNT.toString(), delegated: false, nonce: '0', authNonce: 0 });
     const q = await relayQuote({ user: user.address, originChainId: 8453, token: USDC, amount: AMOUNT, bps: p.bps });
     const body = await signBridge(user as Parameters<typeof signBridge>[0], p, q); // the app resolves its own copy of viem
     const target = body.calls.at(-1)!.to;
     const before = await pub.readContract({ address: USDC, abi: erc20Abi, functionName: 'balanceOf', args: [target] });
 
-    const { txHash } = await bridge.submit(env, '+919800000001', body);
+    const { txHash } = await bridge.submit(env, me, body);
     const receipt = await pub.getTransactionReceipt({ hash: txHash as Hex });
     const prepared = await env.DB.prepare('SELECT max_cost FROM bridges').first<{ max_cost: string }>();
     console.log(`bridge e2e: ${p.bps} bps, gas used ${receipt.gasUsed}, fee pays for up to ${prepared!.max_cost} wei, cost ${receipt.gasUsed * receipt.effectiveGasPrice} wei + L1`);

@@ -1,8 +1,8 @@
 /**
- * Incoming money: AUSD transfers touching a linked address land in `transfers`
- * and text the recipient an alert. Alchemy's Address Activity webhook
- * (alchemy.ts) is the only source; the primary key and alerts_sent make a
- * repeated delivery harmless. GET /activity serves the same table, so an
+ * Incoming money: AUSD transfers touching an account's address land in
+ * `transfers` and text the recipient an alert, if the account has a verified
+ * number. Alchemy's Address Activity webhook (alchemy.ts) is the only source;
+ * the primary key and alerts_sent make a repeated delivery harmless. GET /activity serves the same table, so an
  * online recipient sees money arrive without the SMS, and a fresh device gets
  * its history back.
  */
@@ -20,7 +20,7 @@ import { canText, sendSms } from './outbound';
 export const ALERT_MAX_AGE = 600;
 const now = () => Math.floor(Date.now() / 1000);
 
-type LinkRow = { phone: string; address: string; alerts: number };
+type LinkRow = { phone: string | null; address: string; alerts: number };
 
 /** One AUSD Transfer log, addresses lowercase; `at` is when it happened, or the best estimate of it. */
 export type Transfer = { txHash: Hex; logIndex: number; from: Address; to: Address; value: bigint; block: number; at: number };
@@ -51,7 +51,7 @@ export const record = async (env: Env, network: NetworkName, transfers: Transfer
   return { network, ours, links };
 };
 
-/** Text each recipient with alerts on, skipping transfers older than ALERT_MAX_AGE. Never throws. */
+/** Text each recipient with a number and alerts on, skipping transfers older than ALERT_MAX_AGE. Never throws. */
 export const alertAll = async (env: Env, { network, ours, links }: Awaited<ReturnType<typeof record>>) => {
   const t = now();
   for (const x of ours) {
@@ -67,7 +67,7 @@ export const alertAll = async (env: Env, { network, ours, links }: Awaited<Retur
  * user's: a text must not tell one user another's number.
  */
 const alert = async (env: Env, network: NetworkName, to: LinkRow, txHash: Hex, from: Address, value: bigint) => {
-  if (!canText(to.phone)) return;
+  if (!to.phone || !canText(to.phone)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to.phone).run();
   if (fresh.meta.changes !== 1) return;
   const [balance, sender] = await Promise.all([
@@ -87,9 +87,9 @@ const alert = async (env: Env, network: NetworkName, to: LinkRow, txHash: Hex, f
 
 // ---------------------------------------------------------------- GET /activity
 
-/** `network` defaults to the number's current one, as for /account. */
-export const activity = async (env: Env, phone: string, requested?: NetworkName) => {
-  const link = await env.DB.prepare('SELECT address, network FROM links WHERE phone = ?').bind(phone).first<{ address: string; network: NetworkName }>();
+/** `network` defaults to the account's current one, as for /account. */
+export const activity = async (env: Env, account: string, requested?: NetworkName) => {
+  const link = await env.DB.prepare('SELECT address, network FROM links WHERE address = ?').bind(account).first<{ address: string; network: NetworkName }>();
   if (!link) throw new GatewayError('not-registered', 403);
   const network = requested ?? link.network;
   const me = link.address.toLowerCase();
@@ -113,8 +113,8 @@ export const activity = async (env: Env, phone: string, requested?: NetworkName)
   };
 };
 
-export const setAlerts = async (env: Env, phone: string, on: unknown) => {
+export const setAlerts = async (env: Env, account: string, on: unknown) => {
   if (typeof on !== 'boolean') throw new GatewayError('bad-request');
-  await env.DB.prepare('UPDATE links SET alerts = ? WHERE phone = ?').bind(on ? 1 : 0, phone).run();
+  await env.DB.prepare('UPDATE links SET alerts = ? WHERE address = ?').bind(on ? 1 : 0, account).run();
   return { alerts: on };
 };

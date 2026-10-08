@@ -1,18 +1,19 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, View } from 'react-native';
 import { normalizePhone } from '../../../protocol/sms';
 import { api } from '../lib/api';
-import { onboarding } from '../lib/onboarding';
+import { phoneFlow } from '../lib/phone';
 import { c, f } from '../lib/theme';
 import { errorText } from '../lib/wallet';
-import { BackHeader, Banner, Button, Field, Screen, Steps, T } from '../ui/kit';
+import { getState } from '../lib/store';
+import { BackHeader, Banner, Button, Field, Screen, T } from '../ui/kit';
 
-/** O2. Also the first step of changing the number from Settings (`?change=1`). */
+/** Settings -> Phone number: the number to add (or change to). A code by text proves it (code.tsx). */
 export default function PhoneScreen() {
-  const { change } = useLocalSearchParams<{ change?: string }>();
+  const change = !!getState().wallet?.phone;
   const [cc, setCc] = useState('91');
-  const [num, setNum] = useState(onboarding.phone?.replace(/^\+91/, '') ?? '');
+  const [num, setNum] = useState(phoneFlow.phone?.replace(/^\+91/, '') ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const phone = normalizePhone(`+${cc}${num.replace(/\D/g, '')}`);
@@ -22,12 +23,12 @@ export default function PhoneScreen() {
     setBusy(true);
     setError(undefined);
     try {
-      const r = await api.startAuth(phone);
-      onboarding.phone = phone;
-      onboarding.devCode = r.devCode;
+      const r = await api.phoneStart(phone);
+      phoneFlow.phone = phone;
+      phoneFlow.devCode = r.devCode;
       // The next screen's input re-opens it; a keyboard carried across screens never resizes the layout.
       Keyboard.dismiss();
-      router.push({ pathname: '/code', params: change ? { change } : {} });
+      router.push('/code');
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -39,10 +40,9 @@ export default function PhoneScreen() {
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior="padding">
       <Screen>
         <BackHeader />
-        <Steps at={0} />
         <T v="headline" style={{ fontSize: 36 }}>{change ? 'Your new number' : 'Your number'}</T>
         <T v="meta" style={{ fontSize: 18, lineHeight: 27, marginTop: 12 }}>
-          We'll text you a code to check it's you. People can pay you at this number.
+          We'll text you a code to check it's you. Then people can pay you at this number, we'll text you when money arrives, and you can pay by text without internet.
         </T>
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 28 }}>
           <View style={{ width: 108 }}>

@@ -21,7 +21,7 @@ import {
   cache,
   checkQuote,
   decideRoute,
-  ensureRegistered,
+  afterUnlock,
   errorText,
   holdNotes,
   pinKey,
@@ -194,7 +194,7 @@ export default function Review() {
       lock(u);
       throw new TransferError('wrong-passkey', 'That passkey belongs to another wallet. Pick your Ender passkey.');
     }
-    ensureRegistered(u);
+    void afterUnlock(u);
     let r: R;
     try {
       r = await sign(u);

@@ -161,31 +161,36 @@ describe('register and SMS routing', () => {
   const pk = provingKeys(user);
   const keysJson = { Ax: pk.Ax.toString(), Ay: pk.Ay.toString(), nk: pk.nk.toString(), viewSk: bytesToBigInt(pk.viewSk).toString() };
   const eoa = privateKeyToAccount(generatePrivateKey());
+  // The accounts; texts come from their numbers.
+  const A = eoa.address.toLowerCase();
+  const B = '0x000000000000000000000000000000000000b0b0';
   let env: Env;
   const sms = async (from: string, body: string) => (await handleInbound(env, { from, body }))?.body;
 
   beforeAll(async () => {
     env = testEnv();
     for (const [phone, address] of [
-      [ALICE, eoa.address.toLowerCase()],
-      [BOB, '0x000000000000000000000000000000000000b0b0'],
+      [ALICE, A],
+      [BOB, B],
     ])
       await env.DB.prepare('INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, 0)').bind(phone, address, 'testnet').run();
   });
 
   test('register is idempotent and refuses other keys', async () => {
-    const r = await register(env, ALICE, 'testnet', keysJson);
+    const r = await register(env, A, 'testnet', keysJson);
     expect(r.owner).toBe(b64(packAddress(owner(pk))));
-    expect(await register(env, ALICE, 'testnet', keysJson)).toEqual(r);
+    expect(await register(env, A, 'testnet', keysJson)).toEqual(r);
     const other = provingKeys(newUser());
     await expect(
-      register(env, ALICE, 'testnet', { Ax: other.Ax.toString(), Ay: other.Ay.toString(), nk: other.nk.toString(), viewSk: '1' }),
+      register(env, A, 'testnet', { Ax: other.Ax.toString(), Ay: other.Ay.toString(), nk: other.nk.toString(), viewSk: '1' }),
     ).rejects.toThrow('key-changed');
-    await expect(register(env, BOB, 'testnet', keysJson)).rejects.toThrow('key-in-use');
-    await expect(register(env, BOB, 'testnet', { ...keysJson, Ax: '1' })).rejects.toThrow('bad-keys');
-    await expect(register(env, BOB, 'mainnet', keysJson)).rejects.toThrow('unsupported');
-    const row = await env.DB.prepare('SELECT nk, view_sk FROM shielded_users WHERE phone = ?').bind(ALICE).first<{ nk: string; view_sk: string }>();
+    await expect(register(env, B, 'testnet', keysJson)).rejects.toThrow('key-in-use');
+    await expect(register(env, B, 'testnet', { ...keysJson, Ax: '1' })).rejects.toThrow('bad-keys');
+    await expect(register(env, B, 'mainnet', keysJson)).rejects.toThrow('unsupported');
+    await expect(register(env, '0x000000000000000000000000000000000000dead', 'testnet', keysJson)).rejects.toThrow('not-registered');
+    const row = await env.DB.prepare('SELECT nk, view_sk, eoa, sealed_as FROM shielded_users WHERE account = ?').bind(A).first<{ nk: string; view_sk: string; eoa: string; sealed_as: null }>();
     expect(row!.nk).not.toContain(keysJson.nk);
+    expect([row!.eoa, row!.sealed_as]).toEqual([A, null]);
   });
 
   test('PAY to a number without a shielded key', async () => {
@@ -217,9 +222,9 @@ describe('register and SMS routing', () => {
 
   test('public-shaped SIG goes to the deposit when the quote is a SHIELD', async () => {
     await env.DB.prepare(
-      `INSERT INTO shielded_quotes (id, phone, network, kind, amount, fee, exp, created_at) VALUES ('D3P2', ?, 'testnet', 'shield', '5000000', '10000', ?, 0)`,
+      `INSERT INTO shielded_quotes (id, account, network, kind, amount, fee, exp, created_at) VALUES ('D3P2', ?, 'testnet', 'shield', '5000000', '10000', ?, 0)`,
     )
-      .bind(ALICE, Math.floor(Date.now() / 1000) + 600)
+      .bind(A, Math.floor(Date.now() / 1000) + 600)
       .run();
     const stranger = privateKeyToAccount(generatePrivateKey());
     const signature = await stranger.signMessage({ message: 'not the authorization' });
@@ -263,10 +268,10 @@ describe('register and SMS routing', () => {
   test('a SIG whose prefix names another network than its quote is refused, and the quote stays open', async () => {
     const t = Math.floor(Date.now() / 1000) + 300;
     await env.DB.prepare(
-      `INSERT INTO sessions (id, phone, network, from_address, to_address, amount, fee, nonce, deadline, request_hash, expires_at)
+      `INSERT INTO sessions (id, account, network, from_address, to_address, amount, fee, nonce, deadline, request_hash, expires_at)
        VALUES ('M2N3', ?, 'mainnet', ?, '0x000000000000000000000000000000000000b0b0', '1000000', '10000', '0', ?, 'h', ?)`,
     )
-      .bind(ALICE, eoa.address.toLowerCase(), t, t)
+      .bind(A, A, t, t)
       .run();
     const stranger = privateKeyToAccount(generatePrivateKey());
     const signature = signatureToBase64(await stranger.signMessage({ message: 'x' }));
@@ -277,8 +282,8 @@ describe('register and SMS routing', () => {
 
     // Shielded quotes (a deposit's public-shaped SIG, a private SIG) check the same way.
     for (const [id, kind] of [['M4N5', 'shield'], ['M6N7', 'merge']])
-      await env.DB.prepare(`INSERT INTO shielded_quotes (id, phone, network, kind, amount, fee, exp, created_at) VALUES (?, ?, 'mainnet', ?, '0', '10000', ?, 0)`)
-        .bind(id, ALICE, kind, t)
+      await env.DB.prepare(`INSERT INTO shielded_quotes (id, account, network, kind, amount, fee, exp, created_at) VALUES (?, ?, 'mainnet', ?, '0', '10000', ?, 0)`)
+        .bind(id, A, kind, t)
         .run();
     expect(await sms(ALICE, `[Test] SIG M4N5 ${signature}`)).toBe('[Test] ERR M4N5 wrong-network');
     expect(await sms(ALICE, `[Test] SIG M6N7 ${encodeRefs([1])} ${b64(new Uint8Array(64).fill(7))}`)).toBe('[Test] ERR M6N7 wrong-network');
@@ -291,6 +296,16 @@ describe('register and SMS routing', () => {
     expect(await sms(ALICE, '[Test] SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
     expect(await sms('+919800000005', 'SYNC T')).toBe('[Test] ERR not-registered');
     expect(await sms('+919800000005', 'SYNC')).toBe('ERR not-registered');
+  });
+
+  test('an account without a number has no SMS path: its old number is refused and cannot be paid', async () => {
+    await env.DB.prepare('UPDATE links SET phone = NULL WHERE address = ?').bind(B).run();
+    expect(await sms(BOB, 'SYNC')).toBe('ERR not-registered');
+    expect(await sms(BOB, `SEND ${ALICE}, 1 AUSD`)).toBe('ERR not-registered');
+    expect(await sms(BOB, '[Test] MERGE')).toBe('[Test] ERR not-registered');
+    expect(await sms(BOB, 'hello')).toBeUndefined(); // not on Ender: silence
+    expect(await sms(ALICE, `SEND ${BOB}, 1 AUSD`)).toBe('ERR not-on-ender');
+    await env.DB.prepare('UPDATE links SET phone = ? WHERE address = ?').bind(BOB, B).run();
   });
 });
 

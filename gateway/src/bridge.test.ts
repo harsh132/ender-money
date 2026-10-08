@@ -17,7 +17,6 @@ const { bridgeFee, pending, prepare, submit } = await import('./bridge');
 const { GatewayError } = await import('./core');
 type Env = import('./env').Env;
 
-const PHONE = '+919800000001';
 const user = privateKeyToAccount(generatePrivateKey());
 const ME = user.address.toLowerCase() as Address;
 const USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' as Address;
@@ -179,7 +178,8 @@ beforeEach(async () => {
       }),
     },
   } as unknown as Env;
-  await env.DB.prepare('INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, 0)').bind(PHONE, ME, 'mainnet').run();
+  // An account without a phone number: auto-bridge needs none.
+  await env.DB.prepare('INSERT INTO links (address, network, created_at) VALUES (?, ?, 0)').bind(ME, 'mainnet').run();
   await env.DB.prepare('INSERT INTO foreign_balances (address, chain_id, token, seen_at) VALUES (?, 8453, ?, 1)').bind(ME, USDC).run();
 });
 
@@ -193,11 +193,11 @@ const code = (p: Promise<unknown>) =>
 describe('pending and prepare', () => {
   test('lists what arrived and is not waiting', async () => {
     await env.DB.prepare('INSERT INTO foreign_balances (address, chain_id, token, seen_at, retry_at) VALUES (?, 1, ?, 2, 9999999999)').bind(ME, NATIVE).run();
-    expect(await pending(env, PHONE)).toEqual({ items: [{ chainId: 8453, token: USDC }] });
+    expect(await pending(env, ME)).toEqual({ items: [{ chainId: 8453, token: USDC }] });
   });
 
   test('prices the fee from a draft quote and the simulated batch, and hands back the nonces', async () => {
-    const p = await prepare(env, PHONE, { chainId: 8453, token: USDC });
+    const p = await prepare(env, ME, { chainId: 8453, token: USDC });
     // gas: 150k simulated + 20k Calibur + 25k delegation = 195k at 1 gwei, + 1e12 L1: 1.96e14 wei × 1.3 × $3000 = $0.76 of $100.
     expect(p).toMatchObject({ chainId: 8453, token: USDC, amount: '100000000', amountUsd: 100, bps: 77, feeRecipient: BRIDGE_FEE_RECIPIENT, nonce: '0', delegated: false, authNonce: 3 });
     // The draft: the whole balance, to ourselves, without an app fee.
@@ -224,37 +224,37 @@ describe('pending and prepare', () => {
 
   test('a delegated address takes no authorization and keeps its Calibur nonce', async () => {
     chain.delegated = true;
-    expect(await prepare(env, PHONE, { chainId: 8453, token: USDC })).toMatchObject({ delegated: true, nonce: '7' });
+    expect(await prepare(env, ME, { chainId: 8453, token: USDC })).toMatchObject({ delegated: true, nonce: '7' });
   });
 
   test("refusals: unknown chain, nothing there, a token Relay can't take, too small, too dear, the gateway key short", async () => {
-    expect(await code(prepare(env, PHONE, { chainId: 143, token: USDC }))).toBe('bad-chain');
-    expect(await code(prepare(env, PHONE, { chainId: 8453, token: 'nope' }))).toBe('bad-token');
+    expect(await code(prepare(env, ME, { chainId: 143, token: USDC }))).toBe('bad-chain');
+    expect(await code(prepare(env, ME, { chainId: 8453, token: 'nope' }))).toBe('bad-token');
 
     chain.usdc = 0n;
-    expect(await code(prepare(env, PHONE, { chainId: 8453, token: USDC }))).toBe('nothing-to-bridge');
+    expect(await code(prepare(env, ME, { chainId: 8453, token: USDC }))).toBe('nothing-to-bridge');
     expect(await rows('SELECT * FROM foreign_balances')).toEqual([]);
 
     await env.DB.prepare('INSERT INTO foreign_balances (address, chain_id, token, seen_at) VALUES (?, 8453, ?, 1)').bind(ME, USDC).run();
     chain.usdc = 100_000_000n;
     relayDown = 'unsupported';
-    expect(await code(prepare(env, PHONE, { chainId: 8453, token: USDC }))).toBe('unsupported-token');
+    expect(await code(prepare(env, ME, { chainId: 8453, token: USDC }))).toBe('unsupported-token');
     // Not listed again until more arrives (or a week passes).
-    expect(await pending(env, PHONE)).toEqual({ items: [] });
+    expect(await pending(env, ME)).toEqual({ items: [] });
     relayDown = undefined;
 
     chain.usdc = 900_000n;
-    expect(await code(prepare(env, PHONE, { chainId: 8453, token: USDC }))).toBe('too-small');
+    expect(await code(prepare(env, ME, { chainId: 8453, token: USDC }))).toBe('too-small');
     chain.usdc = 5_000_000n;
     chain.simGas = 2_000_000n;
-    expect(await code(prepare(env, PHONE, { chainId: 8453, token: USDC }))).toBe('fee-too-high');
+    expect(await code(prepare(env, ME, { chainId: 8453, token: USDC }))).toBe('fee-too-high');
     chain.simGas = 150_000n;
     chain.usdc = 100_000_000n;
     chain.sponsor = 10n ** 12n;
-    expect(await code(prepare(env, PHONE, { chainId: 8453, token: USDC }))).toBe('sponsor-low');
+    expect(await code(prepare(env, ME, { chainId: 8453, token: USDC }))).toBe('sponsor-low');
     chain.sponsor = 10n ** 18n;
     chain.reverts = true;
-    expect(await code(prepare(env, PHONE, { chainId: 8453, token: USDC }))).toBe('reverted');
+    expect(await code(prepare(env, ME, { chainId: 8453, token: USDC }))).toBe('reverted');
     expect(await rows('SELECT * FROM bridges')).toEqual([]);
   });
 });
@@ -262,14 +262,14 @@ describe('pending and prepare', () => {
 describe('submit', () => {
   /** Prepare, fetch the quote with the fee as the app does, and sign it with the app's code. */
   const signed = async (token = USDC) => {
-    const p = (await prepare(env, PHONE, { chainId: 8453, token })) as BridgePrepared;
+    const p = (await prepare(env, ME, { chainId: 8453, token })) as BridgePrepared;
     const q = relayQuote({ user: user.address, recipient: user.address, originCurrency: token, amount: p.amount });
     return signBridge(user as Parameters<typeof signBridge>[0], p, q as never); // the app resolves its own copy of viem
   };
 
   test('sends the user-signed batch with their authorization, from the gateway key, in one transaction', async () => {
     const body = await signed();
-    expect(await submit(env, PHONE, body)).toEqual({ txHash: pad('0xb5', { size: 32 }) });
+    expect(await submit(env, ME, body)).toEqual({ txHash: pad('0xb5', { size: 32 }) });
     expect(sent).toHaveLength(1);
     const { chain: name, item } = sent[0]!;
     expect(name).toBe('base');
@@ -282,14 +282,14 @@ describe('submit', () => {
     expect(await rows('SELECT state, tx_hash, request_id FROM bridges')).toEqual([{ state: 'sent', tx_hash: pad('0xb5', { size: 32 }), request_id: ID }]);
     expect(await rows('SELECT * FROM foreign_balances')).toEqual([]);
     // Once only.
-    expect(await code(submit(env, PHONE, body))).toBe('unknown-bridge');
+    expect(await code(submit(env, ME, body))).toBe('unknown-bridge');
   });
 
   test('the native coin goes as the deposit value, no approve', async () => {
     chain.native = 10n ** 17n;
     const body = await signed(NATIVE);
     expect(body.calls).toHaveLength(1);
-    expect(await submit(env, PHONE, body)).toMatchObject({ txHash: expect.any(String) });
+    expect(await submit(env, ME, body)).toMatchObject({ txHash: expect.any(String) });
   });
 
   test('calls elsewhere, a different depositor, a bad signature, a missing authorization: refused, nothing sent', async () => {
@@ -310,26 +310,26 @@ describe('submit', () => {
     ];
     for (const [want, tamper] of cases) {
       const body = await signed();
-      expect([want, await code(submit(env, PHONE, tamper(body) as never))]).toEqual([want, want]);
+      expect([want, await code(submit(env, ME, tamper(body) as never))]).toEqual([want, want]);
     }
     expect(sent).toEqual([]);
   });
 
   test("another user's bridge is unknown", async () => {
     const body = await signed();
-    await env.DB.prepare('INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, 0)').bind('+919800000002', THIEF, 'mainnet').run();
-    expect(await code(submit(env, '+919800000002', body))).toBe('unknown-bridge');
+    await env.DB.prepare('INSERT INTO links (address, network, created_at) VALUES (?, ?, 0)').bind(THIEF, 'mainnet').run();
+    expect(await code(submit(env, THIEF, body))).toBe('unknown-bridge');
   });
 
   test('would revert, or now costs more than the fee pays for: refused, so the app prepares again', async () => {
     let body = await signed();
     chain.reverts = true;
-    expect(await code(submit(env, PHONE, body))).toBe('reverted');
+    expect(await code(submit(env, ME, body))).toBe('reverted');
     chain.reverts = false;
     body = await signed();
     // Prepared at 195k gas (the fee covers 1.3× that, 253k); 310k now is past it.
     chain.realGas = 310_000n;
-    expect(await code(submit(env, PHONE, body))).toBe('gas-rose');
+    expect(await code(submit(env, ME, body))).toBe('gas-rose');
     expect(sent).toEqual([]);
     expect(await rows('SELECT state, error FROM bridges ORDER BY created_at')).toEqual([
       { state: 'failed', error: 'reverted' },

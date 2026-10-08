@@ -32,7 +32,10 @@
     "BRIDGE_GAS_MARKUP": "1.3",
     "BRIDGE_FEE_FLAT_USD": "0",
     "BRIDGE_MAX_FEE_PCT": "5",
-    "BRIDGE_MIN_USD": "1"
+    "BRIDGE_MIN_USD": "1",
+    // Changing an Ender ID without a verified phone: this much AUSD, paid on Monad mainnet to TREASURY_ADDRESS (unset:
+    // the gateway key's address, which GET /account/name tells the app).
+    "NAME_FEE_AUSD": "2"
   },
 
   "ratelimits": [{ "name": "IP_LIMITER", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } }],

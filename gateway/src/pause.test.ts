@@ -11,7 +11,7 @@ const env = { PAUSED: '1' } as unknown as Env;
 const ctx = { waitUntil: () => { throw new Error('no work while paused'); }, passThroughOnException: () => {} } as unknown as ExecutionContext;
 
 test('paused: every request gets 503 paused', async () => {
-  for (const path of ['/auth/start', '/shielded/quote', '/webhooks/alchemy', '/activity']) {
+  for (const path of ['/auth/challenge', '/shielded/quote', '/webhooks/alchemy', '/activity']) {
     const res = await worker.fetch!(new Request(`https://api.ender.money${path}`, { method: 'POST', body: '{}' }) as never, env, ctx);
     expect(res.status).toBe(503);
     expect((await res.json()) as unknown).toEqual({ error: 'paused' });

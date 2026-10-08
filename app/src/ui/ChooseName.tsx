@@ -7,8 +7,8 @@ import { c, f } from '../lib/theme';
 import { BackHeader, Banner, Button, Field, Screen, Steps, T } from './kit';
 
 /**
- * Choose your Ender ID: in signup after the passkey (create.tsx, no way back: the passkey exists), and once for an
- * account made before names (name.tsx). Checks availability while typing; the gateway has the last word on submit.
+ * Choose your Ender ID: the account's one change of its random ID (name.tsx). Checks availability while typing; the
+ * gateway has the last word on submit.
  */
 export const ChooseName = ({
   onSubmit,

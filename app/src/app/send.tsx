@@ -12,6 +12,7 @@ import { phoneDisplay, short, usd } from '../lib/format';
 import { quickSend, whileOwnScreen } from '../lib/keys';
 import { hasPool, privateBalance } from '../lib/private';
 import { useStore, type Recipient } from '../lib/store';
+import { smsOn } from '../lib/transport';
 import { c, f } from '../lib/theme';
 import { Back, Bolt, Person, Scan, Shield } from '../ui/icons';
 import { Sigil } from '../ui/Sigil';
@@ -36,8 +37,9 @@ const toOf = (raw: string): To | null => {
 /** A private address takes private payments only. */
 const isPrivateTo = (t: To) => t.to.startsWith('ender1');
 
-const fromRecent = (r: Recipient): To | null => {
-  const t = toOf(r.phone ?? r.enderId ?? r.address);
+/** By number only while we can pay numbers (smsOn); else by Ender ID or address. */
+const fromRecent = (r: Recipient, sms: boolean): To | null => {
+  const t = toOf((sms && r.phone) || r.enderId || r.address);
   return t && { ...t, label: r.name, ...(r.enderId ? { enderId: r.enderId } : {}) };
 };
 
@@ -55,6 +57,7 @@ export default function Send() {
   const network = useStore((s) => s.network);
   const publicBalance = useStore((s) => s.account[s.network]?.balance);
   const notes = useStore((s) => s.notes[s.network]);
+  const sms = useStore(smsOn);
   const [text, setText] = useState('');
   const [to, setTo] = useState<To | null>(() => (params.to ? toOf(params.to) : null));
   const toPrivate = !!to && isPrivateTo(to);
@@ -91,6 +94,7 @@ export default function Send() {
   const pick = async (t: To | null) => {
     if (!t) return;
     if (isPrivateTo(t) && !hasPool(network)) return setError('Private addresses work in Test mode only.');
+    if (t.phone && !sms) return setError('Add your phone number in Settings to pay numbers.');
     setError(undefined);
     // Online, check an Ender ID exists, and show a number's Ender ID. Offline the gateway resolves it later.
     if (t.enderId && t.enderId === t.to) {
@@ -234,14 +238,14 @@ export default function Send() {
         autoFocus
         value={text}
         onChangeText={setText}
-        placeholder="Number, Ender ID or address"
+        placeholder={sms ? 'Number, Ender ID or address' : 'Ender ID or address'}
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="default"
         onSubmitEditing={() => void pick(typed)}
         right={
           <View style={{ flexDirection: 'row', gap: 4 }}>
-            <Pressable accessibilityLabel="Pick a contact" onPress={pickContact} hitSlop={8} style={{ padding: 6 }}><Person size={24} color={c.fg2} /></Pressable>
+            {sms ? <Pressable accessibilityLabel="Pick a contact" onPress={pickContact} hitSlop={8} style={{ padding: 6 }}><Person size={24} color={c.fg2} /></Pressable> : null}
             <Pressable accessibilityLabel="Scan a code" onPress={() => router.push('/scan')} hitSlop={8} style={{ padding: 6 }}><Scan size={24} color={c.fg2} /></Pressable>
           </View>
         }
@@ -263,7 +267,7 @@ export default function Send() {
             {recents.map((r) => {
               const name = r.name ?? r.enderId ?? (r.phone ? phoneDisplay(r.phone) : short(r.address));
               return (
-                <Pressable key={r.address} onPress={() => void pick(fromRecent(r))} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, opacity: pressed ? 0.7 : 1 })}>
+                <Pressable key={r.address} onPress={() => void pick(fromRecent(r, sms))} style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 14, height: 72, opacity: pressed ? 0.7 : 1 })}>
                   <Sigil address={r.address} fallback={name} />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <T v="body" numberOfLines={1}>{name}</T>
@@ -274,7 +278,11 @@ export default function Send() {
             })}
           </>
         ) : (
-          <T v="meta" style={{ marginTop: 20 }}>Type a phone number or Ender ID (name.ender.my), or paste an address. Pick a contact or scan a code with the buttons above.</T>
+          <T v="meta" style={{ marginTop: 20 }}>
+            {sms
+              ? 'Type a phone number or Ender ID (name.ender.my), or paste an address. Pick a contact or scan a code with the buttons above.'
+              : 'Type an Ender ID (name.ender.my), or paste an address. Scan a code with the button above.'}
+          </T>
         )}
       </ScrollView>
     </Screen>

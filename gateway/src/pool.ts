@@ -146,7 +146,7 @@ export const ingest = async (env: Env, network: NetworkName, logs: Log[]) => {
         const d = decryptNote(leaf.ciphertext, u.keys.viewSk);
         if (!d || d.amount === 0n) continue;
         if (commitment(d.amount, u.me.ownerKey, d.blinding) !== leaf.commitment) continue; // not theirs, or a bogus ciphertext
-        notes.push({ phone: u.phone, pos: leaf.idx, ...d, nullifier: nullifier(u.keys.nk, leaf.commitment, leaf.idx), tx: leaf.tx });
+        notes.push({ account: u.account, pos: leaf.idx, ...d, nullifier: nullifier(u.keys.nk, leaf.commitment, leaf.idx), tx: leaf.tx });
       }
     }
   }
@@ -164,8 +164,8 @@ export const ingest = async (env: Env, network: NetworkName, logs: Log[]) => {
     ...nullifiers.map((n) => env.DB.prepare('INSERT OR IGNORE INTO pool_nullifiers (network, nullifier) VALUES (?, ?)').bind(network, n.toString())),
     ...notes.map((n) =>
       env.DB.prepare(
-        'INSERT OR IGNORE INTO shielded_notes (network, pos, phone, amount, blinding, nullifier, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).bind(network, n.pos, n.phone, n.amount.toString(), n.blinding.toString(), n.nullifier.toString(), n.tx),
+        'INSERT OR IGNORE INTO shielded_notes (network, pos, account, amount, blinding, nullifier, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).bind(network, n.pos, n.account, n.amount.toString(), n.blinding.toString(), n.nullifier.toString(), n.tx),
     ),
     env.DB.prepare(
       `UPDATE shielded_notes SET spent = 1 WHERE network = ? AND spent = 0

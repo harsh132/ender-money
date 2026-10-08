@@ -58,7 +58,7 @@ import { b64, formatReply, isPhone, REF_MOD, SESSION_ID_ALPHABET, shortHex, unb6
 import { publicClient } from './chain';
 import { GatewayError } from './core';
 import type { Env } from './env';
-import { idOfPhone } from './names';
+import { idOfAddress } from './names';
 import { canText, sendSms } from './outbound';
 import { catchUp, ingest, poolOf, treeFor } from './pool';
 import { prove, warm, type Circuit } from './prover';
@@ -104,14 +104,15 @@ export const openKey = async (secret: string | undefined, sealed: string, aad: s
   return new TextDecoder().decode(pt);
 };
 
-type UserRow = { phone: string; network: NetworkName; ax: string; ay: string; nk: string; view_sk: string; owner_key: string; enc_pk: Hex; eoa: Address };
-export type ShieldedUser = { phone: string; keys: ProvingKeys; me: Owner; eoa: Address };
+/** `account`: the wallet address (also `eoa`). `sealed_as`: the number the keys were sealed with, for rows from before 0010. */
+type UserRow = { account: string; sealed_as: string | null; network: NetworkName; ax: string; ay: string; nk: string; view_sk: string; owner_key: string; enc_pk: Hex; eoa: Address };
+export type ShieldedUser = { account: string; keys: ProvingKeys; me: Owner; eoa: Address };
 
 const openUser = async (env: Env, r: UserRow): Promise<ShieldedUser> => {
-  const aad = (f: string) => `${r.phone}|${r.network}|${f}`;
+  const aad = (f: string) => `${r.sealed_as ?? r.account}|${r.network}|${f}`;
   const [nk, viewSk] = await Promise.all([openKey(env.SHIELDED_KEY_SECRET, r.nk, aad('nk')), openKey(env.SHIELDED_KEY_SECRET, r.view_sk, aad('view'))]);
   const keys: ProvingKeys = { nk: BigInt(nk), viewSk: hexToBytes(viewSk as Hex), Ax: BigInt(r.ax), Ay: BigInt(r.ay) };
-  return { phone: r.phone, keys, me: owner(keys), eoa: r.eoa };
+  return { account: r.account, keys, me: owner(keys), eoa: r.eoa };
 };
 
 /** Every registered user on the network, keys opened (trial decryption). */
@@ -120,8 +121,8 @@ export const usersFor = async (env: Env, network: NetworkName) => {
   return Promise.all(results.map((r) => openUser(env, r)));
 };
 
-const userRow = (env: Env, phone: string, network: NetworkName) =>
-  env.DB.prepare('SELECT * FROM shielded_users WHERE phone = ? AND network = ?').bind(phone, network).first<UserRow>();
+const userRow = (env: Env, account: string, network: NetworkName) =>
+  env.DB.prepare('SELECT * FROM shielded_users WHERE account = ? AND network = ?').bind(account, network).first<UserRow>();
 
 /** The registered user a private address belongs to: owner key (unique per network) and encryption key must both match. */
 const userByAddress = async (env: Env, network: NetworkName, packed: Uint8Array) => {
@@ -130,12 +131,16 @@ const userByAddress = async (env: Env, network: NetworkName, packed: Uint8Array)
   return r && r.enc_pk === bytesToHex(encPk) ? r : null;
 };
 
-/** The registered user behind an Ender ID. */
+/** The registered user behind an Ender ID (any the account ever had). */
 const userByLabel = (env: Env, network: NetworkName, label: string) =>
-  env.DB.prepare('SELECT s.* FROM shielded_users s JOIN links l ON l.phone = s.phone WHERE l.label = ? AND s.network = ?').bind(label, network).first<UserRow>();
+  env.DB.prepare('SELECT s.* FROM shielded_users s JOIN names n ON n.address = s.account WHERE n.label = ? AND s.network = ?').bind(label, network).first<UserRow>();
 
-const userFor = async (env: Env, phone: string, network: NetworkName) => {
-  const r = await userRow(env, phone, network);
+/** The registered user holding this verified number. */
+const userByPhone = (env: Env, network: NetworkName, phone: string) =>
+  env.DB.prepare('SELECT s.* FROM shielded_users s JOIN links l ON l.address = s.account WHERE l.phone = ? AND s.network = ?').bind(phone, network).first<UserRow>();
+
+const userFor = async (env: Env, account: string, network: NetworkName) => {
+  const r = await userRow(env, account, network);
   if (!r) throw new GatewayError('NOUSER', 403);
   return openUser(env, r);
 };
@@ -164,10 +169,10 @@ const decimal = (s: unknown, max: bigint) => {
 /**
  * Online onboarding: the app hands over nk, the viewing key and the authority
  * public key (decimal strings; viewSk is the 32 key bytes as a big-endian
- * integer). Deposits must come from the number's linked wallet. Idempotent;
- * different keys for a registered number are refused.
+ * integer). Deposits must come from the account's own wallet. Idempotent;
+ * different keys for a registered account are refused.
  */
-export const register = async (env: Env, phone: string, network: NetworkName, raw: Record<string, unknown> | undefined) => {
+export const register = async (env: Env, account: string, network: NetworkName, raw: Record<string, unknown> | undefined) => {
   poolOf(network);
   const Ax = decimal(raw?.Ax, FIELD_SIZE);
   const Ay = decimal(raw?.Ay, FIELD_SIZE);
@@ -176,23 +181,20 @@ export const register = async (env: Env, phone: string, network: NetworkName, ra
   const me = owner(keys);
   const ownerB64 = b64(packAddress(me));
 
-  const link = await env.DB.prepare('SELECT address FROM links WHERE phone = ?').bind(phone).first<{ address: Address }>();
-  if (!link) throw new GatewayError('not-registered', 403);
-  const eoa = link.address.toLowerCase();
+  if (!(await env.DB.prepare('SELECT 1 FROM links WHERE address = ?').bind(account).first())) throw new GatewayError('not-registered', 403);
 
-  const existing = await userRow(env, phone, network);
+  const existing = await userRow(env, account, network);
   if (existing) {
     if (existing.owner_key !== me.ownerKey.toString() || existing.enc_pk !== bytesToHex(me.encPk)) throw new GatewayError('key-changed', 409);
-    if (existing.eoa !== eoa) await env.DB.prepare('UPDATE shielded_users SET eoa = ? WHERE phone = ? AND network = ?').bind(eoa, phone, network).run();
     return { owner: ownerB64 };
   }
-  const aad = (f: string) => `${phone}|${network}|${f}`;
+  const aad = (f: string) => `${account}|${network}|${f}`;
   const inserted = await env.DB.prepare(
-    `INSERT OR IGNORE INTO shielded_users (phone, network, ax, ay, nk, view_sk, owner_key, enc_pk, eoa, created_at)
+    `INSERT OR IGNORE INTO shielded_users (account, network, ax, ay, nk, view_sk, owner_key, enc_pk, eoa, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
-      phone,
+      account,
       network,
       Ax.toString(),
       Ay.toString(),
@@ -200,22 +202,22 @@ export const register = async (env: Env, phone: string, network: NetworkName, ra
       await sealKey(env.SHIELDED_KEY_SECRET, bytesToHex(keys.viewSk), aad('view')),
       me.ownerKey.toString(),
       bytesToHex(me.encPk),
-      eoa,
+      account,
       now(),
     )
     .run();
-  if (inserted.meta.changes !== 1) throw new GatewayError('key-in-use', 409); // the same keys under another number
+  if (inserted.meta.changes !== 1) throw new GatewayError('key-in-use', 409); // the same keys under another account
   return { owner: ownerB64 };
 };
 
-/** The number's whole index (spent included, with each note's transaction) and the tree root, for the app to resync its cache. */
-export const notes = async (env: Env, phone: string, network: NetworkName) => {
+/** The account's whole index (spent included, with each note's transaction) and the tree root, for the app to resync its cache. */
+export const notes = async (env: Env, account: string, network: NetworkName) => {
   poolOf(network);
-  if (!(await userRow(env, phone, network))) throw new GatewayError('NOUSER', 403);
+  if (!(await userRow(env, account, network))) throw new GatewayError('NOUSER', 403);
   await catchUp(env, network);
   const [{ results }, tree] = await Promise.all([
-    env.DB.prepare('SELECT pos, amount, blinding, spent, tx_hash FROM shielded_notes WHERE phone = ? AND network = ? ORDER BY pos')
-      .bind(phone, network)
+    env.DB.prepare('SELECT pos, amount, blinding, spent, tx_hash FROM shielded_notes WHERE account = ? AND network = ? ORDER BY pos')
+      .bind(account, network)
       .all<{ pos: number; amount: string; blinding: string; spent: number; tx_hash: Hex | null }>(),
     treeFor(env, network, []),
   ]);
@@ -229,7 +231,7 @@ export const notes = async (env: Env, phone: string, network: NetworkName) => {
 /** A registered number's shielded address, so the app can pin a contact's key online. */
 export const shieldedAddress = async (env: Env, network: NetworkName, phone: string) => {
   poolOf(network);
-  const r = await userRow(env, phone, network);
+  const r = await userByPhone(env, network, phone);
   if (!r) throw new GatewayError('NOUSER', 404);
   return { owner: packedOwner(r) };
 };
@@ -296,11 +298,12 @@ const policy = async (env: Env, network: NetworkName, tx: Tx, gatewayInputs: boo
 
 type QuoteRow = {
   id: string;
-  phone: string;
+  account: string;
   network: NetworkName;
   kind: ShieldedKind;
-  to_phone: string | null;
-  /** withdraw: the 0x address; pay: the ender1 address or Ender ID, when paid to one. */
+  /** pay: the recipient's account. */
+  to_account: string | null;
+  /** withdraw: the 0x address; pay: what was paid (a number, an ender1 address or an Ender ID). */
   to_address: string | null;
   amount: string;
   fee: string;
@@ -312,15 +315,15 @@ type QuoteRow = {
   error: string | null;
 };
 
-/** Unspent notes of at least 0.001 AUSD that no other quote of this number is spending right now. */
-const eligibleNotes = async (env: Env, phone: string, network: NetworkName, exceptQuote = '') => {
+/** Unspent notes of at least 0.001 AUSD that no other quote of this account is spending right now. */
+const eligibleNotes = async (env: Env, account: string, network: NetworkName, exceptQuote = '') => {
   const [{ results }, busy] = await Promise.all([
-    env.DB.prepare('SELECT pos, amount, blinding FROM shielded_notes WHERE phone = ? AND network = ? AND spent = 0')
-      .bind(phone, network)
+    env.DB.prepare('SELECT pos, amount, blinding FROM shielded_notes WHERE account = ? AND network = ? AND spent = 0')
+      .bind(account, network)
       .all<{ pos: number; amount: string; blinding: string }>(),
     // A claim past its deadline can't land any more, so it stops reserving (a run killed mid-proof never strands notes).
-    env.DB.prepare(`SELECT ins FROM shielded_quotes WHERE phone = ? AND state = 'sending' AND ins IS NOT NULL AND id != ? AND exp > ?`)
-      .bind(phone, exceptQuote, now())
+    env.DB.prepare(`SELECT ins FROM shielded_quotes WHERE account = ? AND state = 'sending' AND ins IS NOT NULL AND id != ? AND exp > ?`)
+      .bind(account, exceptQuote, now())
       .all<{ ins: string }>(),
   ]);
   const reserved = new Set(busy.results.flatMap((q) => JSON.parse(q.ins) as number[]));
@@ -336,15 +339,15 @@ export type ShieldedQuoteRequest = { network: NetworkName; kind: ShieldedKind; t
 
 /**
  * PAY (to a registered number), withdraw (to a 0x address), SHIELD (deposit
- * from the number's own wallet) and MERGE (0 to self). Answers FUNDS / MERGE
+ * from the account's own wallet) and MERGE (0 to self). Answers FUNDS / MERGE
  * before quoting, as the phone's selection rule would. `to` in the result:
  * the recipient's packed shielded address (base64) for pay, the address for
  * withdraw, absent otherwise.
  */
-export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, waitUntil: (p: Promise<unknown>) => void = () => {}) => {
+export const quote = async (env: Env, account: string, req: ShieldedQuoteRequest, waitUntil: (p: Promise<unknown>) => void = () => {}) => {
   const { network, kind } = req;
   poolOf(network);
-  const user = await userRow(env, phone, network);
+  const user = await userRow(env, account, network);
   if (!user) throw new GatewayError('NOUSER', 403);
 
   let amount = 0n;
@@ -355,21 +358,20 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
   }
   const fee = parseUnits(env.FEE_AUSD, AUSD_DECIMALS);
 
-  let toPhone: string | null = null;
-  /** The 0x address of a withdrawal, or the ender1 address a payment was made to. */
+  let toAccount: string | null = null;
+  /** The 0x address of a withdrawal, or what a payment was made to (a number, an ender1 address, an Ender ID). */
   let toAddress: string | null = null;
   let to: string | undefined;
   if (kind === 'pay') {
     const packed = typeof req.to === 'string' ? decodePrivateAddress(req.to) : null;
     const label = typeof req.to === 'string' ? parseEnderId(req.to) : null;
     if (typeof req.to !== 'string' || (!isPhone(req.to) && !packed && !label)) throw new GatewayError('bad-recipient');
-    const r = packed ? await userByAddress(env, network, packed) : label ? await userByLabel(env, network, label) : await userRow(env, req.to, network);
+    const r = packed ? await userByAddress(env, network, packed) : label ? await userByLabel(env, network, label) : await userByPhone(env, network, req.to);
     if (!r) throw new GatewayError('NOUSER', 404);
-    // To a private address or an Ender ID: its owner's number is used internally (the private Received) and never shown to
-    // the payer, whose `Sent … to=` names what they paid (an ender1 address: its owner's Ender ID, if any).
-    toPhone = r.phone;
-    if (packed) toAddress = encodePrivateAddress(packed);
-    else if (label) toAddress = enderId(label);
+    // The recipient's account is used internally (the private Received) and never shown to the payer, whose
+    // `Sent … to=` names what they paid (an ender1 address: its owner's Ender ID, if any).
+    toAccount = r.account;
+    toAddress = packed ? encodePrivateAddress(packed) : label ? enderId(label) : req.to;
     to = packedOwner(r);
   } else if (kind === 'withdraw') {
     if (typeof req.to !== 'string' || !isAddress(req.to)) throw new GatewayError('bad-recipient');
@@ -384,7 +386,7 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
     if (balance < amount + fee) throw new GatewayError('FUNDS', 402);
   } else {
     await catchUp(env, network);
-    const plan = planCircuit(await eligibleNotes(env, phone, network), amount + fee);
+    const plan = planCircuit(await eligibleNotes(env, account, network), amount + fee);
     if (plan.err) throw new GatewayError(plan.err, 402);
     circuit = plan.circuit as Circuit;
   }
@@ -394,10 +396,10 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
     const id = newId();
     // Ids share the SMS SIG namespace with public sessions; skip any a session already uses.
     const inserted = await env.DB.prepare(
-      `INSERT OR IGNORE INTO shielded_quotes (id, phone, network, kind, to_phone, to_address, amount, fee, exp, created_at)
+      `INSERT OR IGNORE INTO shielded_quotes (id, account, network, kind, to_account, to_address, amount, fee, exp, created_at)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = ?)`,
     )
-      .bind(id, phone, network, kind, toPhone, toAddress, amount.toString(), fee.toString(), exp, now(), id)
+      .bind(id, account, network, kind, toAccount, toAddress, amount.toString(), fee.toString(), exp, now(), id)
       .run();
     if (inserted.meta.changes !== 1) continue;
     waitUntil(warm(env, circuit).catch((e) => console.warn('prover warm failed', e instanceof Error ? e.message : e)));
@@ -406,15 +408,15 @@ export const quote = async (env: Env, phone: string, req: ShieldedQuoteRequest, 
   throw new GatewayError('busy', 503);
 };
 
-/** Kind and network, if `id` is this number's shielded quote: routes a public-shaped SMS SIG (a deposit's) by kind. */
-export const quoteOf = (env: Env, phone: string, id: string) =>
-  env.DB.prepare('SELECT kind, network FROM shielded_quotes WHERE id = ? AND phone = ?').bind(id, phone).first<{ kind: ShieldedKind; network: NetworkName }>();
+/** Kind and network, if `id` is this account's shielded quote: routes a public-shaped SMS SIG (a deposit's) by kind. */
+export const quoteOf = (env: Env, account: string, id: string) =>
+  env.DB.prepare('SELECT kind, network FROM shielded_quotes WHERE id = ? AND account = ?').bind(id, account).first<{ kind: ShieldedKind; network: NetworkName }>();
 
 // ---------------------------------------------------------------- submit
 
 export type SubmitRequest = { id: string; refs?: number[]; sig?: Uint8Array; signature?: Hex };
-/** to: what was paid (number, Ender ID, ender1 or 0x address; our own number for a merge). toPhone: the recipient's number, internal only. */
-export type SubmitResult = { tx: Hex; p?: number; pending?: true; kind: ShieldedKind; amount: string; to: string; toPhone?: string };
+/** to: what was paid (number, Ender ID, ender1 or 0x address; our own address for a merge). toAccount: the recipient's account, internal only. */
+export type SubmitResult = { tx: Hex; p?: number; pending?: true; kind: ShieldedKind; amount: string; to: string; toAccount?: string };
 
 const resultOf = (q: QuoteRow): SubmitResult => ({
   tx: q.tx_hash!,
@@ -423,8 +425,8 @@ const resultOf = (q: QuoteRow): SubmitResult => ({
   kind: q.kind,
   amount: formatUnits(BigInt(q.amount), AUSD_DECIMALS),
   // Paid to a private address: that address, never its owner's number.
-  to: q.to_address ?? q.to_phone ?? q.phone,
-  ...(q.to_phone ? { toPhone: q.to_phone } : {}),
+  to: q.to_address ?? q.account,
+  ...(q.to_account ? { toAccount: q.to_account } : {}),
 });
 
 const firstLeaf = (network: NetworkName, logs: Log[]) => {
@@ -455,14 +457,14 @@ const finalize = async (env: Env, q: QuoteRow, txHash: Hex) => {
  * corrected retry before expiry works; a repeat after success returns the
  * same transaction.
  */
-export const submit = async (env: Env, phone: string, req: SubmitRequest, waited = 0): Promise<SubmitResult> => {
+export const submit = async (env: Env, account: string, req: SubmitRequest, waited = 0): Promise<SubmitResult> => {
   const q = await env.DB.prepare(
-    `UPDATE shielded_quotes SET state = 'sending', error = NULL WHERE id = ? AND phone = ? AND state = 'open' AND exp > ? RETURNING *`,
+    `UPDATE shielded_quotes SET state = 'sending', error = NULL WHERE id = ? AND account = ? AND state = 'open' AND exp > ? RETURNING *`,
   )
-    .bind(req.id, phone, now())
+    .bind(req.id, account, now())
     .first<QuoteRow>();
   if (!q) {
-    const existing = await env.DB.prepare('SELECT * FROM shielded_quotes WHERE id = ? AND phone = ?').bind(req.id, phone).first<QuoteRow>();
+    const existing = await env.DB.prepare('SELECT * FROM shielded_quotes WHERE id = ? AND account = ?').bind(req.id, account).first<QuoteRow>();
     if (!existing) throw new GatewayError('UNKNOWN', 404);
     if (existing.tx_hash) {
       // A send that timed out: if it has landed since, settle it now.
@@ -473,7 +475,7 @@ export const submit = async (env: Env, phone: string, req: SubmitRequest, waited
     // wait for its outcome rather than fail. If it was refused, the quote reopens and this one tries itself.
     if (existing.state === 'sending' && existing.exp > now() && waited < IN_FLIGHT_WAIT_MS) {
       await new Promise((r) => setTimeout(r, 500));
-      return submit(env, phone, req, waited + 500);
+      return submit(env, account, req, waited + 500);
     }
     if (existing.state === 'sending') throw new GatewayError('in-progress', 409);
     throw new GatewayError('EXPIRED', 410);
@@ -512,10 +514,10 @@ const transfer = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
   const { sig, refs } = req;
   if (!sig || sig.length !== 64 || !refs?.length || refs.some((r) => !Number.isInteger(r) || r < 0 || r >= REF_MOD)) throw new GatewayError('bad-request');
   const network = q.network;
-  const user = await userFor(env, q.phone, network);
+  const user = await userFor(env, q.account, network);
   let recipient: Recipient | null = null;
   if (q.kind === 'pay') {
-    const r = await userRow(env, q.to_phone!, network);
+    const r = await userRow(env, q.to_account!, network);
     if (!r) throw new GatewayError('NOUSER', 404);
     recipient = recipientOf(r);
   }
@@ -532,7 +534,7 @@ const transfer = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
     if (q.kind === 'withdraw') return buildTx({ ...common, outputs: withdrawOutputs(change), extAmount: -amount, recipient: q.to_address as Address });
     return buildTx({ ...common, outputs: [{ amount, to: recipient ?? user.me }, change] });
   };
-  const r = resolveRefs(await eligibleNotes(env, q.phone, network, q.id), refs, amount + fee, build, (msg) => verifySig(sig, msg, user.keys));
+  const r = resolveRefs(await eligibleNotes(env, q.account, network, q.id), refs, amount + fee, build, (msg) => verifySig(sig, msg, user.keys));
   if ('err' in r) throw new GatewayError(r.err);
   await env.DB.prepare('UPDATE shielded_quotes SET ins = ? WHERE id = ?').bind(JSON.stringify(r.ins.map((n) => n.pos)), q.id).run();
 
@@ -542,9 +544,9 @@ const transfer = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
   const data = encodeFunctionData({ abi: shieldedPoolAbi, functionName: 'transact', args: [poolArgs(proof, input), r.tx.extData] });
   const sent = await relay(env, q, data);
 
-  if (q.kind === 'pay' && q.to_phone !== q.phone && sent.state === 'sent' && sent.p !== null) {
+  if (q.kind === 'pay' && q.to_account !== q.account && sent.state === 'sent' && sent.p !== null) {
     const note = { amount: formatUnits(amount, AUSD_DECIMALS), p: sent.p, blinding: r.tx.outs[0]!.blinding };
-    await receivedAlert(env, q.phone, q.to_phone!, sent.tx_hash!, note, network).catch((e) =>
+    await receivedAlert(env, q.account, q.to_account!, sent.tx_hash!, note, network).catch((e) =>
       console.error('private received alert failed', e instanceof Error ? e.message : e),
     );
   }
@@ -556,7 +558,7 @@ const deposit = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
   if (!signature || !/^0x[0-9a-fA-F]{130}$/.test(signature)) throw new GatewayError('bad-request');
   const network = q.network;
   const { pool } = poolOf(network);
-  const user = await userFor(env, q.phone, network);
+  const user = await userFor(env, q.account, network);
   if (!user.eoa) throw new GatewayError('NOEOA', 409);
   const amount = BigInt(q.amount);
 
@@ -602,9 +604,9 @@ const deposit = async (env: Env, q: QuoteRow, req: SubmitRequest) => {
 };
 
 /**
- * A private `Received … tx=… p=… b=…` to the recipient of a private payment the gateway relayed, if they take texts
- * (one per tx, alerts_sent). `from=` is the sender's Ender ID, left out when they have none: never their number.
- * No balance: a carrier reads every text.
+ * A private `Received … tx=… p=… b=…` to the recipient of a private payment the gateway relayed, if their account has a
+ * number and takes texts (one per tx, alerts_sent). `from=` is the sender's Ender ID, left out when they have none:
+ * never their number. No balance: a carrier reads every text. `from` and `to` are accounts.
  */
 const receivedAlert = async (
   env: Env,
@@ -614,13 +616,13 @@ const receivedAlert = async (
   note: { amount: string; p: number; blinding: bigint },
   network: NetworkName,
 ) => {
-  const link = await env.DB.prepare('SELECT alerts FROM links WHERE phone = ?').bind(to).first<{ alerts: number }>();
-  if (!link?.alerts || !canText(to)) return;
-  const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to).run();
+  const link = await env.DB.prepare('SELECT phone, alerts FROM links WHERE address = ?').bind(to).first<{ phone: string | null; alerts: number }>();
+  if (!link?.phone || !link.alerts || !canText(link.phone)) return;
+  const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, link.phone).run();
   if (fresh.meta.changes !== 1) return;
-  const sender = await idOfPhone(env, from);
+  const sender = await idOfAddress(env, from);
   const text = formatReply({ kind: 'received', ...note, ...(sender ? { from: sender } : {}), tx: shortHex(txHash), test: network === 'testnet' });
-  await sendSms(env, to, withRetrieverHash(text, env.SMS_RETRIEVER_HASH));
+  await sendSms(env, link.phone, withRetrieverHash(text, env.SMS_RETRIEVER_HASH));
 };
 
 /** base64 (padded or not) of a 64-byte signature, as /shielded/submit takes it. */

@@ -146,9 +146,10 @@ beforeAll(async () => {
     [ALICE, aliceEOA.address],
     [BOB, bobEOA.address],
   ] as const)
-    await env.DB.prepare('INSERT INTO links (phone, address, network, created_at, label) VALUES (?, ?, ?, 0, ?)')
-      .bind(phone, eoa.toLowerCase(), 'testnet', phone === BOB ? 'bobby' : 'alice')
-      .run();
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO links (phone, address, network, created_at, label) VALUES (?, ?, ?, 0, ?)').bind(phone, eoa.toLowerCase(), 'testnet', phone === BOB ? 'bobby' : 'alice'),
+      env.DB.prepare('INSERT INTO names (label, address, created_at) VALUES (?, ?, 0)').bind(phone === BOB ? 'bobby' : 'alice', eoa.toLowerCase()),
+    ]);
 }, 120_000);
 
 afterAll(() => {
@@ -158,8 +159,11 @@ afterAll(() => {
   if (ready) spawnSync('docker', ['rm', '-f', PROVER_NAME], { stdio: 'ignore' });
 });
 
+/** The account behind each number: its wallet address. */
+const accountOf = (phone: string) => (phone === ALICE ? aliceEOA : bobEOA).address.toLowerCase();
+
 const api = async <T>(phone: string, method: string, path: string, body?: unknown): Promise<T> => {
-  const jwt = await signJwt(env.JWT_SECRET, { phone, address: '' }, 600);
+  const jwt = await signJwt(env.JWT_SECRET, { sub: accountOf(phone) }, 600);
   const res = await worker.fetch!(
     new Request(`https://api.test${path}`, {
       method,
@@ -307,7 +311,7 @@ test.skipIf(!ready)(
     const fees = await pub.readContract({ address: token, abi: art('MockAUSD').abi, functionName: 'balanceOf', args: [FEE_RECIPIENT] });
     expect(formatUnits(fees as bigint, 6)).toBe('0.04');
     // Nothing the gateway keeps at rest is plaintext key material.
-    const row = await env.DB.prepare('SELECT nk FROM shielded_users WHERE phone = ?').bind(ALICE).first<{ nk: string }>();
+    const row = await env.DB.prepare('SELECT nk FROM shielded_users WHERE account = ?').bind(accountOf(ALICE)).first<{ nk: string }>();
     expect(row!.nk).not.toContain(provingKeys(users[ALICE]!).nk.toString());
     expect(unb64(owners[ALICE]!, 64)).not.toBeNull();
 
@@ -315,9 +319,9 @@ test.skipIf(!ready)(
     const env2 = { ...env, DB: d1() } as Env;
     await env2.DB.prepare('INSERT INTO links (phone, address, network, created_at) VALUES (?, ?, ?, 0)').bind(ALICE, aliceEOA.address.toLowerCase(), 'testnet').run();
     const pk = provingKeys(users[ALICE]!);
-    await shieldedCore.register(env2, ALICE, 'testnet', { Ax: pk.Ax.toString(), Ay: pk.Ay.toString(), nk: pk.nk.toString(), viewSk: BigInt(bytesToHex(pk.viewSk)).toString() });
+    await shieldedCore.register(env2, accountOf(ALICE), 'testnet', { Ax: pk.Ax.toString(), Ay: pk.Ay.toString(), nk: pk.nk.toString(), viewSk: BigInt(bytesToHex(pk.viewSk)).toString() });
     await catchUp(env2, 'testnet');
-    const again = await shieldedCore.notes(env2, ALICE, 'testnet');
+    const again = await shieldedCore.notes(env2, accountOf(ALICE), 'testnet');
     expect(again.notes).toEqual(await notesOf(ALICE));
     expect(BigInt(again.root)).toBe((await treeFor(env, 'testnet', [])).root);
     expect((await treeFor(env2, 'testnet', [])).size).toBe(6);

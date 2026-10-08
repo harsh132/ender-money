@@ -2,6 +2,27 @@
 
 Deliberately deferred. Newest first.
 
+- **Accounts by address, random Ender IDs (8 Oct).**
+  - `TURNSTILE_SECRET` makes every account creation need a Turnstile token,
+    and the native app sends none: set it only once the web app ships and
+    the native app sends one too (or the gateway tells the two apart).
+  - The app trusts the gateway's `treasury` and `fee` for the $2 change (it
+    shows the amount; checkQuote pins the recipient to what the gateway said).
+    Ship the treasury in the app, as the bridge fee recipient is, if the
+    gateway shouldn't be able to redirect it.
+  - Older app builds (OTP sign-in) stop working at the 0010 deploy; there is
+    no forced-update prompt.
+  - An account from before 0010 that never signs in again keeps
+    `label = NULL` (no random ID); it has a number, so it's still payable by
+    it. A one-off backfill script could assign the rest.
+  - A private registration made by a wallet that later lost its number to a
+    relink now belongs to that old wallet's account (0010 maps by `eoa`); the
+    old passkey gets it back by signing in.
+  - Verifying a phone from the Ender ID screen returns to Settings, not to
+    the change screen.
+  - Changing the Ender ID by payment needs mainnet and the public balance:
+    a private balance can't pay it.
+
 - **Auto-bridge (6 Oct).**
   - Only fungible tokens Relay can route: NFTs, illiquid and spam tokens stay
     where they landed (a token Relay refuses waits a week, or until more
@@ -55,14 +76,9 @@ Deliberately deferred. Newest first.
   - The app's 15 s quote timeout falls back to SMS, but a first quote can run
     the pool catch-up (up to 200 log chunks) and take longer.
   - Prover 400/422 errors reach the app as `internal` 500; map them to a code.
-  - `registerShielded` swallows `key-changed`/`key-in-use` silently (see the
-    re-link item below).
+  - `registerShielded` swallows `key-changed`/`key-in-use` silently.
   - Nothing cleans up old `shielded_quotes` rows.
   - The sender low-balance warning isn't built.
-- **New passkey, same number.** The gateway refuses a re-registration with
-  different shielded keys (`key-changed`), so a user who lost their passkey and
-  made a new wallet can't use private payments. Needs a re-link flow (verify
-  the number, retire the old keys; notes under the old keys are lost with them).
 - **Private Received after a late settle.** A private payment whose receipt
   timed out and was settled by a later submit sends no private `Received` to
   the recipient.

@@ -56,6 +56,12 @@ export type Env = {
   RESOLVER_ADDRESS?: string;
   /** secp256k1 key the resolver trusts (its `signers`). Can point any name anywhere: a secret, never logged. */
   RESOLVER_SIGNER_KEY?: string;
+  /** AUSD an account pays on mainnet to change its Ender ID without a phone (names.ts). Defaults to "2". */
+  NAME_FEE_AUSD?: string;
+  /** Where that fee is paid; defaults to the gateway key's address. */
+  TREASURY_ADDRESS?: string;
+  /** Cloudflare Turnstile secret: set, creating an account (POST /auth/verify) needs a passing `turnstile` token. */
+  TURNSTILE_SECRET?: string;
   /** "1" enables the /dev/* routes and pay pages at <label>.localhost. Only ever set in .dev.vars. */
   DEV?: string;
 };

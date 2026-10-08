@@ -8,13 +8,14 @@ every SMS the app and gateway exchange in [../docs/SMS.md](../docs/SMS.md).
 
 ```
 src/app/          routes (expo-router)
-  welcome, phone, code          O1-O3: log in with an OTP
-  create, restore, lost         N1-N3 new wallet (with its Ender ID) / E1 welcome back / E2 lost passkey
-  name                          pick an Ender ID once, for an account made before them
+  welcome, create               O1, N1-N2: a passkey (new, or an Ender one from another phone), sign-in by signature, "Your Ender ID"
+  phone, code                   Settings -> Phone number: add, change or move a number by OTP
+  name                          Settings -> Ender ID: the one change (by verified number, or $2 on mainnet)
   (tabs)/home, activity, settings
   send, review, scan, receive, tx/[id]
 src/lib/
   keys.ts       passkey -> PRF -> secp256k1 key (Mera), Quick send sessions
+  auth.ts       sign-in by wallet signature (challenge, personal_sign, verify); renews a refused token from the Quick send key
   wallet.ts     sync, signup (7702 authorizations), quote checks, signing
   private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge and auto-shield rules
   transport.ts  internet first; SMS composer when offline ([Test] prefix for testnet); replies by SMS, clipboard or paste
@@ -80,14 +81,36 @@ wallet) it's public. A private payment refused at the quote or by the notes
 (`NOUSER`, `FUNDS`, `MERGE`), or at submit/proving when the public balance
 covers it, switches Review to public, so Try again pays publicly.
 
+## Accounts and phone numbers
+
+An account is the passkey's wallet address. Onboarding is welcome → create
+or reuse a passkey → sign-in by signature (`lib/auth.ts`; the first one
+creates the account) → `/wallet/create` (delegation, idempotent, also after a
+restore) → "Your Ender ID" → home. No phone number, no OTP. A token the
+gateway refuses (expired, or an older build's phone token) is renewed from
+the open Quick send key; otherwise Home shows an Unlock button, and any
+passkey unlock signs in again (`afterUnlock`). A lost passkey is just a new
+wallet.
+
+The phone number is optional (Settings → Phone number: add by OTP, change,
+remove; a number on another account moves here). With one (`smsOn`): alerts
+by text, offline sending, paying numbers and being paid by number. Without
+one those are hidden: no contact picker or numbers on Send, no number on
+Receive, no alerts switch or SMS gateway in Settings, and `textGateway`
+refuses. On the web (`Platform.OS === 'web'`) none of it shows, nor the
+Phone number row.
+
 ## Ender IDs
 
-Every account has a permanent name, `<label>.ender.my` (5-20 of `a-z`, `0-9`,
-interior hyphens; `protocol/names.ts`). A new wallet picks it after the
-passkey and before `/wallet/create`, which takes it (`ui/ChooseName.tsx`,
-checking availability as the user types). A relink keeps the existing one;
-an account without one is sent to the same screen on launch (`/name`, once
-per launch; `POST /account/name`). Restoring an account that has one skips it.
+Every account has a name, `<label>.ender.my` (5-20 of `a-z`, `0-9`, interior
+hyphens; `protocol/names.ts`): a random one (`nifty-robin-245`) from the
+gateway at sign-up, which the app shows once after the passkey. Settings →
+Ender ID can change it once (`/name`, `ui/ChooseName.tsx`, checking
+availability as the user types): with the account's verified number
+(Android), or by paying the fee (`$2`) on mainnet with enough public balance,
+a normal public transfer to the gateway's treasury whose hash goes with the
+change (kept as `namePaid` until it's used, so a taken name never costs a
+second payment). The earlier ID keeps working as an alias.
 
 Send, the scanner and links take `label.ender.my`, `@label` and
 `https://label.ender.my`; the gateway resolves the name, and the route is

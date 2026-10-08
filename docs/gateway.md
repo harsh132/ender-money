@@ -1,9 +1,10 @@
 # Gateway — scope
 
 The gateway takes a user's signed request, over HTTPS or SMS, and turns it
-into a sponsored Monad transaction. It also verifies phone numbers, keeps the
-phone ↔ address directory, and texts incoming-payment alerts. It never holds
-user funds and cannot move them without a fresh user signature.
+into a sponsored Monad transaction. An account is a wallet address, signed in
+by signature; a phone number is optional (verified by OTP), and only an
+account with one gets texts and the SMS path. It never holds user funds and
+cannot move them without a fresh user signature.
 
 Parent scope: [SCOPE.md](../SCOPE.md). Build window: 3–5 Oct (Twilio and
 alerts on 9 Oct).
@@ -28,22 +29,28 @@ missing. Three ways in, one session core, one way out to the chain.
 ```
 
 The session core is transport-agnostic: every request arrives as
-`{ phone, transport, command }` and leaves as a reply the transport renders
-(JSON for HTTPS, one GSM-7 segment for SMS). HTTPS and SMS differ only in
-how they authenticate and how they format.
+`{ account, transport, command }` (the account is its wallet address: the
+JWT's subject over HTTPS, the account holding the sender's verified number
+over SMS) and leaves as a reply the transport renders (JSON for HTTPS, one
+GSM-7 segment for SMS). HTTPS and SMS differ only in how they authenticate
+and how they format.
 
 ## Storage
 
-D1 holds all per-number state; Durable Objects only where something must
+D1 holds all per-account state; Durable Objects only where something must
 have exactly one owner. Every state change that must happen once is a
-single atomic SQL statement, so concurrent requests can't double-act.
+single atomic SQL statement (or one D1 batch, a transaction), so concurrent
+requests can't double-act.
 
 | Store | Holds |
 | --- | --- |
-| D1 `links` | `phone (E.164) · address · network · alerts · created_at · label`, unique on phone, on address and on label. The directory, queried both ways: phone → address to pay a number, address → phone for alerts. `label` is the Ender ID (`0007_names.sql`), null for accounts made before names |
+| D1 `links` | the accounts (`0010_accounts.sql`): `address` (primary key, lowercase) `· phone · network · alerts · created_at · label`. `phone` is E.164, unique, null until an OTP verifies one; queried phone → address to pay a number or act on a text, address → phone for alerts. `label` is the current Ender ID (unique) |
+| D1 `names` | `label · address · created_at`: every Ender ID ever given out (the random one, the custom one, any from before 0010). Never reassigned, so an earlier label keeps resolving to its account |
+| D1 `name_unlocks` | `proof · address`: the one name change per account (address unique) and what paid for it, a number or a mainnet transaction hash, each usable once (proof is the primary key) |
+| D1 `auth_challenges` | `address · nonce · expires_at`: one open sign-in challenge per address, deleted by the verify that reads it |
 | D1 `otps` | `phone · code_hash · attempts · expires_at`. A try is `UPDATE … SET attempts = attempts + 1 WHERE phone = ? AND expires_at > ? AND attempts < 5 RETURNING *` |
 | D1 `sessions` | pending quotes, i.e. exactly what the user is asked to sign (below). Signing claims one with `UPDATE … SET state = 'sending' WHERE id = ? AND state = 'open' RETURNING *`; a racing duplicate gets nothing back and reads the tx hash instead |
-| D1 `alerts_sent` | `tx_hash · phone`, so a repeated webhook delivery (or a private `Received` for the same transaction) never alerts twice |
+| D1 `alerts_sent` | `tx_hash · phone` (the number texted), so a repeated webhook delivery (or a private `Received` for the same transaction) never alerts twice |
 | D1 `ens_names` | `address · name · checked_at`: reverse ENS per sender address for a public `Received`'s `from=` (`0008_names_in_texts.sql`); `name` null when there is none a text can carry; rechecked after 7 days |
 | D1 `transfers` | AUSD `Transfer` logs touching a linked address (`network · tx_hash · log_index · from · to · amount · block · at`), written by the Alchemy webhook (`INSERT OR IGNORE`, so a repeated delivery writes nothing); serves `GET /activity` and alerts |
 | D1 `alchemy_webhooks` | `id · network · signing_key · addresses · created_at`: the Address Activity webhooks the gateway made itself (`0006_alchemy.sql`); `signing_key` sealed under `SHIELDED_KEY_SECRET` |
@@ -64,7 +71,7 @@ one code path.
 | Column | Purpose |
 | --- | --- |
 | `id` | 4-char base32 code shown in SMS (`Q 7F3K …`, `SIG 7F3K …`) |
-| `phone`, `network` | who asked, on which chain |
+| `account`, `network` | who asked (its address, the same as `from`), on which chain |
 | `from`, `to`, `amount`, `fee`, `deliver`, `min_out` | the readable transfer; the call batch is rebuilt from these by `protocol/`, not stored |
 | `nonce`, `deadline` | Calibur nonce and expiry inside the signed data |
 | `request_hash` | hash of the request; a repeated `SEND` from the same number while the quote is open returns this quote |
@@ -82,23 +89,42 @@ No user activity history on the server; the app keeps its own.
 
 ## HTTPS API
 
-Auth: `/auth/verify` returns a JWT (HS256, 30 days) holding `phone` and
-`address`. Every call below except `/auth/*` and webhooks needs it. Losing it
-(fresh device, cleared storage) just means logging in again with an OTP.
+Auth: an account is its wallet address. `POST /auth/challenge` and
+`POST /auth/verify` exchange an EIP-191 signature for a JWT (HS256, 30 days)
+whose `sub` is the address, lowercase. Every call below except `/auth/*`,
+the name lookups and webhooks needs it. A token from before 0010 (it held
+`phone`, no `sub`) is refused with `unauthorized` (401), like an expired one:
+the app signs in again by signature from the open Quick send key, or at the
+next passkey unlock. Losing it (fresh device, cleared storage) just means
+signing in again with the passkey.
+
+The signed message is `protocol/auth.ts` `loginMessage`, built by both sides
+from the challenge, never sent for signing as is:
+
+```
+ender.money wants you to sign in to Ender with your wallet.
+
+Address: 0x<address, lowercase>
+Nonce: <32 hex>
+Expires: <ISO 8601>
+```
 
 | Call | Does |
 | --- | --- |
-| `POST /auth/start {phone}` | normalises to E.164, rate-limits, sends a 6-digit OTP (10 min, 5 tries, 3 sends/number/hour, plus per-IP) |
-| `POST /auth/verify {phone, code}` | returns `{token, status: "new"}` or `{token, status: "existing", address, balance, name}` |
-| `POST /wallet/create {address, authorizations: {mainnet, testnet}, relink?, name?}` | checks both 7702 authorizations (delegate = Calibur, chain matches, nonce = account nonce, signer = address), queues each delegation with that network's `Sponsor` DO, where it rides in the next batch alongside transfers (gateway pays, the user is never charged), waits for them, then writes `links`. Refuses a linked number unless `relink`. `name` (the Ender ID label) is required for a new account (`name-required`); see "Ender IDs". Returns `{token, address, name}` |
-| `GET /account?network=` | `name` (the Ender ID, or null), balance, Calibur nonce (`getSeq(0)`), delegated yes/no, and the INR rate for the `≈ ₹` line (Frankfurter / ECB daily rate, cached an hour; omitted if unavailable) |
-| `POST /tx/quote {network, to, amount, deliver?}` | `to` is an address or phone number. Returns `{id, to, amount, fee, out?, nonce, deadline, calls}`; the app rebuilds and checks `calls` before signing |
+| `POST /auth/challenge {address}` | a fresh 16-byte nonce for the address, valid 5 minutes, replacing any open one: `{nonce, expires}` (unix seconds). Per IP |
+| `POST /auth/verify {address, signature, turnstile?}` | deletes the address's challenge in the same statement that reads it (so a signature answers once, and a wrong one spends it: `bad-signature` 401; none open or past its expiry: `challenge-expired` 401), recovers the signer (`recoverMessageAddress`, plain ecrecover: the passkey's key is an EOA). The first sign-in creates the account with a random Ender ID (one batch: no account without an ID) and pushes it to Alchemy's webhooks; with the `TURNSTILE_SECRET` secret set it first needs a passing Cloudflare Turnstile `turnstile` token (`captcha-failed` 403). An account from before random IDs gets one here. Returns `{token, address, name, created}`. Per IP |
+| `POST /wallet/create {authorizations: {mainnet, testnet}}` | the signed-in account's delegation: checks each 7702 authorization (delegate = Calibur, chain matches, nonce = account nonce, signer = the account), queues it with that network's `Sponsor` DO, where it rides in the next batch alongside transfers (gateway pays, the user is never charged), and waits. A network already delegated answers at once, so the app sends it after every sign-up and restore. Returns `{address, delegations}` |
+| `GET /account?network=` | `name` (the Ender ID), `phone` (the verified number, or null), balance, Calibur nonce (`getSeq(0)`), delegated yes/no, and the INR rate for the `≈ ₹` line (Frankfurter / ECB daily rate, cached an hour; omitted if unavailable) |
+| `POST /account/phone/start {phone}` | sends a 6-digit OTP to the number (10 min, 5 tries, 3 sends/number/hour, plus per IP; `sms-unavailable` 503 where Ender can't text). JWT |
+| `POST /account/phone/verify {phone, code}` | `bad-code` / `code-expired` (401), else the number becomes this account's: on another account it moves here in the same batch (the code proves control) and that account loses its SMS features. `{phone, moved}` |
+| `POST /account/phone/remove` | the account gives its number up: no texts to it, and texts from it get `ERR not-registered` |
+| `POST /tx/quote {network, to, amount, deliver?}` | `to` is an address, a phone number (the account holding it) or an Ender ID. Returns `{id, to, amount, fee, out?, nonce, deadline, calls}`; the app rebuilds and checks `calls` before signing |
 | `POST /tx/sign {id, signature}` | runs the checks below, sends, returns `{txHash}` |
 | `GET /tx/:id` | the session's `network` (stored with it, so no parameter is needed), status (`open`, `sending`, `sent`, `failed`), tx hash and error. The app polls it while a transfer shows "Sending" (only needed when `/tx/sign` came back `pending`) |
-| `GET /activity?network=` | `network` defaults to the number's current one, as for `/account`. The number's last 100 AUSD transfers in and out (fee legs left out), from the `transfers` table, so an online recipient sees money arrive without an SMS and a fresh device gets its history back |
+| `GET /activity?network=` | `network` defaults to the account's current one, as for `/account`. The account's last 100 AUSD transfers in and out (fee legs left out), from the `transfers` table, so an online recipient sees money arrive without an SMS and a fresh device gets its history back |
 | `POST /account/alerts {on}` | the Settings switch "Text me when I get paid" (`links.alerts`) |
 | `POST /tx/quote` with `to: "label.ender.my"` | resolves the Ender ID to its public address (`unknown-name`, 404, if nobody has it) |
-| Ender ID routes | `GET /names/check`, `GET /names/:label`, `GET /names/by-phone`, `POST /account/name`, `/ccip`: see "Ender IDs" |
+| Ender ID routes | `GET /names/check`, `GET /names/:label`, `GET /names/by-phone`, `GET` and `POST /account/name`, `/ccip`: see "Ender IDs" |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
 | `POST /webhooks/twilio` | inbound SMS; checks `X-Twilio-Signature` |
 | `POST /webhooks/alchemy` | Alchemy Address Activity deliveries; `X-Alchemy-Signature` must be the hex HMAC-SHA256 of the raw body under the key of the webhook the body names (else 401). Records AUSD transfers and alerts, below; on the auto-bridge chains, notes incoming tokens (see "Auto-bridge") |
@@ -110,12 +136,14 @@ Full reference of every text, with exact lengths and error codes: [SMS.md](SMS.m
 
 Parsed and formatted by `protocol/sms.ts`, shared with the app. Identity is
 the sender's number as the carrier delivered it, normalised to E.164
-(bare Indian numbers get +91). The relay SIM also receives carrier promos,
-bank alerts and stray texts, so silence is the default: alphanumeric
-senders and short codes get nothing, an unparseable text gets nothing
-unless the number is on Ender (then `ERR bad-command`), and a well-formed
-command from a number that isn't on Ender gets `ERR not-registered`, since
-signing up needs the app online.
+(bare Indian numbers get +91), and the account is the one holding that
+verified number; an account without one has no SMS path. The relay SIM also
+receives carrier promos, bank alerts and stray texts, so silence is the
+default: alphanumeric senders and short codes get nothing, an unparseable
+text gets nothing unless the number is on Ender (then `ERR bad-command`),
+and a well-formed command from a number no account holds gets
+`ERR not-registered`, since signing up and adding a number need the app
+online.
 
 | In | Out |
 | --- | --- |
@@ -173,7 +201,7 @@ spent:
    and nobody else is sending it.
 2. Rebuild the EIP-712 digest from the stored session (never from the
    message).
-3. Recover the signer; it must equal the number's linked address.
+3. Recover the signer; it must equal the account's address.
 4. Balance still covers amount + fee.
 5. `eth_call` the batch (the account is already delegated on both networks
    since signup).
@@ -290,7 +318,7 @@ retry) is recorded but not texted about.
   (`https://api.ender.money/webhooks/alchemy`). A webhook reports only
   addresses it held when the block was made and there is no backfill, so
   every linked address goes onto each network's webhook before it is handed
-  out: `/wallet/create` pushes right after writing `links`, and the cron
+  out: the first `/auth/verify` pushes right after creating the account, and the cron
   (still every minute, with reconcile) pushes anything not yet in
   `alchemy_addresses` (a failed push, links made another way). A network's
   first webhook is created with every address already linked; a webhook
@@ -332,7 +360,7 @@ with `bun run gateway:migrate:remote`): copy the Notify auth token from the
 Alchemy dashboard (Webhooks page, "Auth token") and run
 `wrangler secret put ALCHEMY_AUTH_TOKEN -c gateway/wrangler.jsonc`. The
 next cron minute creates both webhooks with every linked address (or the
-next `/wallet/create`, whichever comes first); `wrangler tail` shows
+next new account, whichever comes first); `wrangler tail` shows
 `alchemy: created webhook <id> for <network>`. Nothing else to configure.
 
 ## Security
@@ -441,7 +469,7 @@ transports), `pool.ts` (index and Merkle tree), `prover.ts` (container).
 
 | Store | Holds |
 | --- | --- |
-| `shielded_users` | `phone · network · Ax · Ay · nk · view_sk · owner_key · enc_pk · eoa · created_at`. `nk` and `view_sk` are AES-256-GCM ciphertexts under `SHIELDED_KEY_SECRET`, bound to `phone|network|field`; `owner_key` and `enc_pk` are the public parts of the shielded address; `eoa` is the number's linked wallet, the only account its deposits may come from |
+| `shielded_users` | `account · network · Ax · Ay · nk · view_sk · owner_key · enc_pk · eoa · sealed_as · created_at`. `nk` and `view_sk` are AES-256-GCM ciphertexts under `SHIELDED_KEY_SECRET`, bound to `<sealed_as or account>|network|field` (`sealed_as`: the number a registration from before 0010 was sealed with); `owner_key` and `enc_pk` are the public parts of the shielded address; `eoa` is the account's wallet (= `account`), the only address its deposits may come from |
 | `pool_leaves` | `network · idx · commitment · ciphertext · block`, every `NewCommitment` |
 | `pool_nodes` | the Merkle tree (23 levels, Poseidon, empty leaf `ZERO_VALUE`): `network · level · idx · hash`, level 0 the leaves, level 23 the root; an absent node is that level's zero. A path costs one query |
 | `pool_appends` | one row per tree append `[from_size, to_size)`, keyed by `from_size`: two racing appends from the same size can't both commit (the D1 batch rolls back), so the tree is never built from stale siblings |
@@ -507,7 +535,7 @@ rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
    0.001 AUSD goes to the fee; a change-free withdrawal has two null outputs
    via `withdrawOutputs`, so no leaves and no `p`); the signature must verify
    (`BADSIG`). A deposit instead rebuilds `buildDeposit` and recovers the
-   EIP-3009 signer, which must be the number's wallet.
+   EIP-3009 signer, which must be the account's wallet.
 4. Policy (`POLICY`): inputs are the one sender's notes, or the gateway's
    zero-value deposit dummies (signed with its own authority key, from
    `GATEWAY_SHIELDED_SEED`); every non-null output belongs to a registered
@@ -527,7 +555,7 @@ rule (`protocol/select.ts`) runs on the sender's eligible notes first, so
 | Call | Does |
 | --- | --- |
 | `POST /shielded/register {network, keys: {Ax, Ay, nk, viewSk}}` | decimal strings; `viewSk` is the 32 key bytes as a big-endian integer. Returns `{owner}`, the 64-byte packed shielded address in unpadded base64 (`protocol/sms.ts` `b64`). `eoa` = the number's linked wallet. Idempotent; other keys for the same number are `key-changed` (409), the same keys under another number `key-in-use` (409) |
-| `GET /shielded/notes?network=` | `{notes: [{pos, amount, blinding, spent, tx?}], root}`: the number's whole index, spent included (amount, blinding and root as decimal strings; `tx` the full hash of the transaction that made the note, absent for notes indexed before `0008`). The app links private Activity rows to `tx` |
+| `GET /shielded/notes?network=` | `{notes: [{pos, amount, blinding, spent, tx?}], root}`: the account's whole index, spent included (amount, blinding and root as decimal strings; `tx` the full hash of the transaction that made the note, absent for notes indexed before `0008`). The app links private Activity rows to `tx` |
 | `POST /shielded/quote {network, kind, to?, amount}` | `kind`: `pay` (to a number or an `ender1…` private address), `withdraw` (to a 0x address), `shield`, `merge` (amount ignored). Returns `{id, exp, fee, to?}`: `to` is the recipient's packed address (base64) for `pay`, the address for `withdraw`, absent otherwise |
 | `POST /shielded/submit {id, refs?, sig?, signature?}` | `refs` (tree positions) + `sig` (64-byte EdDSA, base64, padded or not) for pay / withdraw / merge; `signature` (0x, 65-byte EIP-3009) for shield. Returns `{tx, p?}` after the receipt (`p` = position of output 0; absent for a change-free withdrawal); `{tx, pending: true}` if the receipt didn't come within 30 s, and a repeated submit settles it |
 | `GET /shielded/address?network=&phone=` | `{owner}` of a registered number, so the app can pin a contact's key online; `NOUSER` (404) otherwise |
@@ -570,47 +598,60 @@ today), alert MACs.
 
 ## Ender IDs
 
-Every account has a name, `<label>.ender.my`, chosen at signup and never
-changed (`protocol/names.ts`, shared with the app): 5-20 characters, `a-z`,
-`0-9` and interior single hyphens, case-insensitive (stored lowercase), not in
-`RESERVED_LABELS`, first come first served. It lives on `links.label`
-(unique), so it follows the number. 20 is the most a private `Received`
-naming the payer can carry in one segment (155 septets with `[Test] ` and
-the hash line). It was 30; the only name stored then, `harsh`, fits, and the
-schema is unchanged.
+Every account has a name, `<label>.ender.my` (`protocol/names.ts`, shared
+with the app): 5-20 characters, `a-z`, `0-9` and interior single hyphens,
+case-insensitive (stored lowercase), not in `RESERVED_LABELS` (the old Ender
+Wallet's list is a subset). 20 is the most a private `Received` naming the
+payer can carry in one segment (155 septets with `[Test] ` and the hash line).
+The current one is `links.label`; every one ever given out is in `names`.
 
-- **Signup.** The app asks for it after the passkey and sends it in
-  `/wallet/create` (`name`). Checked before any gas is spent (`bad-name`,
-  `name-taken` 409); written in the same batch as the link, so a signup that
-  lost a race since the check gets `name-taken` and no link (its delegations
-  are done; the retry with another name is cheap). A relink keeps the name
-  the number has, else the one the wallet has, ignoring `name`; an account
-  with neither link nor `name` is `name-required`.
-- **Accounts made before names** pick one once: `POST /account/name {name}`
-  (JWT) is one `UPDATE … WHERE label IS NULL`, so `name-already-set` (409)
-  after that, `name-taken` (409) if someone has it. The app opens the same
-  screen on launch while `/account` says `name: null`.
-- **Restore** needs nothing: `/auth/verify` returns the name.
+- **Random at sign-up.** The first `/auth/verify` gives the account
+  `<adjective>-<noun>-<100..999>` (`names.ts` `generateLabel`, word lists in
+  `words.ts`, both ported from the old Ender Wallet, ender-backend). Hyphens
+  are already valid; a pair longer than 20 characters is simply drawn again
+  (every word fits beside the shortest of the other list, so none is dead;
+  541 million names fit). Inserted in the same batch as the account row; a
+  taken label fails the batch and up to 8 draws follow, then an error.
+  An account from before 0010 without a name gets one on its next sign-in.
+- **Changed once.** `POST /account/name {name, txHash?}` (JWT), unlocked by
+  either the account's verified number, which must never have unlocked a
+  change before (a number moved to another account can't unlock a second),
+  or a confirmed payment of `NAME_FEE_AUSD` (2) AUSD to `TREASURY_ADDRESS`
+  (default: the gateway key's address) on Monad mainnet (testnet AUSD is
+  free): `txHash`'s receipt must be a success with AUSD `Transfer`s from the
+  account to the treasury adding up to the fee, never used before. One batch
+  writes the unlock (`name_unlocks`), the new label (`names`) and the switch,
+  so a taken name (`name-taken` 409) costs nothing and the same payment can be
+  retried. After that the name is locked (`name-already-set` 409). A name
+  chosen before 0010 counts as the change. Other refusals: `unlock-required`
+  (402: no usable number, no `txHash`), `phone-used` / `payment-used` (409),
+  `bad-payment` (400 malformed, 402 short or to the wrong address or from
+  another account), `payment-not-found` (404: not on mainnet, not landed yet,
+  or reverted).
+- **Aliases.** The earlier label stays in `names`: lookups, quotes, `SEND` /
+  `PAY`, ENS and the pay page all resolve it to the same account (the page
+  shows the current ID). It is never given to anyone else.
 
 | Call | Does |
 | --- | --- |
-| `GET /names/check?label=` | `{available: true}` or `{available: false, reason}`; `reason` is `characters`, `hyphens`, `too-short`, `too-long`, `reserved` or `taken`. Public, per IP (`names:<ip>`) |
-| `GET /names/:label` | `{name, address, private?}`: the public 0x address and, if the account registered its shielded keys (testnet pool), its `ender1…` private address. `unknown-name` (404). Public, per IP |
-| `GET /names/by-phone?phone=` | the same for a number (`name` may be null); `not-on-ender` (404). JWT only, limited per user (`lookup:<phone>`) and per IP |
-| `POST /account/name {name}` | the one-time claim above |
+| `GET /names/check?label=` | `{available: true}` or `{available: false, reason}`; `reason` is `characters`, `hyphens`, `too-short`, `too-long`, `reserved` or `taken` (any label ever given out). Public, per IP (`names:<ip>`) |
+| `GET /names/:label` | `{name, address, private?}` for any label the account had (`name`: its current one): the public 0x address and, if the account registered its shielded keys (testnet pool), its `ender1…` private address. `unknown-name` (404). Public, per IP |
+| `GET /names/by-phone?phone=` | the same for the account holding a verified number; `not-on-ender` (404). JWT only, limited per user (`lookup:<address>`) and per IP |
+| `GET /account/name` | `{name, locked, phone, fee, treasury}`: `phone` says the account's number can unlock the change |
+| `POST /account/name {name, txHash?}` | the one change above |
 
 Paying a name: `POST /tx/quote` and `SEND` resolve it to the public address
 (`unknown-name`); `/shielded/quote` and `PAY` resolve it to the owner's
 shielded key (`NOUSER` when unknown or not registered) and quote `to=` that
 key, so the phone can pin it, as for a number. `Sent` (public or private) says
-`to=<label>.ender.my`; the owner's number is only used internally (the
-private `Received`). Texts name Ender IDs wherever they can: SMS.md "Who
+`to=<label>.ender.my`; the owner's account is only used internally (the
+private `Received`, to its number if it has one). Texts name Ender IDs wherever they can: SMS.md "Who
 appears in texts".
 The app routes a name like a number: private when the name has a private
 address and the private notes cover it, else public.
 
 **Rate limits** all use `IP_LIMITER` with separate keys: `names:<ip>` (check
-and lookups), `lookup:<phone>` (by-phone, per signed-in user), `ccip:<ip>`,
+and lookups), `lookup:<address>` (by-phone, per signed-in user), `ccip:<ip>`,
 `page:<ip>`; 30 a minute each.
 
 ### ENS (CCIP-Read)
@@ -838,6 +879,48 @@ gives a fresh EOA USDC, gets a real Relay quote, signs with the app's code and
 submits through the gateway's: one type-4 transaction delegates the address
 and moves the USDC into Relay's depository (measured: 123.5k gas, priced at
 ~134k).
+
+## Accounts by address (0010)
+
+`0010_accounts.sql` re-keys accounts from the phone number to the wallet
+address. SQLite can't change a primary key in place, so `links` is rebuilt
+(`links_new`, copy, drop, rename) and every existing row carries over with
+its number, network, alerts setting, `created_at` and Ender ID. Then:
+
+- `names` gets every existing label, and `name_unlocks` an entry per named
+  account (proof: its number), so a name chosen before counts as the one
+  change. Accounts without a name get a random one on their next sign-in.
+- `sessions.phone` becomes `account` (its `from_address`).
+- Private balance: a registration belongs to the wallet that derived it, so
+  `shielded_users.phone` becomes `account` = its `eoa` (for a number relinked
+  to a new passkey, that is the old wallet: its notes go with it). Notes and
+  quotes follow the same mapping (`account`, `to_account`); a paid number
+  moves into `to_address` (what was asked). `sealed_as` keeps the number the
+  `nk` / viewing keys were sealed with (their AES-GCM aad); new registrations
+  are sealed with the account and leave it null.
+- Kept by number, because they are about a number: `otps`, `alerts_sent`.
+
+A new passkey is simply a new account. A number already on another account
+moves by verifying it again (`/account/phone/verify`); the "relink" of
+`/wallet/create` is gone.
+
+### Turning it on (owner steps)
+
+1. **Preflight** on production (must return no rows, or 0010 fails on
+   `shielded_users`' primary key; none are expected):
+   `wrangler d1 execute ender-money --remote -c gateway/wrangler.jsonc --command "SELECT eoa, network FROM shielded_users GROUP BY eoa, network HAVING count(*) > 1"`.
+   Take a backup first: `wrangler d1 export ender-money --remote -c gateway/wrangler.jsonc --output ender-money-pre-0010.sql`.
+2. **Vars**: `NAME_FEE_AUSD` ("2") ships in `wrangler.jsonc`. Optional:
+   `TREASURY_ADDRESS` (var; unset = the gateway key's address) and the
+   `TURNSTILE_SECRET` secret, which makes account creation require a
+   Turnstile token. Leave it unset until every client that creates accounts
+   (the native app does not) sends one.
+3. **Order**: migrate (`bun run gateway:migrate:remote`) and deploy the gateway
+   (`bun run gateway:deploy`) back to back (the old code can't read the new
+   schema, so a gap fails requests; or set `PAUSED=1` around it). Then ship
+   the app. Older app builds stop working at the deploy: they sign in by OTP,
+   which is gone, and their phone tokens get 401. The new app signs in again
+   by passkey on its own.
 
 ## Not in the gateway
 

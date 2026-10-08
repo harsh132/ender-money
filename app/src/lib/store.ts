@@ -58,9 +58,10 @@ export const listed = (t: Tx) => !t.shield && !t.internal;
 export type Recipient = { address: string; phone?: string; name?: string; enderId?: string; lastUsed: number };
 
 export type Wallet = {
-  phone: string;
+  /** The account's verified number: SMS features (alerts, offline sending, paying and being paid by number) only with one. */
+  phone?: string | null;
   address: Address;
-  /** Our Ender ID (label.ender.my). null: the gateway says the account has none yet (the app asks); undefined: unknown. */
+  /** Our Ender ID (label.ender.my). null: an older account that gets one on its next sign-in; undefined: unknown. */
   enderId?: string | null;
   credentialId: string;
   transports?: string[];
@@ -94,6 +95,8 @@ export type State = {
   autoMerge?: boolean;
   /** Settings' Auto Shield (networks with a pool): move the public balance into the private one while unlocked and online. On unless false (autoShieldOn). */
   autoShield?: boolean;
+  /** The Ender ID fee's transaction, paid but not yet spent on a change (a taken name, a closed screen): kept for the retry. */
+  namePaid?: string;
 };
 
 const initial: State = {

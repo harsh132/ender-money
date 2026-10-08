@@ -1,21 +1,21 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Pressable, TextInput, View } from 'react-native';
 import { api } from '../lib/api';
 import { phoneDisplay } from '../lib/format';
-import { onboarding } from '../lib/onboarding';
+import { phoneFlow } from '../lib/phone';
+import { setState } from '../lib/store';
 import { c, f } from '../lib/theme';
-import { errorText } from '../lib/wallet';
+import { errorText, sync } from '../lib/wallet';
 import { listenForCode } from '../../modules/sms-retriever';
-import { BackHeader, Banner, Button, Screen, Steps, T } from '../ui/kit';
+import { BackHeader, Banner, Button, Screen, T } from '../ui/kit';
 
 const RESEND_AFTER = 45;
 
-/** O3: the gateway answers new or existing once the code checks out. */
+/** The code texted to the number (phone.tsx): once it checks out, the number is this account's (moved here if another had it). */
 export default function CodeScreen() {
-  const { change } = useLocalSearchParams<{ change?: string }>();
-  const phone = onboarding.phone ?? '';
-  const [code, setCode] = useState(onboarding.devCode ?? '');
+  const phone = phoneFlow.phone ?? '';
+  const [code, setCode] = useState(phoneFlow.devCode ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [wait, setWait] = useState(RESEND_AFTER);
@@ -31,10 +31,11 @@ export default function CodeScreen() {
     setBusy(true);
     setError(undefined);
     try {
-      const r = await api.verifyAuth(phone, value);
-      onboarding.verified = r.status === 'new' ? { phone, token: r.token, status: 'new' } : { phone, token: r.token, status: 'existing', address: r.address, balance: r.balance, name: r.name };
-      if (change) router.replace({ pathname: '/create', params: { mode: 'change' } });
-      else router.replace(r.status === 'new' ? '/create' : '/restore');
+      await api.phoneVerify(phone, value);
+      setState((s) => (s.wallet ? { wallet: { ...s.wallet, phone } } : {}));
+      phoneFlow.phone = phoneFlow.devCode = undefined;
+      void sync();
+      router.dismissTo('/settings');
     } catch (e) {
       setError(errorText(e));
       setCode('');
@@ -44,7 +45,7 @@ export default function CodeScreen() {
   };
 
   // Android hands over the code SMS (it ends with the app's hash), for five minutes from here, which covers a resend.
-  // ponytail: starts on mount; the relay's SMS takes seconds, so it lands after this. Start it before startAuth if a
+  // ponytail: starts on mount; the relay's SMS takes seconds, so it lands after this. Start it before phoneStart if a
   // code ever arrives first.
   useEffect(
     () =>
@@ -59,8 +60,8 @@ export default function CodeScreen() {
   const resend = async () => {
     setError(undefined);
     try {
-      const r = await api.startAuth(phone);
-      onboarding.devCode = r.devCode;
+      const r = await api.phoneStart(phone);
+      phoneFlow.devCode = r.devCode;
       if (r.devCode) setCode(r.devCode);
       setWait(RESEND_AFTER);
     } catch (e) {
@@ -72,7 +73,6 @@ export default function CodeScreen() {
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior="padding">
       <Screen>
         <BackHeader />
-        <Steps at={1} />
         <T v="headline" style={{ fontSize: 36 }}>Enter the code</T>
         <T v="meta" style={{ fontSize: 18, lineHeight: 27, marginTop: 12 }}>
           We texted a 6-digit code to <T v="meta" style={{ fontSize: 18, color: c.fg }}>{phoneDisplay(phone)}</T>.

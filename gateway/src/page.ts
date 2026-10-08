@@ -6,7 +6,7 @@
  * phone number.
  */
 import qrcode from 'qrcode-generator';
-import { enderId, validateLabel } from '../../protocol/names';
+import { enderId, NAME_PARENT, validateLabel } from '../../protocol/names';
 import type { Env } from './env';
 import { byLabel } from './names';
 
@@ -117,10 +117,11 @@ const html = (body: string, status: number) =>
     },
   });
 
-/** A request to `<label>.ender.my` (`label`: the host's first part, as typed). */
+/** A request to `<label>.ender.my` (`label`: the host's first part, as typed). An earlier label shows the account's current ID. */
 export const payPage = async (env: Env, request: Request, label: string) => {
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('method not allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
   if (new URL(request.url).pathname !== '/') return html(renderNotFound(`${label}.ender.my`), 404);
   const info = validateLabel(label) ? null : await byLabel(env, label);
-  return info ? html(renderNamePage(label.toLowerCase(), info), 200) : html(renderNotFound(`${label.toLowerCase()}.ender.my`), 404);
+  const current = info?.name?.slice(0, -`.${NAME_PARENT}`.length) ?? label.toLowerCase();
+  return info ? html(renderNamePage(current, info), 200) : html(renderNotFound(`${label.toLowerCase()}.ender.my`), 404);
 };
