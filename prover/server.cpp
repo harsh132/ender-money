@@ -171,6 +171,9 @@ static void reply(httplib::Response &res, int code, const json &body) {
 
 int main() {
   signal(SIGPIPE, SIG_IGN);
+  // As PID 1 the kernel drops SIGTERM unless we handle it, and SIGTERM is how sleepAfter stops the container: without
+  // this the prover never sleeps and bills 3 GiB around the clock. Stateless, so exiting on the spot is safe.
+  signal(SIGTERM, [](int) { _exit(0); });
   prover(0);  // the 2-in key is loaded before the port opens, so "port open" (what Cloudflare waits for) means ready
   httplib::Server srv;
   srv.set_payload_max_length(1 << 20);
