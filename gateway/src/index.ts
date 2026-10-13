@@ -90,7 +90,7 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
   if (request.method === 'GET' && label && label !== 'check' && label !== 'by-phone') {
     await limit(env, `names:${ip}`);
     if (validateLabel(label)) throw new GatewayError('bad-name');
-    const found = await names.byLabel(env, label);
+    const found = await names.byLabel(env, label, lookupNetwork(url));
     if (!found) throw new GatewayError('unknown-name', 404);
     return json(found);
   }
@@ -154,7 +154,7 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       await limit(env, `names:${ip}`);
       const phone = url.searchParams.get('phone') ?? '';
       if (!isPhone(phone)) throw new GatewayError('bad-phone');
-      const found = await names.byPhone(env, phone);
+      const found = await names.byPhone(env, phone, lookupNetwork(url));
       if (!found) throw new GatewayError('not-on-ender', 404);
       return json(found);
     }
@@ -191,7 +191,7 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
       return json(await sign(env, me, req.id.toUpperCase(), req.signature as Hex));
     }
 
-    // Shielded pool (testnet). `network` defaults to testnet, the only network with a pool.
+    // Shielded pool, on each network with one (protocol/networks.ts). `network` defaults to mainnet, as everywhere.
     case 'POST /shielded/register': {
       const me = await accountFrom(env, request);
       const req = await body<{ network?: string; keys?: Record<string, unknown> }>(request);
@@ -308,8 +308,15 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
 };
 
 const shieldedNetwork = (network: string | undefined) => {
-  if (network === undefined) return 'testnet' as const;
+  if (network === undefined) return 'mainnet' as const;
   if (!isNetwork(network)) throw new GatewayError('bad-network');
+  return network;
+};
+
+/** A name lookup's `?network=`: the private address registered there; absent, on any network. */
+const lookupNetwork = (url: URL) => {
+  const network = url.searchParams.get('network') ?? undefined;
+  if (network !== undefined && !isNetwork(network)) throw new GatewayError('bad-network');
   return network;
 };
 

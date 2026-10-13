@@ -46,7 +46,7 @@ export default function Home() {
   const online = useOnline();
   const quickMin = useQuickSend();
   const [refreshing, setRefreshing] = useState(false);
-  // Private balance: testnet only (the only network with a pool). Mainnet shows none of it.
+  // Private balance: on a network with a pool, once registered there (protocol/networks.ts).
   const priv = useStore((s) => (isRegistered(s.network, s) ? privateBalance(s.notes[s.network] ?? []) : undefined));
   // More notes than one payment can spend: offer to fold 12 into one.
   const merge = useStore((s) => isRegistered(s.network, s) && canMerge(s.network, { notes: s.notes[s.network] ?? [], awaiting: s.awaiting[s.network] ?? [] }));

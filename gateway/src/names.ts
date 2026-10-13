@@ -15,7 +15,7 @@
 import { createPublicClient, hexToBytes, http, isHex, parseEventLogs, parseUnits, type Address, type Hex } from 'viem';
 import { mainnet } from 'viem/chains';
 import { enderId, MAX_LABEL, validateLabel, type LabelProblem } from '../../protocol/names';
-import { AUSD_DECIMALS, NETWORKS } from '../../protocol/networks';
+import { AUSD_DECIMALS, NETWORKS, type NetworkName } from '../../protocol/networks';
 import { encodePrivateAddress } from '../../protocol/recipient';
 import { packAddress } from '../../protocol/shielded';
 import { isTextName } from '../../protocol/sms';
@@ -23,12 +23,6 @@ import { publicClient, sponsorAddress, transferEvent } from './chain';
 import { GatewayError } from './core';
 import type { Env } from './env';
 import { ADJECTIVES, NOUNS } from './words';
-
-/**
- * Private addresses come from the shielded pool's registrations.
- * ponytail: testnet only, the only network with a pool; take a network when mainnet gets one.
- */
-const POOL_NETWORK = 'testnet';
 
 // ---------------------------------------------------------------- random IDs (ported from ender-backend names.ts)
 
@@ -118,8 +112,12 @@ export type NameInfo = { name: string | null; address: Address; private?: string
 
 type Row = { label: string | null; address: Address; owner_key: string | null; enc_pk: Hex | null };
 
+/**
+ * Private addresses come from the shielded pool's registrations: on `network` when the caller names one, else on
+ * any (the keys, so the address, are the same on every network; the app registers on each network with a pool).
+ */
 const LOOKUP = `SELECT l.label, l.address, s.owner_key, s.enc_pk FROM links l
-  LEFT JOIN shielded_users s ON s.account = l.address AND s.network = ?`;
+  LEFT JOIN shielded_users s ON s.account = l.address AND s.network = coalesce(?, s.network)`;
 
 const info = (r: Row): NameInfo => ({
   name: r.label ? enderId(r.label) : null,
@@ -128,13 +126,13 @@ const info = (r: Row): NameInfo => ({
 });
 
 /** By any label the account ever had (an earlier random one too); `name` is its current ID. */
-export const byLabel = async (env: Env, label: string): Promise<NameInfo | null> => {
-  const r = await env.DB.prepare(`${LOOKUP} WHERE l.address = (SELECT address FROM names WHERE label = ?)`).bind(POOL_NETWORK, label.toLowerCase()).first<Row>();
+export const byLabel = async (env: Env, label: string, network?: NetworkName): Promise<NameInfo | null> => {
+  const r = await env.DB.prepare(`${LOOKUP} WHERE l.address = (SELECT address FROM names WHERE label = ?)`).bind(network ?? null, label.toLowerCase()).first<Row>();
   return r && info(r);
 };
 
-export const byPhone = async (env: Env, phone: string): Promise<NameInfo | null> => {
-  const r = await env.DB.prepare(`${LOOKUP} WHERE l.phone = ?`).bind(POOL_NETWORK, phone).first<Row>();
+export const byPhone = async (env: Env, phone: string, network?: NetworkName): Promise<NameInfo | null> => {
+  const r = await env.DB.prepare(`${LOOKUP} WHERE l.phone = ?`).bind(network ?? null, phone).first<Row>();
   return r && info(r);
 };
 

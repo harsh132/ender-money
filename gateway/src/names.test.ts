@@ -355,6 +355,20 @@ describe('lookups', () => {
     expect(hits.get(`lookup:${A}`)).toBe(LIMIT + 1);
   });
 
+  test('?network= gives the private address registered on that network (mainnet too); none: on any', async () => {
+    // Bob is on testnet only so far.
+    expect((await call('/names/bobby?network=mainnet')).body).toEqual({ name: 'bobby.ender.my', address: B });
+    expect((await call('/names/bobby?network=testnet')).body).toEqual({ name: 'bobby.ender.my', address: B, private: bobPrivate });
+    expect((await call(`/names/by-phone?phone=${encodeURIComponent(BOB)}&network=mainnet`, { as: A })).body).toEqual({ name: 'bobby.ender.my', address: B });
+    const keys = { Ax: bobKeys.Ax.toString(), Ay: bobKeys.Ay.toString(), nk: bobKeys.nk.toString(), viewSk: bytesToBigInt(bobKeys.viewSk).toString() };
+    await register(env, B, 'mainnet', keys);
+    hits.clear(); // under the per-IP limit
+    expect((await call('/names/bobby?network=mainnet')).body).toEqual({ name: 'bobby.ender.my', address: B, private: bobPrivate });
+    expect((await call(`/names/by-phone?phone=${encodeURIComponent(BOB)}&network=mainnet`, { as: A })).body).toEqual({ name: 'bobby.ender.my', address: B, private: bobPrivate });
+    expect((await call('/names/bobby')).body).toEqual({ name: 'bobby.ender.my', address: B, private: bobPrivate });
+    expect((await call('/names/bobby?network=moon')).body).toEqual({ error: 'bad-network' });
+  });
+
   test('the pay page: themed, both addresses with QR codes, no number; unknown names are a themed 404', async () => {
     const page = await call('https://bobby.ender.my/');
     expect(page.status).toBe(200);

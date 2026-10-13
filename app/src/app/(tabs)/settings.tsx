@@ -3,7 +3,8 @@ import { router } from 'expo-router';
 import { useState, type ReactNode } from 'react';
 import { Alert, Pressable, ScrollView, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import type { NetworkName } from '../../../../protocol/networks';
+import { formatUnits } from 'viem';
+import { AUSD_DECIMALS, NETWORKS, type NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
 import { WEB } from '../../lib/config';
 import { ago, phoneMasked, short } from '../../lib/format';
@@ -186,7 +187,9 @@ export default function Settings() {
             <Group>
               <Row
                 title="Auto Shield"
-                sub={`Moves your public balance to your private one once it's $${AUTO_SHIELD_MIN} or more. $0.01 fee each time.`}
+                sub={`Moves your public balance to your private one once it's $${AUTO_SHIELD_MIN} or more${
+                  NETWORKS[network].poolMaxDeposit ? `, up to $${formatUnits(NETWORKS[network].poolMaxDeposit!, AUSD_DECIMALS)} at a time` : ''
+                }. $0.01 fee each time.`}
                 right={<Switch value={shieldOn} onValueChange={toggleAutoShield} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={shieldOn ? '#fff' : c.fg3} />}
               />
               <Row

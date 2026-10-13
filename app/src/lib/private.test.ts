@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { hkdfSync } from 'node:crypto';
 import { parseUnits } from 'viem';
+import { NETWORKS } from '../../../protocol/networks';
 import { buildTx, newUser, owner, packAddress, provingKeys, shieldedKeysFromSeed, unpackAddress, verifySig } from '../../../protocol/shielded';
 import { encodePrivateAddress } from '../../../protocol/recipient';
 import { selectMerge } from '../../../protocol/select';
@@ -14,6 +15,7 @@ import {
   checkShieldedQuote,
   chooseRoute,
   fileReply,
+  maxShield,
   privateBalance,
   resync,
   shieldAmount,
@@ -33,6 +35,17 @@ const PRF = Uint8Array.from({ length: 32 }, (_, i) => i);
 const u = (s: string) => parseUnits(s, 6).toString();
 const note = (pos: number, amount: string, spent = false): CachedNote => ({ pos, amount: u(amount), blinding: String(1000 + pos), spent });
 const reply = (text: string) => parseReply(text) as Reply;
+
+// Both networks have a pool; `noMainnetPool` runs as if mainnet had none.
+const noMainnetPool = (fn: () => void) => {
+  const pool = NETWORKS.mainnet.pool;
+  delete NETWORKS.mainnet.pool;
+  try {
+    fn();
+  } finally {
+    NETWORKS.mainnet.pool = pool;
+  }
+};
 
 test('shielded keys: fixed PRF bytes give a fixed owner key, via HKDF "ender/shielded/v1/seed"', () => {
   const user = shieldedUser(PRF);
@@ -125,8 +138,8 @@ test('texts are filed under the network they name, not the one the app shows', (
   const filed = fileReply(state, reply(got));
   expect(filed?.network).toBe('testnet');
   expect(filed?.patch.notes).toEqual({ testnet: [{ pos: 9, amount: u('20'), blinding: '5', spent: false }] });
-  // An older gateway's untagged private text: mainnet has no pool, so the network that has one.
-  expect(fileReply(state, reply(got.replace('[Test] ', '')))?.network).toBe('testnet');
+  // Untagged is mainnet's: not registered there, so nothing to file.
+  expect(fileReply(state, reply(got.replace('[Test] ', '')))).toBeUndefined();
   // A Sent settles the testnet payment while mainnet is shown.
   const sent = formatReply({ kind: 'sent', id: 'AB23', amount: '20', to: '+919800000002', tx: '0xd340...50', p: 7, test: true });
   const s2 = { ...state, notes: { testnet: base.notes }, awaiting: { testnet: [awaitingPay] } };
@@ -134,12 +147,12 @@ test('texts are filed under the network they name, not the one the app shows', (
   expect(fileReply(s2, reply(sent))?.patch.awaiting).toEqual({ testnet: [] });
   // Not registered there: nothing to file.
   expect(fileReply({ ...state, shielded: undefined }, reply(got))).toBeUndefined();
-  // What Review compares with its payment's network: the tag; an untagged private-only text means the pool's network.
+  // What Review compares with its payment's network: the tag, for private texts too (no tag: mainnet).
   expect(textNetwork(reply('[Test] Q 7F3K exp=1791200000 fee=0.01'))).toBe('testnet');
-  expect(textNetwork(reply('Q 7F3K exp=1791200000 fee=0.01'))).toBe('testnet');
+  expect(textNetwork(reply('Q 7F3K exp=1791200000 fee=0.01'))).toBe('mainnet');
   expect(textNetwork(reply('ERR 7F3K expired'))).toBe('mainnet');
   expect(textNetwork(reply('[Test] ERR 7F3K expired'))).toBe('testnet');
-  expect(textNetwork(reply(got.replace('[Test] ', '')))).toBe('testnet'); // a private Received
+  expect(textNetwork(reply(got.replace('[Test] ', '')))).toBe('mainnet'); // a private Received
   expect(textNetwork(reply('Received 10 AUSD from=ravi1.ender.my balance=5 tx=0xab12...ef'))).toBe('mainnet'); // a public one
 });
 
@@ -147,7 +160,8 @@ test('Merge pill: more than 12 usable notes, on a network with a pool', () => {
   const notes = (n: number) => Array.from({ length: n }, (_, i) => note(i, '1'));
   expect(canMerge('testnet', { notes: notes(12), awaiting: [] })).toBe(false);
   expect(canMerge('testnet', { notes: notes(13), awaiting: [] })).toBe(true);
-  expect(canMerge('mainnet', { notes: notes(13), awaiting: [] })).toBe(false);
+  expect(canMerge('mainnet', { notes: notes(13), awaiting: [] })).toBe(true);
+  noMainnetPool(() => expect(canMerge('mainnet', { notes: notes(13), awaiting: [] })).toBe(false));
   expect(canMerge('testnet', { notes: [...notes(12), note(20, '0.0005')], awaiting: [] })).toBe(false); // dust doesn't count
   expect(canMerge('testnet', { notes: notes(13), awaiting: [{ ...awaitingPay, ins: [0] }] })).toBe(false); // held by a payment
 });
@@ -295,7 +309,8 @@ test('auto-merge: only when on, online, unlocked, registered, nothing pending an
   expect(shouldAutoMerge({ ...go, online: false })).toBe(false);
   expect(shouldAutoMerge({ ...go, unlocked: false })).toBe(false);
   expect(shouldAutoMerge({ ...go, registered: false })).toBe(false);
-  expect(shouldAutoMerge({ ...go, network: 'mainnet' })).toBe(false); // no pool
+  expect(shouldAutoMerge({ ...go, network: 'mainnet' })).toBe(true);
+  noMainnetPool(() => expect(shouldAutoMerge({ ...go, network: 'mainnet' })).toBe(false));
   expect(shouldAutoMerge({ ...go, cache: { ...many, notes: many.notes.slice(0, 12) } })).toBe(false); // 12 fit one payment
   // A merge (or any payment) still waiting: its notes are held, and another merge would race it.
   const mergeWaiting: Awaiting = { id: 'MG23', kind: 'merge', amount: '0', ins: [], outs: [], exp: 2e9 };
@@ -328,21 +343,38 @@ test('auto-shield: only when on, online, unlocked, registered, nothing pending, 
   expect(shouldAutoShield({ ...go, cache: { awaiting: [awaitingPay] } })).toBe(false);
 });
 
-test('auto-shield: a no-op on mainnet (no pool, so never registered there)', () => {
+test('auto-shield: on mainnet too, once registered there; a network without a pool never shields', () => {
   const go = { on: true, online: true, unlocked: true, network: 'mainnet' as const, cache: { awaiting: [] }, publicBalance: '500', busy: false };
   expect(shouldAutoShield({ ...go, registered: false })).toBe(false);
-  // Even a state that claims mainnet is registered: no pool, no shield.
-  expect(shouldAutoShield({ ...go, registered: true })).toBe(false);
+  expect(shouldAutoShield({ ...go, registered: true })).toBe(true);
+  // Even a state that claims it is registered: no pool, no shield.
+  noMainnetPool(() => expect(shouldAutoShield({ ...go, registered: true })).toBe(false));
 });
 
 test('auto-shield amount: the whole public balance less the fee, so deposit + fee is all of it', () => {
-  expect(shieldAmount('25', '0.01')).toBe('24.99');
-  expect(shieldAmount('1', '0.01')).toBe('0.99');
-  expect(shieldAmount('3.123456', '0.01')).toBe('3.113456');
-  const amount = shieldAmount('7.5', '0.01');
+  expect(shieldAmount('25', '0.01', 'testnet')).toBe('24.99');
+  expect(shieldAmount('1', '0.01', 'testnet')).toBe('0.99');
+  expect(shieldAmount('3.123456', '0.01', 'testnet')).toBe('3.113456');
+  const amount = shieldAmount('7.5', '0.01', 'testnet');
   expect(parseUnits(amount, 6) + parseUnits('0.01', 6)).toBe(parseUnits('7.5', 6));
   // What the gateway takes: at most 6 decimals.
   expect(amount).toMatch(/^\d+(\.\d{1,6})?$/);
+});
+
+test("auto-shield amount: at most the pool's cap on amount + fee (50 AUSD on mainnet, 1000 on testnet)", () => {
+  expect(maxShield('mainnet', '0.01')).toBe(parseUnits('49.99', 6));
+  expect(shieldAmount('500', '0.01', 'mainnet')).toBe('49.99');
+  expect(parseUnits(shieldAmount('50.005', '0.01', 'mainnet'), 6) + parseUnits('0.01', 6)).toBe(parseUnits('50', 6)); // exactly the cap
+  expect(shieldAmount('30', '0.01', 'mainnet')).toBe('29.99'); // under it: all of it
+  expect(shieldAmount('5000', '0.01', 'testnet')).toBe('999.99');
+  const cap = NETWORKS.mainnet.poolMaxDeposit;
+  delete NETWORKS.mainnet.poolMaxDeposit;
+  try {
+    expect(maxShield('mainnet', '0.01')).toBeUndefined();
+    expect(shieldAmount('500', '0.01', 'mainnet')).toBe('499.99'); // no cap: everything
+  } finally {
+    NETWORKS.mainnet.poolMaxDeposit = cap;
+  }
 });
 
 test('review decision: a number or Ender ID with no shielded address is paid by a private withdrawal to its wallet', () => {

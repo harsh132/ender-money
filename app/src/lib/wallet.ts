@@ -365,7 +365,7 @@ export const autoMerge = async (network: NetworkName = getState().network): Prom
 
 /**
  * Settings' Auto Shield: the whole public balance into the private one, in one
- * deposit (fee included), online in the background when shouldAutoShield says
+ * deposit (fee included; at most the pool's cap, the rest on the next trigger), online in the background when shouldAutoShield says
  * so. Like Auto-merge: the open Quick send session's key, never by text, a
  * failure only logs and the next trigger (a refresh, a resync, a settled
  * private payment, the foreground, the toggle) tries again. A shield that
@@ -375,6 +375,7 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
   if (shielding || Date.now() < shieldRetryAt) return;
   if (merging) return void (shieldLater = true);
   shielding = true;
+  let again = false;
   const ready = async () => {
     const s = getState();
     const base = {
@@ -392,7 +393,7 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
   try {
     if (!(await ready())) return;
     // ponytail: priced at MAX_FEE (the gateway's fee today); a lower quoted fee would leave the difference public.
-    const amount = shieldAmount(getState().account[network]!.balance, MAX_FEE);
+    const amount = shieldAmount(getState().account[network]!.balance, MAX_FEE, network);
     const draft: PrivateDraft = { kind: 'shield', amount };
     const q = await api.shieldedQuote({ network, kind: 'shield', amount });
     const session = quickSend.get();
@@ -434,6 +435,7 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
     upsertTx({ id: q.id, status: 'sent', txHash: res.tx });
     settlePrivate(network, q.id, res.p);
     await sync(network);
+    again = true; // capped: what's left over goes next
   } catch (e) {
     console.warn('auto-shield:', e instanceof ApiError ? e.code : e instanceof Error ? e.message : e);
     if (!(e instanceof OfflineError)) shieldRetryAt = Date.now() + SHIELD_BACKOFF_MS;
@@ -444,7 +446,7 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
     if (mergeLater) {
       mergeLater = false;
       void autoMerge(network);
-    }
+    } else if (again) void autoShield(network);
   }
 };
 
@@ -575,7 +577,7 @@ export const decideRoute = async (d: Draft): Promise<{ route: 'private' | 'publi
       ));
   else if (label && s.shieldedPins[d.to]) recipientPrivate = true;
   else if (label) {
-    const r = await api.name(label).catch(() => undefined);
+    const r = await api.name(label, d.network).catch(() => undefined);
     recipientPrivate = !!r?.private;
     wallet = r?.address;
   }
@@ -763,6 +765,7 @@ const ERRORS: Record<string, string> = {
   EXPIRED: 'That quote has expired. Try again.',
   NOEOA: "Your wallet can't fund the private balance yet. Try again in a minute.",
   POLICY: 'The gateway refused this private payment.',
+  CAP: 'Private deposits have a per-deposit limit during the beta. Make a smaller amount private.',
   syncing: 'The gateway is still catching up with the private pool. Try again in a minute.',
   'wrong-network': 'That approval was for the other network. Nothing was sent.',
 };

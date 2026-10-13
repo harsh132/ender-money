@@ -43,7 +43,7 @@ we'll send some.
 | Passkey accounts, gas sponsored, 0.01 AUSD fee | ✓ | ✓ |
 | Ender IDs (`label.ender.my`, resolves in ENS wallets) | ✓ | ✓ |
 | Payment alerts by SMS (Alchemy webhooks) | ✓ | ✓ |
-| Private balance and private payments (Auto Shield) | — | ✓ |
+| Private balance and private payments (Auto Shield) | ✓ (beta: 50 AUSD cap per deposit) | ✓ |
 | Local-currency delivery (Agora pair, CTK) | — | ✓ |
 | Auto-bridge: tokens sent to your address on Ethereum, Base, Arbitrum or Polygon arrive as AUSD (Relay) | ✓ | — |
 
@@ -62,7 +62,9 @@ so it can build and prove transactions (proving takes 1–4 s in a container), b
 every spend needs the phone's signature. Payments between Ender users show on
 chain as pool transactions only. Design and trade-offs:
 [docs/shielded-pool.md](docs/shielded-pool.md),
-[docs/splitkey-spike.md](docs/splitkey-spike.md).
+[docs/splitkey-spike.md](docs/splitkey-spike.md). On mainnet the pool is in
+beta: each deposit (amount + fee) is capped at 50 AUSD (1000 on testnet), the
+trusted setup has a single contributor, and nothing is audited.
 
 ## How it fits together
 
@@ -116,6 +118,7 @@ flowchart LR
 | AUSD, Monad mainnet | `0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a` |
 | AUSD, Monad testnet | `0xa9012a055bd4e0eDfF8Ce09f960291C09D5322dC` |
 | Calibur (EIP-7702 account, all chains) | `0x000000005c84F8Fd50b21CAC312528A64437030e` |
+| Shielded pool, Monad mainnet (beta) | `0x1ff020082853ca376379e886cd46999490311579` |
 | Shielded pool, Monad testnet | `0xbe34bb676ba6d40098e8aaa36b4599400c9810ff` |
 | EnderResolver (CCIP-Read), Ethereum | `0xf0b537E1FDa87349d43E3aF991150aa6a0dCe01B` |
 
@@ -140,5 +143,6 @@ Run it locally: `bun install`, then `bun run gateway:migrate:local`,
 ## Status
 
 Built for the Monad hackathon (October 2026). Public payments run on Monad
-mainnet. The private pool is on testnet until its trusted setup and audit;
+mainnet; the private pool runs on both, in beta on mainnet (50 AUSD per-deposit
+cap, single-contributor trusted setup, unaudited) until a multi-party setup and an audit;
 what's deferred is in [docs/todo.md](docs/todo.md).

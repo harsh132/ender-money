@@ -127,7 +127,9 @@ export const api = {
   setAlerts: (on: boolean) => request<{ alerts: boolean }>('POST', '/account/alerts', { on }),
   // Ender IDs. Lookups never return a phone number.
   checkName: (label: string) => request<{ available: boolean; reason?: string }>('GET', `/names/check?label=${encodeURIComponent(label)}`, undefined, ''),
-  name: (label: string) => request<NameInfo>('GET', `/names/${encodeURIComponent(label)}`, undefined, ''),
+  /** `network`: `private` is the address registered there (absent: on any network). */
+  name: (label: string, network?: NetworkName) =>
+    request<NameInfo>('GET', `/names/${encodeURIComponent(label)}${network ? `?network=${network}` : ''}`, undefined, ''),
   nameByPhone: (phone: string) => request<NameInfo>('GET', `/names/by-phone?phone=${encodeURIComponent(phone)}`),
   /** The one change of Ender ID: whether it's used, whether our number can unlock it, and the fee (mainnet) otherwise. */
   nameStatus: () => request<{ name: string | null; locked: boolean; phone: boolean; fee: string; treasury: Address }>('GET', '/account/name'),

@@ -1,5 +1,5 @@
 /**
- * Private balance (the shielded pool, testnet only): key derivation, the
+ * Private balance (the shielded pool, on each network with one): key derivation, the
  * routing rule, quote checks, the note cache and building what the phone
  * signs. Pure (no React Native imports), so it runs under `bun test`.
  * Protocol: ../../../protocol/shielded.ts; design: docs/splitkey-spike.md.
@@ -115,24 +115,10 @@ export const applyReply = (c: Cache, r: Reply): { cache: Cache; settled?: Awaiti
 };
 
 /**
- * The network a text names: `[Test] ` testnet, no tag mainnet. The app's mode
- * is display only. A private-only text (private Q, Shielded, private Received)
- * without a tag came from an older gateway: the network with the pool.
+ * The network a text names, private ones too: `[Test] ` testnet, no tag mainnet (both have a pool). The app's mode
+ * is display only: a text goes to the network it names, never the one the app happens to show.
  */
-export const textNetwork = (r: Reply): NetworkName => {
-  const named: NetworkName = r.test ? 'testnet' : 'mainnet';
-  return (r.kind === 'shieldedQuote' || r.kind === 'shielded' || isPrivateReceived(r)) && !hasPool(named) ? POOL_NETWORKS[0]! : named;
-};
-
-/**
- * The note cache a private text (Sent, Shielded, private Received) goes to: the network
- * it names; with no pool there (an older gateway didn't tag private texts),
- * the network that has one. Never the network the app happens to show.
- */
-export const notesNetwork = (r: Reply): NetworkName => {
-  const named: NetworkName = r.test ? 'testnet' : 'mainnet';
-  return hasPool(named) ? named : POOL_NETWORKS[0]!;
-};
+export const textNetwork = (r: Reply): NetworkName => (r.test ? 'testnet' : 'mainnet');
 
 /**
  * A Sent / Shielded / private Received text, filed under the network it names: the state
@@ -140,7 +126,7 @@ export const notesNetwork = (r: Reply): NetworkName => {
  * it settled. Nothing when that network has no registered private balance.
  */
 export const fileReply = (s: Pick<State, 'notes' | 'awaiting' | 'shieldedPins' | 'shielded'>, r: Reply) => {
-  const network = notesNetwork(r);
+  const network = textNetwork(r);
   if (!s.shielded?.registered.includes(network)) return undefined;
   const { cache, settled } = applyReply({ notes: s.notes[network] ?? [], awaiting: s.awaiting[network] ?? [], pins: s.shieldedPins }, r);
   const patch = { notes: { ...s.notes, [network]: cache.notes }, awaiting: { ...s.awaiting, [network]: cache.awaiting }, shieldedPins: cache.pins };
@@ -188,7 +174,7 @@ export const autoShieldOn = (s: Pick<State, 'autoShield'>) => s.autoShield !== f
 /**
  * Auto Shield (Settings) shields the public balance when it's on, the app is
  * online, the spending key is in memory, the network's private balance is
- * registered (never on mainnet: no pool), nothing is waiting to settle, no
+ * registered (only where there is a pool), nothing is waiting to settle, no
  * public payment is in flight (busy) and the public balance is at least
  * AUTO_SHIELD_MIN.
  */
@@ -204,8 +190,18 @@ export const shouldAutoShield = (o: {
 }) =>
   o.on && o.online && o.unlocked && o.registered && hasPool(o.network) && o.cache.awaiting.length === 0 && !o.busy && units(o.publicBalance) >= units(AUTO_SHIELD_MIN);
 
-/** The deposit that shields the whole public balance: deposit + fee is all of it. */
-export const shieldAmount = (publicBalance: string, fee: string) => formatUnits(units(publicBalance) - units(fee), AUSD_DECIMALS);
+/** The most one deposit can make private (base units): the pool's cap on amount + fee, less the fee; none without a cap. */
+export const maxShield = (network: NetworkName, fee: string) => {
+  const cap = NETWORKS[network].poolMaxDeposit;
+  return cap === undefined ? undefined : cap - units(fee);
+};
+
+/** Auto Shield's deposit: the whole public balance (deposit + fee is all of it), at most the pool's cap. The rest goes next time. */
+export const shieldAmount = (publicBalance: string, fee: string, network: NetworkName) => {
+  const all = units(publicBalance) - units(fee);
+  const max = maxShield(network, fee);
+  return formatUnits(max !== undefined && max < all ? max : all, AUSD_DECIMALS);
+};
 
 /**
  * Online resync: the gateway's index replaces the cache. A waiting payment

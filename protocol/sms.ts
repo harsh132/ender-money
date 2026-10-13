@@ -7,12 +7,12 @@
  *
  * Every command the phone sends for testnet starts with `[Test] ` too (the
  * formatters take the network); the gateway uses the network it names. No
- * prefix is mainnet for SYNC, and for anything else either mainnet or an
+ * prefix is mainnet for SYNC and private commands, and for anything else either mainnet or an
  * older app, so the gateway falls back to its legacy rule (the number's
- * current network; the session's for a SIG; testnet for private commands).
+ * current network; the session's or quote's for a SIG).
  * The older `SYNC T` still parses as testnet.
  *
- * Private payments (shielded pool, testnet only; see protocol/shielded.ts):
+ * Private payments (shielded pool, both networks; see protocol/shielded.ts):
  *   `SEND` is always public. A private payment is `PAY <+number|label.ender.my|ender1…|0x…>, <amount> AUSD`
  *   (to a number, an Ender ID or a private address: a shielded transfer; to a 0x address: a
  *   withdrawal from the pool). `SHIELD <amount> AUSD` deposits from the user's

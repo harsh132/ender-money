@@ -226,7 +226,7 @@ test.skipIf(!ready)(
     expect(await api<{ owner: string }>(ALICE, 'GET', `/shielded/address?network=testnet&phone=${encodeURIComponent(BOB)}`)).toEqual({ owner: owners[BOB]! });
 
     // 1. SMS: Alice shields 50 from her wallet (EIP-3009 for 50.01).
-    const q1 = parseReply(await sms(ALICE, 'SHIELD 50 AUSD'));
+    const q1 = parseReply(await sms(ALICE, '[Test] SHIELD 50 AUSD'));
     if (q1?.kind !== 'shieldedQuote') throw new Error(`no quote: ${JSON.stringify(q1)}`);
     expect(q1.to).toBeUndefined();
     const dep = buildDeposit({
@@ -256,7 +256,7 @@ test.skipIf(!ready)(
     // So does one to his Ender ID, whose lookup gives that private address and never his number.
     expect((await api<{ to: string }>(ALICE, 'POST', '/shielded/quote', { network: 'testnet', kind: 'pay', to: 'bobby.ender.my', amount: '20' })).to).toBe(owners[BOB]!);
     expect(await api<unknown>(ALICE, 'GET', '/names/bobby')).toEqual({ name: 'bobby.ender.my', address: bobEOA.address.toLowerCase(), private: bobAddress });
-    const q2 = parseReply(await sms(ALICE, `PAY ${bobAddress}, 20 AUSD`)); // unprefixed, as an older app sends it: still testnet
+    const q2 = parseReply(await sms(ALICE, `[Test] PAY ${bobAddress}, 20 AUSD`)); // no prefix would be mainnet
     if (q2?.kind !== 'shieldedQuote') throw new Error(`no quote: ${JSON.stringify(q2)}`);
     expect(q2.to).toBeUndefined(); // the phone already has the key
     const pay = await phoneSigns(ALICE, { id: q2.id, exp: q2.expires, fee: q2.fee }, AUSD('20'), (change) => [{ amount: AUSD('20'), to: unpackAddress(bobPacked) }, change]);

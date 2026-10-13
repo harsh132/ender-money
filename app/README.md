@@ -17,7 +17,7 @@ src/lib/
   keys.ts       passkey -> PRF -> secp256k1 key (Mera), Quick send sessions
   auth.ts       sign-in by wallet signature (challenge, personal_sign, verify); renews a refused token from the Quick send key
   wallet.ts     sync, signup (7702 authorizations), quote checks, signing
-  private.ts    private balance (shielded pool, testnet only): key derivation, routing, note cache, signing, auto-merge and auto-shield rules
+  private.ts    private balance (shielded pool, each network with one): key derivation, routing, note cache, signing, auto-merge and auto-shield rules
   transport.ts  internet first; SMS composer when offline ([Test] prefix for testnet); replies by SMS, clipboard or paste
   inbox.ts      public Received alerts by text -> Activity rows, deduped against the online history (private ones: private.ts)
   names.ts      the Ender ID screen's hints and rules (live check: GET /names/check)
@@ -38,20 +38,20 @@ transfer, recent recipients only, and ends when the app is backgrounded.
 The app signs the Calibur batch it builds itself from the fields on screen
 (recipient, amount, fee), never calldata from the gateway.
 
-The private balance's keys (testnet only) come from the same PRF output under
+The private balance's keys (the same on both networks) come from the same PRF output under
 HKDF label `ender/shielded/v1/seed` (`lib/private.ts`). The app registers the
 proving keys with the gateway (`/shielded/register`); the spending key never
-leaves the phone. Mainnet shows no private balance. Settings' Auto-merge
+leaves the phone. A network without a pool shows no private balance. Settings' Auto-merge
 (off by default) folds the 12 largest notes into one while the app is online
 and a Quick send session holds the key; it never keeps a key for this.
 
 Settings' Auto Shield (on by default, also for installs from before it)
 moves the whole public balance into the private one in a single deposit
-(deposit + $0.01 fee = the balance) once it holds $1 or more, under the same
+(deposit + $0.01 fee = the balance, at most the pool's per-deposit cap: 50 AUSD on mainnet, the rest next time) once it holds $1 or more, under the same
 conditions as Auto-merge, and only when nothing private is waiting to settle
 and no public payment is still sending. It runs after a refresh, a resync, a
 settled private payment, on coming to the foreground and when switched on;
-never by text, never on mainnet (no pool). One of Auto-merge and Auto Shield
+never by text, never on a network without a pool. One of Auto-merge and Auto Shield
 runs at a time. With it on, Home shows one balance (public + private) and no
 Make private; with it off, the split and Make private come back.
 

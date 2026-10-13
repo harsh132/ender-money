@@ -1,0 +1,15 @@
+{
+  "chainId": 143,
+  "token": "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a",
+  "levels": 23,
+  "maxDeposit": "50000000",
+  "deployer": "0x458E8F51EC2B833209b5C71372376eeb1e40af08",
+  "gateway": "0x458E8F51EC2B833209b5C71372376eeb1e40af08",
+  "admin": "0x458E8F51EC2B833209b5C71372376eeb1e40af08",
+  "hasher": "0x81e8f997de70c7e75a6173bc4a331c8022bc824d",
+  "verifier2": "0x4ef6f0e832cdbfc2e5233aeeb36533ab08f845d3",
+  "verifier6": "0xbdd9e9814b5490eddbe49df17eedfee9caaeb338",
+  "verifier12": "0x4a90ca44aa6ee8e471b0155b731fa99c79e8f73c",
+  "pool": "0x1ff020082853ca376379e886cd46999490311579",
+  "deployBlock": 113175055
+}

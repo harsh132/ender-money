@@ -13,7 +13,7 @@ there isn't.
 | Area | What ships |
 | --- | --- |
 | Account | No contract of our own. The user's EOA delegates by EIP-7702 to **Calibur v1.1.0** (Uniswap's audited 7702 account), already deployed on Monad mainnet and testnet. |
-| Gateway | Cloudflare Worker at `api.ender.money` (see [docs/gateway.md](docs/gateway.md)). HTTPS API plus `SYNC` / `SEND` / `SIG` over SMS through one session core; verify, `eth_call` simulate, broadcast, reply. Alchemy webhook for incoming alerts. Private payments on testnet only (`/shielded/*`, `PAY` / `SHIELD` / `MERGE` over SMS). |
+| Gateway | Cloudflare Worker at `api.ender.money` (see [docs/gateway.md](docs/gateway.md)). HTTPS API plus `SYNC` / `SEND` / `SIG` over SMS through one session core; verify, `eth_call` simulate, broadcast, reply. Alchemy webhook for incoming alerts. Private payments on both networks, mainnet in beta (`/shielded/*`, `PAY` / `SHIELD` / `MERGE` over SMS). |
 | Transports | Android relay app (Kotlin, ~200 lines, WebSocket to the DO) for Indian SIMs. Twilio number for everyone else. Picked automatically from SIM country. |
 | App | Expo SDK 57 dev build, Bun ([app/README.md](app/README.md)). Mera (`@category-labs/mera`) + `react-native-passkey` (the binding Mera's React Native client is written for) for keys. `expo-sms` composer for sending. Screens below. |
 | Token | AUSD only. Static token table shared by app and gateway. |
@@ -327,10 +327,10 @@ feature phones, voice/MMS transport, multiple gateways per country,
 production scale, light theme, Calibur's extra features (P256/WebAuthn
 keys, hooks, 4337), on-chain session keys (Quick send scope is enforced in
 the app), Aurora deposits (deferred, see Bounties).
-Private balances (shielded pool) on mainnet: built for testnet only (the
+Private balances (shielded pool) on mainnet: live in beta only (50 AUSD per-deposit cap; the
 split-key pool, [docs/splitkey-spike.md](docs/splitkey-spike.md); gateway
 side in [docs/gateway.md](docs/gateway.md#shielded-pool-testnet-built-4-oct)).
-Mainnet needs a multi-party trusted setup and an audit first
+Lifting the cap needs a multi-party trusted setup and an audit first
 ([docs/todo.md](docs/todo.md)). Options and target design:
 [docs/shielded-pool.md](docs/shielded-pool.md).
 

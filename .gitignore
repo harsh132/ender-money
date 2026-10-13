@@ -6,3 +6,4 @@ node_modules/
 
 # graphify knowledge graph (local, rebuilt by git hooks)
 graphify-out/
+submission/

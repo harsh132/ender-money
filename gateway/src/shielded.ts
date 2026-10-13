@@ -381,6 +381,8 @@ export const quote = async (env: Env, account: string, req: ShieldedQuoteRequest
 
   let circuit: Circuit = 2;
   if (kind === 'shield') {
+    // The pool reverts a deposit whose amount + fee is over its cap: refuse before quoting, never after proving.
+    if (amount + fee > (NETWORKS[network].poolMaxDeposit ?? amount + fee)) throw new GatewayError('CAP', 400);
     if (!user.eoa) throw new GatewayError('NOEOA', 409);
     const balance = await publicClient(env, network).readContract({ address: NETWORKS[network].ausd, abi: erc20Abi, functionName: 'balanceOf', args: [user.eoa] });
     if (balance < amount + fee) throw new GatewayError('FUNDS', 402);

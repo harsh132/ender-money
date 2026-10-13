@@ -16,11 +16,13 @@ export type Network = {
   ausdFaucet?: Address;
   /**
    * Split-key ShieldedPool (protocol/pool.ts) and the block it was deployed in
-   * (where log scans start). Testnet only: single-contributor trusted setup,
-   * no audit. Its gateway (the only relayer it accepts) is FEE_RECIPIENT.
+   * (where log scans start). Beta on both networks: single-contributor trusted
+   * setup, no audit. Its gateway (the only relayer it accepts) is FEE_RECIPIENT.
    */
   pool?: Address;
   poolDeployBlock?: bigint;
+  /** The pool's maximumDepositAmount (AUSD base units): one deposit's amount + fee may not exceed it. */
+  poolMaxDeposit?: bigint;
 };
 
 /** Calibur v1.1.0, Uniswap's EIP-7702 account. Same address on both networks. */
@@ -36,7 +38,7 @@ export const MULTICALL3: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
  */
 export const FEE_RECIPIENT: Address = '0x458E8F51EC2B833209b5C71372376eeb1e40af08';
 
-/** AUSD's EIP-712 domain name and version (EIP-3009 deposits); checked on testnet. */
+/** AUSD's EIP-712 domain name and version (EIP-3009 deposits); the same on both networks (checked on-chain). */
 export const AUSD_EIP712 = { name: 'Agora Dollar', version: '1' } as const;
 
 /** AUSD has 6 decimals on both networks. */
@@ -49,6 +51,9 @@ export const NETWORKS: Record<NetworkName, Network> = {
     chain: monad,
     explorer: 'https://monadvision.com',
     ausd: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+    pool: '0x1ff020082853ca376379e886cd46999490311579',
+    poolDeployBlock: 113175055n,
+    poolMaxDeposit: 50_000_000n, // 50 AUSD: beta cap (deploy-mainnet.mjs)
   },
   testnet: {
     chain: monadTestnet,
@@ -60,6 +65,7 @@ export const NETWORKS: Record<NetworkName, Network> = {
     ausdFaucet: '0xd236c18D274E54FAccC3dd9DDA4b27965a73ee6C',
     pool: '0xbe34bb676ba6d40098e8aaa36b4599400c9810ff',
     poolDeployBlock: 68154262n,
+    poolMaxDeposit: 1_000_000_000n, // 1000 AUSD (deploy-testnet.mjs)
   },
 };
 

@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { bytesToBigInt, bytesToHex, type Address } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { LEVELS, NULL_OWNER, ZERO_VALUE, buildTx, newUser, owner, packAddress, poseidon, provingKeys, sign, verifySig, type Note } from '../../protocol/shielded';
+import { NETWORKS } from '../../protocol/networks';
 import { encodePrivateAddress } from '../../protocol/recipient';
 import { b64, encodeRefs, REF_MOD, signatureToBase64 } from '../../protocol/sms';
 import { d1, mockWorkers, relayStub, type Sent } from './test-env';
@@ -186,7 +187,6 @@ describe('register and SMS routing', () => {
     ).rejects.toThrow('key-changed');
     await expect(register(env, B, 'testnet', keysJson)).rejects.toThrow('key-in-use');
     await expect(register(env, B, 'testnet', { ...keysJson, Ax: '1' })).rejects.toThrow('bad-keys');
-    await expect(register(env, B, 'mainnet', keysJson)).rejects.toThrow('unsupported');
     await expect(register(env, '0x000000000000000000000000000000000000dead', 'testnet', keysJson)).rejects.toThrow('not-registered');
     const row = await env.DB.prepare('SELECT nk, view_sk, eoa, sealed_as FROM shielded_users WHERE account = ?').bind(A).first<{ nk: string; view_sk: string; eoa: string; sealed_as: null }>();
     expect(row!.nk).not.toContain(keysJson.nk);
@@ -194,30 +194,60 @@ describe('register and SMS routing', () => {
   });
 
   test('PAY to a number without a shielded key', async () => {
-    expect(await sms(ALICE, `PAY ${BOB}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
+    expect(await sms(ALICE, `[Test] PAY ${BOB}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
+  });
+
+  test('a network without a pool answers unsupported', async () => {
+    const pool = NETWORKS.mainnet.pool;
+    delete NETWORKS.mainnet.pool;
+    try {
+      await expect(register(env, B, 'mainnet', keysJson)).rejects.toThrow('unsupported');
+      expect(await sms(ALICE, `PAY ${BOB}, 1 AUSD`)).toBe('ERR unsupported');
+    } finally {
+      NETWORKS.mainnet.pool = pool;
+    }
+  });
+
+  test('SHIELD over the pool cap (amount + fee) is refused before quoting, on each network', async () => {
+    await register(env, A, 'mainnet', keysJson); // the same keys on another network
+    expect(await sms(ALICE, 'SHIELD 50 AUSD')).toBe('ERR CAP'); // 50 + 0.01 fee > 50
+    expect(await sms(ALICE, '[Test] SHIELD 1000 AUSD')).toBe('[Test] ERR CAP');
+    expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM shielded_quotes WHERE kind = 'shield'`).first<{ n: number }>())!.n).toBe(0);
   });
 
   test('PAY to a private address nobody registered, or with another encryption key', async () => {
-    expect(await sms(ALICE, `PAY ${encodePrivateAddress(packAddress(owner(provingKeys(newUser()))))}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
+    expect(await sms(ALICE, `[Test] PAY ${encodePrivateAddress(packAddress(owner(provingKeys(newUser()))))}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
     const swapped = packAddress({ ownerKey: owner(pk).ownerKey, encPk: new Uint8Array(32).fill(9) });
-    expect(await sms(ALICE, `PAY ${encodePrivateAddress(swapped)}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
+    expect(await sms(ALICE, `[Test] PAY ${encodePrivateAddress(swapped)}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
     expect(await sms(ALICE, `PAY ${encodePrivateAddress(swapped).slice(0, -1)}q, 1 AUSD`)).toBe('ERR bad-command'); // typo: not a command
   });
 
   test('every reply ends with the SMS Retriever hash', async () => {
     const withHash = { ...env, SMS_RETRIEVER_HASH: 'FA+9qCX9VSu' } as Env;
-    expect((await handleInbound(withHash, { from: ALICE, body: `PAY ${BOB}, 1 AUSD` }))?.body).toBe('[Test] ERR NOUSER\nFA+9qCX9VSu');
+    expect((await handleInbound(withHash, { from: ALICE, body: `[Test] PAY ${BOB}, 1 AUSD` }))?.body).toBe('[Test] ERR NOUSER\nFA+9qCX9VSu');
   });
 
   test('PAY / MERGE / SHIELD from a number without a shielded key', async () => {
-    expect(await sms(BOB, `PAY ${ALICE}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
-    expect(await sms(BOB, 'MERGE')).toBe('[Test] ERR NOUSER');
-    expect(await sms(BOB, 'SHIELD 5 AUSD')).toBe('[Test] ERR NOUSER');
+    expect(await sms(BOB, `[Test] PAY ${ALICE}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
+    expect(await sms(BOB, '[Test] MERGE')).toBe('[Test] ERR NOUSER');
+    expect(await sms(BOB, '[Test] SHIELD 5 AUSD')).toBe('[Test] ERR NOUSER');
   });
 
-  test('private SIG (refs + 64-byte signature) for an unknown quote', async () => {
+  test('private SIG (refs + 64-byte signature) for an unknown quote: the network its prefix names', async () => {
     const body = `SIG 7F3K ${encodeRefs([1, 2])} ${b64(new Uint8Array(64).fill(7))}`;
-    expect(await sms(ALICE, body)).toBe('[Test] ERR 7F3K UNKNOWN');
+    expect(await sms(ALICE, `[Test] ${body}`)).toBe('[Test] ERR 7F3K UNKNOWN');
+    expect(await sms(ALICE, body)).toBe('ERR 7F3K UNKNOWN');
+  });
+
+  test('unprefixed PAY / SHIELD / MERGE go to mainnet, and their replies carry no [Test]', async () => {
+    expect(await sms(BOB, `PAY ${ALICE}, 1 AUSD`)).toBe('ERR NOUSER');
+    expect(await sms(BOB, 'SHIELD 5 AUSD')).toBe('ERR NOUSER');
+    expect(await sms(BOB, 'MERGE')).toBe('ERR NOUSER');
+    // Bob registers on testnet only: mainnet still doesn't know him.
+    const bob = provingKeys(newUser());
+    await register(env, B, 'testnet', { Ax: bob.Ax.toString(), Ay: bob.Ay.toString(), nk: bob.nk.toString(), viewSk: bytesToBigInt(bob.viewSk).toString() });
+    expect(await sms(ALICE, `PAY ${BOB}, 1 AUSD`)).toBe('ERR NOUSER');
+    await env.DB.prepare(`DELETE FROM shielded_users WHERE account = ?`).bind(B).run();
   });
 
   test('public-shaped SIG goes to the deposit when the quote is a SHIELD', async () => {
@@ -250,7 +280,7 @@ describe('register and SMS routing', () => {
     // SEND: quoted (and refused) on testnet, which becomes the number's current network, as SYNC T does.
     expect(await sms(ALICE, '[Test] SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
     expect(await linkedTo(ALICE)).toBe('testnet');
-    // Private commands: the testnet pool (mainnet has none: that would be `unsupported`).
+    // Private commands: the testnet pool.
     expect(await sms(BOB, `[Test] PAY ${ALICE}, 1 AUSD`)).toBe('[Test] ERR NOUSER');
     expect(await sms(BOB, '[Test] SHIELD 5 AUSD')).toBe('[Test] ERR NOUSER');
     expect(await sms(BOB, '[test]  merge')).toBe('[Test] ERR NOUSER');
@@ -262,7 +292,8 @@ describe('register and SMS routing', () => {
     await linkNetwork(ALICE, 'testnet');
     expect(await sms(ALICE, 'SEND +919800000009, 1 AUSD')).toBe('ERR not-on-ender');
     expect(await sms(ALICE, '[Test] SEND +919800000009, 1 AUSD')).toBe('[Test] ERR not-on-ender');
-    expect(await sms(BOB, 'MERGE')).toBe('[Test] ERR NOUSER'); // private: always the pool's network
+    expect(await sms(BOB, 'MERGE')).toBe('ERR NOUSER'); // private too: no prefix is mainnet
+    expect(await sms(BOB, '[Test] MERGE')).toBe('[Test] ERR NOUSER');
   });
 
   test('a SIG whose prefix names another network than its quote is refused, and the quote stays open', async () => {

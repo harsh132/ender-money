@@ -493,9 +493,11 @@ Turn on Notifications → Workers usage (weekly summary and the CPU-spike alert)
 
 Private payments through the split-key pool
 ([splitkey-spike.md](splitkey-spike.md); reference code
-`spikes/nova-splitkey/src/gateway.mjs`). Testnet only: the pool is
-`NETWORKS.testnet.pool` (`0xbe34…10ff`, deployed in block 68154262); a
-network without a pool answers `unsupported`. The gateway holds each user's
+`spikes/nova-splitkey/src/gateway.mjs`). Each network's pool is
+`NETWORKS[network].pool` (testnet `0xbe34…10ff`, deployed in block 68154262;
+mainnet `0x1ff0…1579`, block 113175055, in beta since 14 Oct, `poolMaxDeposit` 50 AUSD: a SHIELD whose amount +
+fee is over the cap is refused with `CAP` before quoting); a network without a
+pool answers `unsupported`. The gateway holds each user's
 proving keys (`nk`, viewing key, authority public key), never the authority
 private key: it can rebuild, prove and relay exactly what the phone signed,
 and can't spend, redirect or reprice. Code: `shielded.ts` (core, both

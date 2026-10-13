@@ -21,9 +21,6 @@ import type { Env } from './env';
 import { idOfAddress } from './names';
 import * as shielded from './shielded';
 
-/** The only network with a pool: where an unprefixed (older app's) private command goes. */
-const SHIELDED_NETWORK: NetworkName = 'testnet';
-
 /** A SIG whose prefix names another network than its quote's is refused (unprefixed: an older app, the quote's own). */
 const sameNetwork = (named: NetworkName | undefined, quoted: NetworkName | undefined) => {
   if (named && quoted && named !== quoted) throw new GatewayError('wrong-network', 409);
@@ -87,13 +84,18 @@ export const handleInbound = async (env: Env, { from: rawFrom, body }: Inbound):
   }
 };
 
-/** PAY / SHIELD / MERGE and the private SIG (refs + 64-byte signature). */
+/**
+ * PAY / SHIELD / MERGE and the private SIG (refs + 64-byte signature). The prefix names the network, as for
+ * public commands: `[Test] ` is testnet, no prefix mainnet; an unprefixed SIG, its quote's.
+ */
 const handleShielded = async (env: Env, from: string, command: Parsed<ShieldedCommand>): Promise<Outbound | null> => {
-  const network = command.network ?? SHIELDED_NETWORK;
+  let network: NetworkName = command.network ?? 'mainnet';
   try {
     const me = await accountOfPhone(env, from);
     if (command.kind === 'shieldedSig') {
-      sameNetwork(command.network, (await shielded.quoteOf(env, me, command.id))?.network);
+      const quoted = (await shielded.quoteOf(env, me, command.id))?.network;
+      network = command.network ?? quoted ?? network;
+      sameNetwork(command.network, quoted);
       const r = await shielded.submit(env, me, { id: command.id, refs: command.refs, sig: command.signature });
       // Sent but unconfirmed: a Sent now would carry no change position. A repeated SIG answers once it lands.
       if (r.pending) return reply(env, from, { kind: 'error', id: command.id, code: 'pending' }, network);

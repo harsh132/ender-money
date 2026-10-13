@@ -10,7 +10,7 @@ import { api, ApiError } from '../lib/api';
 import { MAX_FEE } from '../lib/config';
 import { phoneDisplay, short, usd } from '../lib/format';
 import { quickSend, whileOwnScreen } from '../lib/keys';
-import { hasPool, privateBalance } from '../lib/private';
+import { hasPool, maxShield, privateBalance } from '../lib/private';
 import { useStore, type Recipient } from '../lib/store';
 import { smsOn } from '../lib/transport';
 import { c, f } from '../lib/theme';
@@ -93,7 +93,7 @@ export default function Send() {
   };
   const pick = async (t: To | null) => {
     if (!t) return;
-    if (isPrivateTo(t) && !hasPool(network)) return setError('Private addresses work in Test mode only.');
+    if (isPrivateTo(t) && !hasPool(network)) return setError("Private addresses don't work on this network yet.");
     if (t.phone && !sms) return setError('Add your phone number in Settings to pay numbers.');
     setError(undefined);
     // Online, check an Ender ID exists, and show a number's Ender ID. Offline the gateway resolves it later.
@@ -121,9 +121,13 @@ export default function Send() {
 
   // ------------------------------------------------------------ amount step
   if (to || shield) {
-    const max = balance ? parseUnits(balance, AUSD_DECIMALS) - parseUnits(MAX_FEE, AUSD_DECIMALS) : 0n;
+    const all = balance ? parseUnits(balance, AUSD_DECIMALS) - parseUnits(MAX_FEE, AUSD_DECIMALS) : 0n;
+    // Making private: one deposit at most the pool's cap (amount + fee).
+    const cap = shield ? maxShield(network, MAX_FEE) : undefined;
+    const max = cap !== undefined && cap < all ? cap : all;
     const value = /^\d+(\.\d{0,6})?$/.test(amount) ? parseUnits(amount.replace(/\.$/, ''), AUSD_DECIMALS) : 0n;
     const tooMuch = balance !== undefined && value > max;
+    const overCap = cap !== undefined && value > cap;
     // A private address and too little private balance: make private first, never pay it publicly.
     const needsShield = toPrivate && (value > max || max <= 0n);
     const press = (k: (typeof KEYS)[number]) => {
@@ -173,7 +177,13 @@ export default function Send() {
         </T>
         <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 }}>
           <T v="meta" style={{ color: tooMuch ? c.negative : c.fg2 }}>
-            {needsShield ? 'Not enough private balance' : tooMuch ? 'More than your balance' : `${toPrivate ? 'Private balance' : 'Balance'} $${usd(balance ?? '0')}`}
+            {needsShield
+              ? 'Not enough private balance'
+              : overCap
+                ? `Up to $${usd(formatUnits(cap!, AUSD_DECIMALS))} at a time`
+                : tooMuch
+                  ? 'More than your balance'
+                  : `${toPrivate ? 'Private balance' : 'Balance'} $${usd(balance ?? '0')}`}
           </T>
           {needsShield ? (
             <Pressable onPress={() => router.push({ pathname: '/send', params: { shield: '1' } })} style={{ height: 36, paddingHorizontal: 14, borderRadius: 999, backgroundColor: c.surface2, justifyContent: 'center' }}>

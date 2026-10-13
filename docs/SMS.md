@@ -112,11 +112,9 @@ session that doesn't exist (`not-registered` after a plain `SEND`,
 names, whatever mode the app shows: `OK` sets that network's balance and
 nonce, a public `Received` adds a row to that network's Activity and sets its
 balance, `Sent` / `Shielded` / a private `Received` update that network's note
-cache and waiting payments. Private texts exist only on testnet today, so they
-go to the testnet note cache even while the app shows mainnet; an untagged
-private-only text (private `Q`, `Shielded`, private `Received` or `Got`, from
-an older gateway) is read as the
-network with a pool (`textNetwork`, `notesNetwork` in `private.ts`). The
+cache and waiting payments. Private texts follow the same rule (`[Test] ` is
+the testnet note cache, untagged mainnet's), even while the app shows the other
+network (`textNetwork` in `private.ts`). The
 Review screen waiting for a reply compares its network with its payment's:
 a `Q`, `ERR`, or its own `Sent` / `Shielded` for the other network fails the
 payment ("That reply was for mainnet, not this payment. …"), code
@@ -469,9 +467,10 @@ hash. The recipient gets a `Received` alert from the Alchemy webhook.
 
 ## Private payments
 
-Testnet only: the app sends every private command with `[Test] `; an older
-app's unprefixed ones also go to `testnet` (`SHIELDED_NETWORK`, the only
-pool). Every private reply starts with `[Test] `.
+Both networks (mainnet in beta: 50 AUSD per deposit, amount + fee; over it,
+`ERR CAP`). The prefix names the network like every other command: `[Test] `
+is testnet, no prefix mainnet; an unprefixed private `SIG`, its quote's. Every
+private reply about testnet starts with `[Test] `.
 The sender must have registered proving keys online (`/shielded/register`),
 else `NOUSER`.
 
@@ -748,7 +747,7 @@ private; a private one never carries `balance=` (a carrier reads every text).
 
 | Field | Meaning |
 | --- | --- |
-| `[Test] ` | Testnet only (every private one, today) |
+| `[Test] ` | Testnet only |
 | `amount` | Transfer value; for a private one, the payment's amount |
 | `from` | "Who appears in texts". Public: the sender's Ender ID, else verified reverse-ENS name, else EIP-55 address. Private: the sender's Ender ID, else no `from=`. Never a number |
 | `balance` | Public only: the recipient's AUSD balance read when the alert is built |
