@@ -22,6 +22,9 @@ export class OfflineError extends Error {
   }
 }
 
+/** We gave up waiting (the request may still land): an OfflineError to callers, but told apart in the message. */
+export class TimeoutError extends OfflineError {}
+
 /** What a 401 on our own token does (lib/auth.ts): sign in again when it can (true), else drop the token. */
 let reauth: (() => Promise<boolean>) | undefined;
 export const onUnauthorized = (f: () => Promise<boolean>) => {
@@ -40,7 +43,7 @@ const request = async <T,>(method: 'GET' | 'POST', path: string, body?: unknown,
       signal: ctrl.signal,
     });
   } catch {
-    throw new OfflineError();
+    throw ctrl.signal.aborted ? new TimeoutError() : new OfflineError();
   } finally {
     clearTimeout(timer);
   }
@@ -109,7 +112,7 @@ export const api = {
   // Sign-in by wallet signature (lib/auth.ts); the first one creates the account and its random Ender ID.
   challenge: (address: Address) => request<{ nonce: string; expires: number }>('POST', '/auth/challenge', { address }, ''),
   verifyAuth: (body: { address: Address; signature: Hex; turnstile?: string }) =>
-    request<{ token: string; address: Address; name: string; created: boolean }>('POST', '/auth/verify', body, ''),
+    request<{ token: string; address: Address; name: string; created: boolean }>('POST', '/auth/verify', body, '', 15_000),
   /** The signed-in wallet's 7702 delegation on each network; idempotent. */
   createWallet: (body: { authorizations: Partial<Record<NetworkName, AuthorizationJson>> }) =>
     request<{ address: Address }>('POST', '/wallet/create', body, undefined, 30_000),

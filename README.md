@@ -10,7 +10,7 @@ a text message. Incoming money moves into a private balance automatically, so
 the chain doesn't show who paid whom.
 
 - **Android app:** [assets.ender.money/android/ender.apk](https://assets.ender.money/android/ender.apk)
-  (SHA-256 `c8f8a88664deca25125739b3a4a664a1b0d65d648b6efccf7fac34afd6b60615`)
+  (SHA-256 `68e701bc0d4a9941bdf43227ad67c502838c32459ea435ba89502a0ca87f6865`)
 - **Web app:** [app.ender.money](https://app.ender.money) (testnet only, no SMS
   features; same passkey as the Android app)
 - **Website:** [ender.money](https://ender.money)
@@ -22,12 +22,12 @@ the chain doesn't show who paid whom.
    asked).
 2. Create a passkey. That's the whole sign-up: you get a random Ender ID and a
    wallet. No seed phrase, no phone number.
-3. Settings → **Testnet mode** for play money (Monad testnet). Off means real
+3. Settings â†’ **Testnet mode** for play money (Monad testnet). Off means real
    AUSD on Monad mainnet.
-4. Receive: share your Ender ID, the `ender1…` private address or the 0x
-   address from the Receive screen. Send: Ender ID, phone number, `ender1…` or
-   `0x…`.
-5. Optional: Settings → **Phone number**. Verifying a number turns on the SMS
+4. Receive: share your Ender ID, the `ender1â€¦` private address or the 0x
+   address from the Receive screen. Send: Ender ID, phone number, `ender1â€¦` or
+   `0xâ€¦`.
+5. Optional: Settings â†’ **Phone number**. Verifying a number turns on the SMS
    features: payment alerts by text, sending with no internet, and being paid
    by number.
 
@@ -39,13 +39,13 @@ we'll send some.
 
 | | Mainnet | Testnet |
 | --- | --- | --- |
-| Public payments (internet or SMS) | ✓ | ✓ |
-| Passkey accounts, gas sponsored, 0.01 AUSD fee | ✓ | ✓ |
-| Ender IDs (`label.ender.my`, resolves in ENS wallets) | ✓ | ✓ |
-| Payment alerts by SMS (Alchemy webhooks) | ✓ | ✓ |
-| Private balance and private payments (Auto Shield) | — | ✓ |
-| Local-currency delivery (Agora pair, CTK) | — | ✓ |
-| Auto-bridge: tokens sent to your address on Ethereum, Base, Arbitrum or Polygon arrive as AUSD (Relay) | ✓ | — |
+| Public payments (internet or SMS) | âœ“ | âœ“ |
+| Passkey accounts, gas sponsored, 0.01 AUSD fee | âœ“ | âœ“ |
+| Ender IDs (`label.ender.my`, resolves in ENS wallets) | âœ“ | âœ“ |
+| Payment alerts by SMS (Alchemy webhooks) | âœ“ | âœ“ |
+| Private balance and private payments (Auto Shield) | â€” | âœ“ |
+| Local-currency delivery (Agora pair, CTK) | â€” | âœ“ |
+| Auto-bridge: tokens sent to your address on Ethereum, Base, Arbitrum or Polygon arrive as AUSD (Relay) | âœ“ | â€” |
 
 **Internet first, SMS fallback.** Every payment is a signed message. Online it
 goes to the gateway over HTTPS; offline the app texts it to the gateway's
@@ -58,7 +58,7 @@ it; it only relays and pays the gas.
 
 **Private payments.** A shielded pool with Groth16 proofs and a split key: the
 phone holds the spending key, the gateway holds the viewing and nullifier keys
-so it can build and prove transactions (proving takes 1–4 s in a container), but
+so it can build and prove transactions (proving takes 1â€“4 s in a container), but
 every spend needs the phone's signature. Payments between Ender users show on
 chain as pool transactions only. Design and trade-offs:
 [docs/shielded-pool.md](docs/shielded-pool.md),

@@ -7,7 +7,7 @@ import { MAX_LABEL, MIN_LABEL, parseEnderId } from '../../../protocol/names';
 import { isPrivateAddress } from '../../../protocol/recipient';
 import { owner, packAddress, provingKeys, type User } from '../../../protocol/shielded';
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
-import { api, ApiError, OfflineError, type ActivityItem, type AuthorizationJson } from './api';
+import { api, ApiError, OfflineError, TimeoutError, type ActivityItem, type AuthorizationJson } from './api';
 import { signIn } from './auth';
 import { bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge } from './bridge';
 import { DEFAULT_NETWORK, MAX_FEE } from './config';
@@ -746,6 +746,7 @@ const ERRORS: Record<string, string> = {
 
 export const errorText = (e: unknown): string => {
   if (e instanceof ApiError) return ERRORS[e.code] ?? `Gateway said: ${e.code}`;
+  if (e instanceof TimeoutError) return 'Taking longer than usual. Try again.';
   if (e instanceof OfflineError) return 'No internet.';
   if (typeof e === 'string') return ERRORS[e] ?? `Gateway said: ${e}`;
   return e instanceof Error ? e.message : String(e);
