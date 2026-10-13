@@ -22,4 +22,7 @@ export const HTTP_TIMEOUT_MS = 5000;
 /** Quick send scope (SCOPE.md "Signing sessions"). Constants, not settings. */
 export const QUICK_SEND = { perTx: 20, total: 50, minutes: 10 } as const;
 
-export const DEFAULT_NETWORK: NetworkName = 'mainnet';
+/** The web app (app.ender.money) is a trial: testnet only, no real money in a browser tab. */
+// A DOM means the web build (Platform.OS === 'web'); checked this way so tests can import config without react-native.
+export const WEB = typeof document !== 'undefined';
+export const DEFAULT_NETWORK: NetworkName = WEB ? 'testnet' : 'mainnet';

@@ -11,6 +11,8 @@ the chain doesn't show who paid whom.
 
 - **Android app:** [assets.ender.money/android/ender.apk](https://assets.ender.money/android/ender.apk)
   (SHA-256 `c8f8a88664deca25125739b3a4a664a1b0d65d648b6efccf7fac34afd6b60615`)
+- **Web app:** [app.ender.money](https://app.ender.money) (testnet only, no SMS
+  features; same passkey as the Android app)
 - **Website:** [ender.money](https://ender.money)
 - **Example pay page:** [harsh.ender.my](https://harsh.ender.my)
 

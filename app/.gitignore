@@ -43,3 +43,4 @@ yarn-error.*
 # signing key (never commit)
 credentials/
 modules/*/android/build/
+dist-web/

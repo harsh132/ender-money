@@ -37,6 +37,12 @@
         "site/public"
       ],
       "port": 4174
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "bunx",
+      "runtimeArgs": ["wrangler", "dev", "-c", "web/wrangler.jsonc", "--port", "8790"],
+      "port": 8790
     }
   ]
 }

@@ -10,7 +10,7 @@ import { b64, type Deliver, type Reply } from '../../../protocol/sms';
 import { api, ApiError, OfflineError, type ActivityItem, type AuthorizationJson } from './api';
 import { signIn } from './auth';
 import { bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge } from './bridge';
-import { MAX_FEE } from './config';
+import { DEFAULT_NETWORK, MAX_FEE } from './config';
 import { fileReceived, smsTwin, type Received } from './inbox';
 import { lock, quickSend, unlockWallet, type Unlocked } from './keys';
 import {
@@ -606,7 +606,7 @@ export const setUpWallet = async (u: Unlocked) => {
   const same = prev?.address.toLowerCase() === r.address.toLowerCase();
   setState({
     wallet: { address: u.address, enderId: r.name, phone: same ? prev.phone : undefined, credentialId: u.credential.credentialId, transports: u.credential.transports as string[] | undefined },
-    ...(same ? {} : { network: 'mainnet', account: {}, activity: [] }),
+    ...(same ? {} : { network: DEFAULT_NETWORK, account: {}, activity: [] }),
   });
   void register();
   void sync();

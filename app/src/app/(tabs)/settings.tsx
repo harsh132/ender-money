@@ -5,6 +5,7 @@ import { Alert, Platform, Pressable, ScrollView, Switch, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
+import { WEB } from '../../lib/config';
 import { ago, phoneMasked, short } from '../../lib/format';
 import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
 import { AUTO_SHIELD_MIN, autoShieldOn, hasPool } from '../../lib/private';
@@ -155,6 +156,7 @@ export default function Settings() {
 
         <Label>Network</Label>
         <Group>
+          {WEB ? null : (
           <Row
             title="Testnet mode"
             sub={network === 'testnet' ? 'Monad testnet. Test money only.' : 'Off: real money on Monad.'}
@@ -168,6 +170,7 @@ export default function Settings() {
               />
             }
           />
+          )}
           {sms ? (
             <Row
               title="Gateway"

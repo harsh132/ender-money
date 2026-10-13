@@ -19,7 +19,9 @@
     "site:dev": "wrangler dev -c site/wrangler.jsonc",
     "site:migrate:local": "wrangler d1 migrations apply ender-waitlist --local -c site/wrangler.jsonc",
     "site:migrate:remote": "wrangler d1 migrations apply ender-waitlist --remote -c site/wrangler.jsonc",
-    "site:deploy": "wrangler deploy -c site/wrangler.jsonc"
+    "site:deploy": "wrangler deploy -c site/wrangler.jsonc",
+    "web:build": "cd app && bunx expo export -p web --output-dir dist-web",
+    "web:deploy": "wrangler deploy -c web/wrangler.jsonc"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
