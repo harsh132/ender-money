@@ -81,6 +81,8 @@ h1 { font: 500 clamp(48px, 11vw, 88px)/1.02 var(--display); letter-spacing: -.02
 @media (min-width: 900px) {
   .hero { grid-template-columns: 1fr auto; padding-top: 48px; padding-bottom: 120px; gap: 64px; }
 }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.cta-note { margin-top: 12px; font-size: 14px; color: var(--fg-2); }
 @media (max-width: 899px) { .hero-copy .btn { width: 100%; } }
 
 /* phone mockup (sizes follow kit.tsx / mockups.html) */
