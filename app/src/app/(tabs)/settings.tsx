@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useState, type ReactNode } from 'react';
-import { Alert, Platform, Pressable, ScrollView, Switch, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
@@ -111,19 +111,19 @@ export default function Settings() {
       },
     ]);
 
-  const logOut = () =>
+  const logOut = () => {
+    const out = async () => {
+      quickSend.end();
+      await signOut();
+      router.replace('/welcome');
+    };
+    // react-native-web's Alert does nothing: the browser's own confirm there.
+    if (WEB) return void (window.confirm('Log out? Your wallet stays safe. Log in again with your passkey to get it back.') && out());
     Alert.alert('Log out of this phone?', 'Your wallet stays safe. Log in again with your passkey to get it back.', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Log out',
-        style: 'destructive',
-        onPress: async () => {
-          quickSend.end();
-          await signOut();
-          router.replace('/welcome');
-        },
-      },
+      { text: 'Log out', style: 'destructive', onPress: out },
     ]);
+  };
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: c.bg }}>
@@ -136,16 +136,15 @@ export default function Settings() {
         <Label>Account</Label>
         <Group>
           {wallet.enderId ? <Row title="Ender ID" sub={wallet.enderId} onPress={() => router.push('/name')} /> : null}
-          {/* The web has no texts: no number, and none of what it turns on. */}
-          {Platform.OS === 'web' ? null : (
-            <Row
-              title="Phone number"
-              sub={wallet.phone ? phoneMasked(wallet.phone) : 'Add one to get texts and pay offline'}
-              onPress={() => (wallet.phone ? phoneOptions() : router.push('/phone'))}
-            />
-          )}
-          <Row title="Wallet" sub={short(wallet.address)} mono onPress={() => router.push('/receive')} last={!sms} />
-          {sms ? (
+          {/* On the web a number gets texts and lets people pay it; paying by text stays on the phone. */}
+          <Row
+            title="Phone number"
+            sub={wallet.phone ? phoneMasked(wallet.phone) : WEB ? 'Add one to get texts when you get paid' : 'Add one to get texts and pay offline'}
+            // The web has no Alert menu: a tap there changes the number.
+            onPress={() => (wallet.phone && !WEB ? phoneOptions() : router.push('/phone'))}
+          />
+          <Row title="Wallet" sub={short(wallet.address)} mono onPress={() => router.push('/receive')} last={!wallet.phone} />
+          {wallet.phone ? (
             <Row
               title="Text me when I get paid"
               right={<Switch value={alerts} disabled={busy === 'alerts'} onValueChange={toggleAlerts} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={alerts ? '#fff' : c.fg3} />}

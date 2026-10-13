@@ -62,7 +62,8 @@ export default function NameScreen() {
   const fee = status?.fee ?? '2';
   const paid = !!getState().namePaid;
   const canPay = network === 'mainnet' && (paid || parseUnits(balance, AUSD_DECIMALS) >= parseUnits(fee, AUSD_DECIMALS) + parseUnits(MAX_FEE, AUSD_DECIMALS));
-  const android = Platform.OS === 'android';
+  // Numbers are verified on Android and on the web.
+  const android = Platform.OS !== 'ios';
 
   return (
     <Screen>
