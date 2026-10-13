@@ -1,4 +1,5 @@
 /** Account sync, signup and the pieces of a transfer, shared by the screens. */
+import { useSyncExternalStore } from 'react';
 import { bytesToBigInt, createPublicClient, http, parseUnits, type Address, type Hex, type LocalAccount } from 'viem';
 import { relayQuote, relayStatus } from '../../../protocol/bridge';
 import { signedBatchTypedData, swapWithFee, transferWithFee } from '../../../protocol/calibur';
@@ -279,6 +280,21 @@ export const applyReceived = (r: Received) => {
 // One at a time: a trigger that comes while the other runs waits for it to finish.
 let merging = false;
 let shielding = false;
+// A deposit on its way, for the Auto Shield toast (tabs layout). In memory only: it ends with the app.
+let depositing = false;
+const depositListeners = new Set<() => void>();
+const setDepositing = (on: boolean) => {
+  depositing = on;
+  depositListeners.forEach((l) => l());
+};
+export const useAutoShielding = () =>
+  useSyncExternalStore(
+    (l) => {
+      depositListeners.add(l);
+      return () => depositListeners.delete(l);
+    },
+    () => depositing,
+  );
 /** After a failed auto-shield, triggers wait this long, so a gateway that keeps refusing doesn't fill Activity with failed rows. */
 const SHIELD_BACKOFF_MS = 10 * 60_000;
 let shieldRetryAt = 0;
@@ -401,6 +417,7 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
       private: true,
       shield: true,
     });
+    setDepositing(true);
     let res;
     try {
       res = await api.shieldedSubmit({ id: q.id, signature: r.signature });
@@ -422,6 +439,7 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
     if (!(e instanceof OfflineError)) shieldRetryAt = Date.now() + SHIELD_BACKOFF_MS;
   } finally {
     shielding = false;
+    setDepositing(false);
     // The settle above (or a resync meanwhile) asked for a merge.
     if (mergeLater) {
       mergeLater = false;

@@ -4,7 +4,9 @@ import { useRef, type RefObject } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { c } from '../../lib/theme';
-import { Gear, Home, List } from '../../ui/icons';
+import { useAutoShielding } from '../../lib/wallet';
+import { Gear, Home, List, Shield } from '../../ui/icons';
+import { Spinner, T } from '../../ui/kit';
 
 const TABS = [
   { name: 'home', label: 'Home', Icon: Home },
@@ -45,6 +47,21 @@ const Dock = ({ target }: { target: RefObject<View | null> }) => {
   );
 };
 
+/** While Auto Shield moves the public balance into the private one; a tap explains it. */
+const ShieldToast = () => {
+  const insets = useSafeAreaInsets();
+  if (!useAutoShielding()) return null;
+  return (
+    <View pointerEvents="box-none" style={[st.wrap, { bottom: Math.max(insets.bottom, 12) + 96 }]}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Auto Shield is running. What is this?" onPress={() => router.push('/auto-shield')} style={st.toast}>
+        <Spinner />
+        <T v="meta" style={{ flex: 1, color: c.fg }}>Making your balance private…</T>
+        <Shield size={20} color={c.accent} />
+      </Pressable>
+    </View>
+  );
+};
+
 export default function TabsLayout() {
   const target = useRef<View>(null);
   return (
@@ -56,6 +73,7 @@ export default function TabsLayout() {
           <Tabs.Screen name="settings" />
         </Tabs>
       </BlurTargetView>
+      <ShieldToast />
       <Dock target={target} />
     </View>
   );
@@ -77,4 +95,17 @@ const st = StyleSheet.create({
     borderColor: c.line,
   },
   tab: { width: 76, height: 56, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  toast: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: 300,
+    maxWidth: '90%',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.line,
+  },
 });
