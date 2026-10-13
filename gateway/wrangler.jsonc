@@ -21,6 +21,9 @@
     "PAUSED": "0",
     "FEE_AUSD": "0.01",
     "SMS_RETRIEVER_HASH": "IaTP8lLJOvM",
+    // The Twilio number: inbound on POST /webhooks/twilio, outbound to every number outside India. Off until the
+    // TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN secrets are set.
+    "TWILIO_FROM": "+18106768046",
     // Where Alchemy's Address Activity webhooks deliver. Webhooks are made only once the ALCHEMY_AUTH_TOKEN secret is set.
     "ALCHEMY_WEBHOOK_URL": "https://api.ender.money/webhooks/alchemy",
     // EnderResolver on Ethereum mainnet (ender-backend/contracts, deployed by 0x3f87…a2d3): /ccip signs for it. The

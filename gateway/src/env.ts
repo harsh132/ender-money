@@ -14,6 +14,11 @@ export type Env = {
   /** Android SMS Retriever hash appended to replies; unset until the app is signed. */
   SMS_RETRIEVER_HASH?: string;
   RELAY: DurableObjectNamespace<Relay>;
+  /** Twilio, the transport for every number outside India (twilio.ts). Without all three it's off: no webhook, no texts. */
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  /** The Twilio number texts come from, E.164. */
+  TWILIO_FROM?: string;
   RPC_MAINNET?: string;
   RPC_TESTNET?: string;
   /** Ethereum mainnet JSON-RPC for reverse ENS in Received alerts (names.ts reverseEns); defaults to https://eth.drpc.org. */

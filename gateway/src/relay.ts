@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env';
 import { handleInbound } from './sms';
+import { answerTwilio } from './twilio';
 
 /**
  * Messages on the relay phone's WebSocket (JSON):
@@ -68,6 +69,11 @@ export class Relay extends DurableObject<Env> {
     }
     await this.ctx.storage.put(`out:${msg.id}`, msg);
     return { queued: true };
+  }
+
+  /** An inbound Twilio text (twilio.ts), handled here so a slow SIG isn't cut off; answered by REST. */
+  async twilio(from: string, body: string) {
+    await answerTwilio(this.env, from, body);
   }
 
   connected() {

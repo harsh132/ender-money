@@ -6,8 +6,8 @@ by signature; a phone number is optional (verified by OTP), and only an
 account with one gets texts and the SMS path. It never holds user funds and
 cannot move them without a fresh user signature.
 
-Parent scope: [SCOPE.md](../SCOPE.md). Build window: 3–5 Oct (Twilio and
-alerts on 9 Oct).
+Parent scope: [SCOPE.md](../SCOPE.md). Build window: 3–5 Oct (alerts on 9 Oct,
+Twilio on 13 Oct).
 
 ## Shape
 
@@ -50,13 +50,14 @@ requests can't double-act.
 | D1 `auth_challenges` | `address · nonce · expires_at`: one open sign-in challenge per address, deleted by the verify that reads it |
 | D1 `otps` | `phone · code_hash · attempts · expires_at`. A try is `UPDATE … SET attempts = attempts + 1 WHERE phone = ? AND expires_at > ? AND attempts < 5 RETURNING *` |
 | D1 `sessions` | pending quotes, i.e. exactly what the user is asked to sign (below). Signing claims one with `UPDATE … SET state = 'sending' WHERE id = ? AND state = 'open' RETURNING *`; a racing duplicate gets nothing back and reads the tx hash instead |
+| D1 `twilio_inbound` | `sid · received_at`: the MessageSids of Twilio texts already handled (`0011_twilio.sql`), so a repeated delivery is answered once |
 | D1 `alerts_sent` | `tx_hash · phone` (the number texted), so a repeated webhook delivery (or a private `Received` for the same transaction) never alerts twice |
 | D1 `ens_names` | `address · name · checked_at`: reverse ENS per sender address for a public `Received`'s `from=` (`0008_names_in_texts.sql`); `name` null when there is none a text can carry; rechecked after 7 days |
 | D1 `transfers` | AUSD `Transfer` logs touching a linked address (`network · tx_hash · log_index · from · to · amount · block · at`), written by the Alchemy webhook (`INSERT OR IGNORE`, so a repeated delivery writes nothing); serves `GET /activity` and alerts |
 | D1 `alchemy_webhooks` | `id · network · signing_key · addresses · created_at`: the Address Activity webhooks the gateway made itself (`0006_alchemy.sql`); `signing_key` sealed under `SHIELDED_KEY_SECRET` |
 | D1 `alchemy_addresses` | `network · address`: linked addresses already pushed to that network's webhook |
 | `Sponsor` DO, one per network | the gateway key's nonce and the transfer queue; sends one Multicall3 batch at a time (see "Sending many transfers") |
-| `Relay` DO, singleton | the Android relay's WebSocket (hibernation API), outbound queue, delivery reports |
+| `Relay` DO, singleton | the Android relay's WebSocket (hibernation API), outbound queue, delivery reports; also handles inbound Twilio texts (`twilio()`) |
 
 Per-number rate limits use Cloudflare's rate-limit binding keyed by phone
 number; per-IP limits use the same binding keyed by IP. The cron deletes
@@ -126,7 +127,7 @@ Expires: <ISO 8601>
 | `POST /tx/quote` with `to: "label.ender.my"` | resolves the Ender ID to its public address (`unknown-name`, 404, if nobody has it) |
 | Ender ID routes | `GET /names/check`, `GET /names/:label`, `GET /names/by-phone`, `GET` and `POST /account/name`, `/ccip`: see "Ender IDs" |
 | `GET /relay` | WebSocket upgrade for the Android relay; `Authorization: Bearer <RELAY_TOKEN>` |
-| `POST /webhooks/twilio` | inbound SMS; checks `X-Twilio-Signature` |
+| `POST /webhooks/twilio` | inbound SMS on the Twilio number (`twilio.ts`); 403 unless `X-Twilio-Signature` checks out, or with Twilio unset. Answers empty TwiML at once; see "Transports out" |
 | `POST /webhooks/alchemy` | Alchemy Address Activity deliveries; `X-Alchemy-Signature` must be the hex HMAC-SHA256 of the raw body under the key of the webhook the body names (else 401). Records AUSD transfers and alerts, below; on the auto-bridge chains, notes incoming tokens (see "Auto-bridge") |
 | `GET /bridge/pending`, `POST /bridge/prepare {chainId, token}`, `POST /bridge/submit {id, calls, nonce, deadline, signature, authorization?, requestId?}` | Auto-bridge: see "Auto-bridge" |
 
@@ -279,9 +280,13 @@ isn't enough.
 
 ## Transports out
 
-`sendSms(phone, text)` picks the transport by number: `+91` goes to the
-relay, everything else to Twilio. Replies to an inbound SMS go back on the
-transport it arrived on.
+`sendSms(phone, text)` (`outbound.ts`, for texts the gateway starts: OTPs,
+`Received` alerts) picks the transport by number: `+91` goes to the relay,
+everything else to Twilio. With Twilio unset (any of `TWILIO_ACCOUNT_SID`,
+`TWILIO_AUTH_TOKEN`, `TWILIO_FROM` missing) only `+91` can be texted, and
+`canText` / `sendSms` refuse other numbers (`sms-unavailable`). Replies to an
+inbound SMS go back on the transport it arrived on, whatever the number: a
+`+91` number that texted the Twilio number is answered from it.
 
 **Relay protocol** (JSON over the WebSocket):
 
@@ -297,8 +302,38 @@ If the relay is offline, outbound messages queue in the `Relay` DO for 10
 minutes, then drop with a log line. OTP requests while it's offline return
 an error the app can show ("Couldn't send the code, try again").
 
-**Twilio**: inbound webhook, outbound REST `Messages` API from one US
-number.
+**Twilio** (built 13 Oct, `twilio.ts`), one US number, `TWILIO_FROM`
+`+18106768046`:
+
+- **Inbound** (`POST /webhooks/twilio`, form-encoded `From`, `To`, `Body`,
+  `MessageSid`…): `X-Twilio-Signature` must be the base64 HMAC-SHA1, under
+  `TWILIO_AUTH_TOKEN`, of the request URL followed by every POST param's
+  name and value sorted by name (checked with `crypto.subtle.verify`, so in
+  constant time); otherwise, or with Twilio unset, 403. A `MessageSid`
+  already in `twilio_inbound` is answered and dropped. The Worker answers
+  `<Response/>` (`text/xml`) at once and hands the text to the `Relay` DO,
+  which runs the same `handleInbound` as relay texts (same parsing, account
+  by verified number, silence for strangers) and sends the reply by REST. It
+  runs there, not in the Worker's `waitUntil`, because a `SIG` can wait 30 s
+  for its receipt (60 s for a private one) and `waitUntil` ends 30 s after
+  the response.
+- **Outbound**: `POST https://api.twilio.com/2010-04-01/Accounts/{SID}/Messages.json`,
+  Basic auth `SID:token`, form `From`, `To`, `Body`. The text is exactly what
+  the relay would send (one GSM-7 segment, `[Test] ` prefix, Retriever hash
+  line). A failure (non-2xx or network) is logged with the number masked and
+  the Twilio error code, never thrown: an OTP or alert still reports sent.
+- **Paused**: the Worker answers Twilio 503 like every request. Twilio
+  doesn't retry, so unlike the relay's, a text that arrives while paused is
+  lost (the sender can text again).
+
+**Turning Twilio on** (owner): apply `0011_twilio.sql`
+(`bun run gateway:migrate:remote`), deploy, then
+`wrangler secret put TWILIO_ACCOUNT_SID -c gateway/wrangler.jsonc` and the
+same for `TWILIO_AUTH_TOKEN` (Twilio console → Account → API keys & tokens).
+In the Twilio console, on the number's Messaging configuration, set "A message
+comes in" to Webhook `https://api.ender.money/webhooks/twilio`, HTTP POST
+(exactly that URL: it is part of the signature). A trial account only texts
+verified numbers.
 
 ## Incoming-payment alerts
 
@@ -380,9 +415,9 @@ next new account, whichever comes first); `wrangler tail` shows
 - Phone numbers masked in logs (`+91 98•••••210`).
 - Secrets: `GATEWAY_PRIVATE_KEY`, `JWT_SECRET`, `RELAY_TOKEN`,
   `SHIELDED_KEY_SECRET`, `GATEWAY_SHIELDED_SEED`, `RESOLVER_SIGNER_KEY`,
-  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (Twilio not built yet),
+  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
   `ALCHEMY_AUTH_TOKEN`. Plain vars in `wrangler.jsonc`: `FEE_AUSD`,
-  `SMS_RETRIEVER_HASH`, `ALCHEMY_WEBHOOK_URL`, `RESOLVER_ADDRESS`. Alchemy webhook signing keys are not secrets to
+  `SMS_RETRIEVER_HASH`, `TWILIO_FROM`, `ALCHEMY_WEBHOOK_URL`, `RESOLVER_ADDRESS`. Alchemy webhook signing keys are not secrets to
   set: the gateway receives them when it creates a webhook and keeps them
   sealed in D1 (`alchemy_webhooks`).
 
@@ -397,7 +432,8 @@ There is no spending cap on Workers Paid. If the gateway runs away:
    `503 {"error":"paused"}` and the cron does nothing. The prover only gets
    work through the Worker. Inbound SMS reach the `Relay` DO over its open
    WebSocket, so it checks `PAUSED` too: it leaves texts unacked and the relay
-   resends them after you set it back to `"0"`.
+   resends them after you set it back to `"0"`. Texts to the Twilio number get
+   503 and are lost (Twilio doesn't retry).
 3. **Cut a trigger**: delete the cron (Settings → Trigger events) or remove the
    `api.ender.money` route.
 4. Deleting the Worker is the last resort: it wipes the Durable Objects' storage.
@@ -449,7 +485,7 @@ Turn on Notifications → Workers usage (weekly summary and the CPU-spike alert)
    cron that finalises stuck sessions, `/wallet/create` with
    delegation on both networks, D1 `links`; deploy; first transfer from a fresh demo
    wallet over HTTPS and over SMS.
-4. **9 Oct** — Twilio transport. (Alerts and `GET /activity` landed on
+4. **13 Oct** — Twilio transport (built). (Alerts and `GET /activity` landed on
    2 Oct from a cron log scan; the Alchemy webhook replaced that scan on
    4 Oct.)
 

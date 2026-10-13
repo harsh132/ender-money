@@ -4,13 +4,10 @@ export const GATEWAY_URL = process.env.EXPO_PUBLIC_GATEWAY_URL ?? 'https://api.e
 /** Passkey relying party: ender.money serves assetlinks.json for this app's signing key. */
 export const RP_ID = 'ender.money';
 
-/**
- * Numbers the app texts when offline. India goes through the relay phone; the
- * international (Twilio) number lands on 9 Oct.
- */
+/** Numbers the app texts when offline: India goes through the relay phone, everywhere else through Twilio. */
 export const GATEWAY_SMS: Record<'india' | 'international', string | undefined> = {
   india: process.env.EXPO_PUBLIC_GATEWAY_SMS_IN ?? '+917004543035',
-  international: process.env.EXPO_PUBLIC_GATEWAY_SMS_INTL,
+  international: process.env.EXPO_PUBLIC_GATEWAY_SMS_INTL ?? '+18106768046',
 };
 
 /** Shipped rate; replaced by the latest the gateway reports (Frankfurter, USD). */

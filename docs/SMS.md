@@ -31,7 +31,7 @@ text with the Retriever hash line appended, as the gateway sends it.
 | | |
 | --- | --- |
 | India | `+917004543035`, a SIM in the Android relay phone. The phone holds a WebSocket to the gateway's `Relay` Durable Object (`GET /relay`) and forwards every text it receives; the gateway answers on the same socket. Configured in the app as `GATEWAY_SMS.india` (`EXPO_PUBLIC_GATEWAY_SMS_IN`, default `+917004543035`). |
-| International | Not built. `GATEWAY_SMS.international` comes from `EXPO_PUBLIC_GATEWAY_SMS_INTL` and is unset, so `textGateway` throws `NoSmsError` ("No gateway number for texts is set up in this build."). The gateway's `canText` is `to.startsWith('+91')`; `sendSms` to any other number throws `sms-unavailable` (503). |
+| International | `+18106768046`, a Twilio number (US). Twilio posts each text to `POST /webhooks/twilio` (signed); the gateway answers by Twilio's REST API from the same number. Configured in the app as `GATEWAY_SMS.international` (`EXPO_PUBLIC_GATEWAY_SMS_INTL`, default `+18106768046`). Off on the gateway until its `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` secrets are set ([gateway.md](gateway.md) "Transports out"). |
 
 The app picks the number in `gatewayNumber()`: India when the Settings
 choice is `india`, or `auto` and the account's number starts with `+91`;
@@ -39,10 +39,15 @@ otherwise international. `textGateway` refuses (`NoSmsError`) for an account
 without a number, and on the web.
 
 Outbound texts the gateway starts itself (OTP, `Received`) go through
-`sendSms`, which only texts `+91` numbers. If the relay phone is offline they
-wait in the `Relay` DO for 10 minutes (`OUTBOX_TTL_MS`), then drop with a log
-line. Replies to an inbound text go straight back on the relay socket to the
-sender; they are not filtered by `canText`.
+`sendSms`: `+91` numbers through the relay, every other number through Twilio
+(with Twilio unset, `+91` only). If the relay phone is offline they wait in
+the `Relay` DO for 10 minutes (`OUTBOX_TTL_MS`), then drop with a log line; a
+failed Twilio send is logged and dropped. Replies to an inbound text go back
+on the transport it came in on (the relay socket, or Twilio from the Twilio
+number), to the sender; they are not filtered by `canText`. The texts are
+the same on both, Retriever hash line included, and the app reads replies
+from either number the same way (the Retriever and the clipboard don't look
+at the sender).
 
 ### One GSM-7 segment
 
@@ -253,7 +258,7 @@ Ender code: 481926. Don't share it.
 IaTP8lLJOvM
 ```
 
-Gateway rules: `bad-phone` unless E.164; `sms-unavailable` (503) unless `+91`;
+Gateway rules: `bad-phone` unless E.164; `sms-unavailable` (503) unless `+91` or Twilio is set up;
 `rate-limited` (429) after 3 sends per number per hour. The code lives 10
 minutes, 5 tries (`OTP_MAX_ATTEMPTS`), stored as SHA-256 of
 `phone:code:JWT_SECRET`. `startPhone` returns `queued: true` if the relay was
@@ -950,8 +955,6 @@ of a reply for the other network than the payment's.
   the same id, its public-shaped `SIG` would go to the deposit.
 - **Rate limits.** [gateway.md](gateway.md) says inbound SMS has a per-number
   limit; `handleInbound` has none, and `ERR rate-limited` is never sent by text.
-- **Twilio.** [gateway.md](gateway.md) lists `POST /webhooks/twilio`; there is
-  no such route yet, so inbound SMS only comes through the relay.
 - **Retriever timing.** `listenForCode` starts on the code screen, after
   `/account/phone/start`; a code that arrived first would be missed by the Retriever
   (RECEIVE_SMS still queues it).

@@ -67,7 +67,7 @@ export const alertAll = async (env: Env, { network, ours, links }: Awaited<Retur
  * user's: a text must not tell one user another's number.
  */
 const alert = async (env: Env, network: NetworkName, to: LinkRow, txHash: Hex, from: Address, value: bigint) => {
-  if (!to.phone || !canText(to.phone)) return;
+  if (!to.phone || !canText(env, to.phone)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, to.phone).run();
   if (fresh.meta.changes !== 1) return;
   const [balance, sender] = await Promise.all([

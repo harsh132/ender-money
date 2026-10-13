@@ -14,6 +14,7 @@ import * as names from './names';
 import { payPage } from './page';
 import * as shielded from './shielded';
 import { handleInbound } from './sms';
+import { twilioWebhook } from './twilio';
 
 export { ProverContainer } from './prover';
 export { Relay } from './relay';
@@ -258,6 +259,10 @@ const route = async (request: Request, env: Env, ctx: ExecutionContext): Promise
     // Address activity from Alchemy; proves itself by signature.
     case 'POST /webhooks/alchemy':
       return alchemyWebhook(request, env, ctx);
+
+    // Inbound texts on the Twilio number; proves itself by signature.
+    case 'POST /webhooks/twilio':
+      return twilioWebhook(request, env, ctx);
 
     // The Android relay phone's WebSocket.
     case 'GET /relay': {

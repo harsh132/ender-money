@@ -132,7 +132,7 @@ export const createWallet = async (env: Env, account: Address, req: { authorizat
 /** Text a 6-digit code to the number, at most OTP_MAX_SENDS an hour per number. */
 export const startPhone = async (env: Env, rawPhone: unknown) => {
   const phone = requirePhone(rawPhone);
-  if (!canText(phone)) throw new GatewayError('sms-unavailable', 503);
+  if (!canText(env, phone)) throw new GatewayError('sms-unavailable', 503);
   const t = now();
   const row = await env.DB.prepare('SELECT sends, window_start FROM otps WHERE phone = ?')
     .bind(phone)

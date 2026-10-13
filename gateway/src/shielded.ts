@@ -617,7 +617,7 @@ const receivedAlert = async (
   network: NetworkName,
 ) => {
   const link = await env.DB.prepare('SELECT phone, alerts FROM links WHERE address = ?').bind(to).first<{ phone: string | null; alerts: number }>();
-  if (!link?.phone || !link.alerts || !canText(link.phone)) return;
+  if (!link?.phone || !link.alerts || !canText(env, link.phone)) return;
   const fresh = await env.DB.prepare('INSERT OR IGNORE INTO alerts_sent (tx_hash, phone) VALUES (?, ?)').bind(txHash, link.phone).run();
   if (fresh.meta.changes !== 1) return;
   const sender = await idOfAddress(env, from);
