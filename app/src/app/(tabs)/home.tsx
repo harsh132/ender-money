@@ -5,12 +5,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, Mask, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { MAX_FEE } from '../../lib/config';
 import { ago, inr, usd } from '../../lib/format';
-import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
-import { autoShieldOn, canMerge, privateBalance } from '../../lib/private';
+import { passkeyError, quickSend, unlockWallet } from '../../lib/keys';
+import { AUTO_SHIELD_MIN, autoShieldOn, canMerge, privateBalance } from '../../lib/private';
 import { listed, useStore } from '../../lib/store';
 import { c, f } from '../../lib/theme';
 import { smsOn, useOnline } from '../../lib/transport';
-import { afterUnlock, errorText, isRegistered, refresh } from '../../lib/wallet';
+import { afterUnlock, errorText, isRegistered, refresh, useAutoShielding } from '../../lib/wallet';
 import { ArrowDown, ArrowUp, Bolt, Merge, Scan, Shield, Signal } from '../../ui/icons';
 import { Banner, Button, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
 import { Sigil } from '../../ui/Sigil';
@@ -65,7 +65,8 @@ export default function Home() {
     try {
       const u = await unlockWallet({ credentialId: wallet!.credentialId });
       await afterUnlock(u);
-      lock(u);
+      // Kept as a Quick send session, so Auto Shield can run.
+      quickSend.open(u, 0);
       if (!(await refresh())) setReconnectError(errorText('unauthorized'));
     } catch (e) {
       setReconnectError(passkeyError(e));
@@ -79,6 +80,21 @@ export default function Home() {
   const balance = priv ? (Number(publicBalance) + Number(priv)).toFixed(6) : publicBalance;
   const [whole, cents] = usd(balance).split('.');
   const makePrivate = splittable && Number(publicBalance) > Number(MAX_FEE);
+  // Auto Shield on but no key in memory, so it can't run: one passkey prompt shields what's waiting and keeps the key
+  // (a Quick send session), so later arrivals shield on their own.
+  const shielding = useAutoShielding();
+  const shieldWaiting = shieldOn && priv !== undefined && !quickMin && !shielding && Number(publicBalance) >= Number(AUTO_SHIELD_MIN);
+  const [shieldError, setShieldError] = useState<string>();
+  const shieldNow = async () => {
+    setShieldError(undefined);
+    try {
+      const u = await unlockWallet({ credentialId: wallet!.credentialId });
+      await afterUnlock(u);
+      quickSend.open(u, 0);
+    } catch (e) {
+      setShieldError(passkeyError(e));
+    }
+  };
 
   const pull = useCallback(async () => {
     setRefreshing(true);
@@ -139,14 +155,16 @@ export default function Home() {
               )}
             </T>
           </Pressable>
-          {makePrivate || merge ? (
+          {makePrivate || merge || shieldWaiting ? (
             <View style={{ marginTop: 14, flexDirection: 'row', gap: 8 }}>
+              {shieldWaiting ? <Chip label={`Make $${usd(publicBalance)} private`} icon={<Shield size={14} color={c.accent} />} onPress={shieldNow} /> : null}
               {makePrivate ? (
                 <Chip label="Make private" icon={<Shield size={14} color={c.accent} />} onPress={() => router.push({ pathname: '/send', params: { shield: '1' } })} />
               ) : null}
               {merge ? <Chip label="Merge" icon={<Merge size={14} color={c.accent} />} onPress={() => router.push({ pathname: '/review', params: { merge: '1' } })} /> : null}
             </View>
           ) : null}
+          {shieldError ? <T v="meta" style={{ marginTop: 8, color: c.negative }}>{shieldError}</T> : null}
         </View>
 
         {online === false ? (

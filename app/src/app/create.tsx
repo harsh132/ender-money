@@ -1,7 +1,7 @@
 import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { View } from 'react-native';
-import { createWalletKey, lock, passkeyError, quickSend, unlockWallet, type Unlocked } from '../lib/keys';
+import { createWalletKey, passkeyError, quickSend, unlockWallet, type Unlocked } from '../lib/keys';
 import { c } from '../lib/theme';
 import { errorText, setUpWallet } from '../lib/wallet';
 import { Check, Fingerprint } from '../ui/icons';
@@ -30,7 +30,8 @@ export default function Create() {
     setError(undefined);
     try {
       const r = await setUpWallet(u);
-      lock(u);
+      // The sign-up prompt's key stays as a Quick send session, so Auto Shield can run right away.
+      quickSend.open(u, 0);
       key.current = null;
       // Someone coming back to their wallet goes straight home; a new one first sees its Ender ID.
       if (!r.created) return router.replace('/home');

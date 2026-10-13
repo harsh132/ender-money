@@ -448,6 +448,11 @@ export const autoShield = async (network: NetworkName = getState().network): Pro
   }
 };
 
+// A key in memory (sign-up, an unlock, an approved payment) is what Auto Shield waits for.
+quickSend.subscribe(() => {
+  if (quickSend.get()) void autoShield();
+});
+
 // ---------------------------------------------------------------- auto-bridge
 
 let bridging = false;
