@@ -1,4 +1,4 @@
-// app.ender.money: the Expo app's web build (testnet only), served as static assets.
+// app.ender.money: the Expo app's web build, served as static assets.
 // Build with `bun run web:build`, deploy with `bun run web:deploy`.
 {
   "name": "ender-app",

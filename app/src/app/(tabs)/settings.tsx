@@ -162,7 +162,6 @@ export default function Settings() {
 
         <Label>Network</Label>
         <Group>
-          {WEB ? null : (
           <Row
             title="Testnet mode"
             sub={network === 'testnet' ? 'Monad testnet. Test money only.' : 'Off: real money on Monad.'}
@@ -176,7 +175,6 @@ export default function Settings() {
               />
             }
           />
-          )}
           {sms ? (
             <Row
               title="Gateway"
