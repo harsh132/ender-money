@@ -10,7 +10,7 @@ a text message. Incoming money moves into a private balance automatically, so
 the chain doesn't show who paid whom.
 
 - **Android app:** [assets.ender.money/android/ender.apk](https://assets.ender.money/android/ender.apk)
-  (SHA-256 `2aca3e68a1dbf68cea3f8095bdcb20bcb095453dd45ecc4aa3a6b9c5c7d56824`)
+  (SHA-256 `94047f5ad4ba8a4d89831768c3e0d4425323fda9abbd0e3d7db34d677bcd664d`)
 - **Web app:** [app.ender.money](https://app.ender.money) (same passkey as the
   Android app; payments by SMS are Android-only)
 - **Website:** [ender.money](https://ender.money)
