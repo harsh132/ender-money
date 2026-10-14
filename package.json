@@ -29,8 +29,10 @@
     "@noble/curves": "^1.9.1",
     "@noble/hashes": "^1.8.0",
     "@scure/base": "^1.2.6",
+    "@urbit/sigil-js": "2.2.0",
     "poseidon-lite": "^0.3.0",
     "qrcode-generator": "^2.0.4",
+    "urbit-ob": "5.0.1",
     "viem": "^2.57.2"
   },
   "devDependencies": {

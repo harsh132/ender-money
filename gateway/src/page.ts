@@ -5,7 +5,9 @@
  * without JavaScript; a few inline lines add the copy buttons. Never shows a
  * phone number.
  */
+import sigil from '@urbit/sigil-js/core';
 import qrcode from 'qrcode-generator';
+import { patp } from 'urbit-ob';
 import { enderId, NAME_PARENT, validateLabel } from '../../protocol/names';
 import type { Env } from './env';
 import { byLabel } from './names';
@@ -34,7 +36,8 @@ h1{font:500 38px/44px Newsreader,Georgia,serif;letter-spacing:-.4px;margin:0;ove
 h1 span{color:var(--fg3)}
 .meta{color:var(--fg2);margin:10px 0 0}
 .profile{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px}
-.avatar{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;font:500 40px/1 Newsreader,Georgia,serif;color:var(--fg);border:1px solid var(--line-2,rgba(245,241,237,.18))}
+.avatar{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:var(--surface2);font:500 40px/1 Newsreader,Georgia,serif;color:var(--accent);border:1px solid var(--line)}
+.avatar svg{display:block;width:56px;height:56px}
 .chip{font:14px/20px 'Geist Mono',ui-monospace,monospace;color:var(--fg2);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:20px;margin-top:24px}
 .card>input{position:absolute;opacity:0;pointer-events:none}
@@ -94,10 +97,18 @@ const panel = (id: string, value: string, note?: string) => `
   ${note ? `<p class="note">${note}</p>` : ''}
 </section>`;
 
-/** A circle in a colour taken from the address, with the label's first letter. */
+/**
+ * The app's avatar (app/src/ui/Sigil.tsx): the Urbit sigil of the planet named by the address's first 32 bits, gold
+ * on the disc. The label's first letter if it can't be drawn.
+ */
 const avatar = (label: string, address: string) => {
-  const hue = parseInt(address.slice(2, 6), 16) % 360;
-  return `<div class="avatar" style="background:linear-gradient(135deg,hsl(${hue} 45% 42%),hsl(${(hue + 50) % 360} 50% 28%))">${esc(label[0]!.toUpperCase())}</div>`;
+  try {
+    const n = Number.parseInt(address.slice(2, 10), 16);
+    const svg = sigil({ point: patp(n < 0x10000 ? n + 0x10000 : n), size: 56, background: '#2A2925', foreground: '#CDC971', detail: 'none', space: 'none' });
+    return `<div class="avatar">${svg}</div>`;
+  } catch {
+    return `<div class="avatar">${esc(label[0]!.toUpperCase())}</div>`;
+  }
 };
 
 /**
