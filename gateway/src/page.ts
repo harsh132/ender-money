@@ -29,10 +29,11 @@ const STYLE = `
 :root{--bg:#141411;--surface:#1E1D1A;--surface2:#2A2925;--line:rgba(245,241,237,.09);--fg:#F5F1ED;--fg2:rgba(245,241,237,.64);--fg3:rgba(245,241,237,.40);--accent:#CDC971;--accent-press:#B5B15C;--ink:#141411;color-scheme:dark}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);font:16px/1.4 Geist,system-ui,sans-serif;display:flex;justify-content:center;padding:16px 20px 32px}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);font:16px/1.4 Geist,system-ui,sans-serif;display:flex;justify-content:center;padding:40px 20px 32px}
 main{width:100%;max-width:420px}
-.brand{display:inline-flex;align-items:center;gap:10px;font:500 26px/1 Newsreader,Georgia,serif;letter-spacing:-.01em;color:var(--fg);text-decoration:none;margin:0 0 44px}
-.brand svg{width:36px;height:36px}
+.brand{display:inline-flex;align-items:center;gap:10px;font:500 26px/1 Newsreader,Georgia,serif;letter-spacing:-.01em;color:var(--fg);text-decoration:none;margin:0 0 32px}
+/* The serif's x-height sits high: lift the mark to line up with the word. */
+.brand svg{width:36px;height:36px;transform:translateY(-3px)}
 h1{font:500 38px/44px Newsreader,Georgia,serif;letter-spacing:-.4px;margin:0;overflow-wrap:anywhere}
 h1 span{color:var(--fg3)}
 .meta{color:var(--fg2);margin:10px 0 0}
