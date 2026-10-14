@@ -1,6 +1,6 @@
 # Ender
 
-A self-custodial dollar wallet on Monad that works over the internet or plain
+A self-custodial stablecoin wallet on Monad that works over the internet or plain
 SMS, with private payments.
 
 Ender holds [AUSD](https://www.agora.finance/) on Monad. You sign up with a
