@@ -38,7 +38,7 @@ h1 span{color:var(--fg3)}
 .profile{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px}
 .avatar{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:var(--surface2);font:500 40px/1 Newsreader,Georgia,serif;color:var(--accent);border:1px solid var(--line)}
 .avatar svg{display:block;width:56px;height:56px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:20px;margin-top:24px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:20px;margin-top:44px}
 .card>input{position:absolute;opacity:0;pointer-events:none}
 .tabs{display:flex;gap:4px;padding:4px;background:var(--bg);border:1px solid var(--line);border-radius:999px}
 .tabs label{flex:1;text-align:center;font:600 15px/40px Geist,sans-serif;color:var(--fg2);border-radius:999px;cursor:pointer}
