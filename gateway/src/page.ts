@@ -38,7 +38,6 @@ h1 span{color:var(--fg3)}
 .profile{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px}
 .avatar{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:var(--surface2);font:500 40px/1 Newsreader,Georgia,serif;color:var(--accent);border:1px solid var(--line)}
 .avatar svg{display:block;width:56px;height:56px}
-.chip{font:14px/20px 'Geist Mono',ui-monospace,monospace;color:var(--fg2);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:20px;margin-top:24px}
 .card>input{position:absolute;opacity:0;pointer-events:none}
 .tabs{display:flex;gap:4px;padding:4px;background:var(--bg);border:1px solid var(--line);border-radius:999px}
@@ -112,7 +111,7 @@ const avatar = (label: string, address: string) => {
 };
 
 /**
- * A profile: avatar, name, short address, then Public / Private tabs (radio inputs and CSS, so they work without
+ * A profile: avatar and name, then Public / Private tabs (radio inputs and CSS, so they work without
  * JavaScript), each a QR, the address and Copy.
  */
 export const renderNamePage = (label: string, info: { address: string; private?: string }) => {
@@ -126,7 +125,6 @@ export const renderNamePage = (label: string, info: { address: string; private?:
     `<header class="profile">
   ${avatar(label, info.address)}
   <h1>${esc(label)}<span>.ender.my</span></h1>
-  <span class="chip">${esc(info.address.slice(0, 6))}…${esc(info.address.slice(-4))}</span>
 </header>
 <div class="card">
 ${tabs}
