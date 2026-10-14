@@ -13,7 +13,8 @@ import { AUTO_SHIELD_MIN, autoShieldOn, hasPool } from '../../lib/private';
 import { getState, setState, signOut, useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { online, smsOn } from '../../lib/transport';
-import { afterUnlock, autoMerge, autoShield, errorText, refresh, syncByText } from '../../lib/wallet';
+import { autoBridgeOn } from '../../lib/bridge';
+import { afterUnlock, autoBridge, autoMerge, autoShield, errorText, refresh, syncByText } from '../../lib/wallet';
 import { Chevron } from '../../ui/icons';
 import { Banner, T, TestnetPill } from '../../ui/kit';
 
@@ -27,6 +28,7 @@ export default function Settings() {
   const gateway = useStore((s) => s.gateway);
   const merge = useStore((s) => !!s.autoMerge);
   const shieldOn = useStore(autoShieldOn);
+  const bridgeOn = useStore(autoBridgeOn);
   const snapshot = useStore((s) => s.account[s.network]);
   const sms = useStore(smsOn);
   const [busy, setBusy] = useState<string>();
@@ -73,6 +75,10 @@ export default function Settings() {
     if (on) void autoMerge();
   };
 
+  const toggleAutoBridge = (on: boolean) => {
+    setState({ autoBridge: on });
+    if (on) void autoBridge();
+  };
   const toggleAutoShield = (on: boolean) => {
     setState({ autoShield: on });
     if (on) void autoShield();
@@ -201,6 +207,16 @@ export default function Settings() {
             </Group>
           </>
         ) : null}
+
+        <Label>Other chains</Label>
+        <Group>
+          <Row
+            title="Auto-bridge"
+            sub={`Tokens sent to your address on Ethereum, Base, Arbitrum or Polygon arrive here as AUSD.${network === 'mainnet' ? '' : ' Works with Test mode off.'}`}
+            right={<Switch value={bridgeOn} onValueChange={toggleAutoBridge} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={bridgeOn ? '#fff' : c.fg3} />}
+            last
+          />
+        </Group>
 
         {note ? <View style={{ marginTop: 16 }}><Banner tone={note.tone}>{note.text}</Banner></View> : null}
 

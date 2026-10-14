@@ -5,7 +5,7 @@ import { recoverAuthorizationAddress } from 'viem/utils';
 import { BRIDGE_FEE_RECIPIENT, RELAY_DEPOSITORY, type RelayQuote } from '../../../protocol/bridge';
 import { erc20Abi, signedBatchTypedData } from '../../../protocol/calibur';
 import { CALIBUR, NETWORKS } from '../../../protocol/networks';
-import { bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge, type BridgePrepared } from './bridge';
+import { autoBridgeOn, bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge, type BridgePrepared } from './bridge';
 
 const USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' as Address;
 const me = privateKeyToAccount(generatePrivateKey());
@@ -45,12 +45,16 @@ const quote = (recipient: string = me.address): RelayQuote => ({
   },
 });
 
-test('auto-bridge runs only on mainnet, online, with the key in memory', () => {
-  const on = { network: 'mainnet' as const, online: true, unlocked: true };
+test('auto-bridge runs only when switched on, on mainnet, online, with the key in memory', () => {
+  const on = { on: true, network: 'mainnet' as const, online: true, unlocked: true };
   expect(shouldAutoBridge(on)).toBe(true);
   expect(shouldAutoBridge({ ...on, network: 'testnet' })).toBe(false);
   expect(shouldAutoBridge({ ...on, online: false })).toBe(false);
   expect(shouldAutoBridge({ ...on, unlocked: false })).toBe(false);
+  expect(shouldAutoBridge({ ...on, on: false })).toBe(false);
+  // Older installs never stored the setting: on.
+  expect(autoBridgeOn({})).toBe(true);
+  expect(autoBridgeOn({ autoBridge: false })).toBe(false);
 });
 
 test('the gateway may not raise the fee past the cap, send it elsewhere, or name another chain', () => {

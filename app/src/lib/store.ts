@@ -95,6 +95,8 @@ export type State = {
   autoMerge?: boolean;
   /** Settings' Auto Shield (networks with a pool): move the public balance into the private one while unlocked and online. On unless false (autoShieldOn). */
   autoShield?: boolean;
+  /** Settings' Auto-bridge (mainnet): tokens arriving at our address on other chains come over as AUSD. On unless false (autoBridgeOn). */
+  autoBridge?: boolean;
   /** The Ender ID fee's transaction, paid but not yet spent on a change (a taken name, a closed screen): kept for the retry. */
   namePaid?: string;
 };

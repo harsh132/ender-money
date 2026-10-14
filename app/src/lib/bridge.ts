@@ -30,7 +30,10 @@ export type BridgePrepared = {
 export const BRIDGE_DEADLINE_S = 600;
 
 /** Online, the spending key in memory, and the app showing mainnet: Relay bridges into Monad mainnet only, so Test mode has none. */
-export const shouldAutoBridge = (o: { network: NetworkName; online: boolean; unlocked: boolean }) => o.network === 'mainnet' && o.online && o.unlocked;
+export const shouldAutoBridge = (o: { on: boolean; network: NetworkName; online: boolean; unlocked: boolean }) => o.on && o.network === 'mainnet' && o.online && o.unlocked;
+
+/** Settings' Auto-bridge: on unless switched off (so older installs are on). */
+export const autoBridgeOn = (s: { autoBridge?: boolean }) => s.autoBridge !== false;
 
 /** What the gateway may ask: a chain we bridge from, at most BRIDGE_MAX_BPS, to the fee recipient we ship. Returns why not, or null. */
 export const checkPrepared = (p: BridgePrepared): string | null => {

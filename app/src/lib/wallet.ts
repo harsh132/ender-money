@@ -10,7 +10,7 @@ import { owner, packAddress, provingKeys, type User } from '../../../protocol/sh
 import { b64, type Deliver, type Reply } from '../../../protocol/sms';
 import { api, ApiError, OfflineError, TimeoutError, type ActivityItem, type AuthorizationJson } from './api';
 import { signIn } from './auth';
-import { bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge } from './bridge';
+import { autoBridgeOn, bridgeOutcome, checkPrepared, shouldAutoBridge, signBridge } from './bridge';
 import { DEFAULT_NETWORK, MAX_FEE } from './config';
 import { fileReceived, smsTwin, type Received } from './inbox';
 import { lock, quickSend, unlockWallet, type Unlocked } from './keys';
@@ -476,7 +476,8 @@ const bridgeSkip = new Map<string, number>();
 export const autoBridge = async (): Promise<void> => {
   if (bridging || Date.now() < bridgeRetryAt) return;
   bridging = true;
-  const ready = async () => shouldAutoBridge({ network: getState().network, unlocked: !!quickSend.get(), online: true }) && (await online());
+  const ready = async () =>
+    shouldAutoBridge({ on: autoBridgeOn(getState()), network: getState().network, unlocked: !!quickSend.get(), online: true }) && (await online());
   try {
     if (!(await ready())) return;
     const { items } = await api.bridgePending();
