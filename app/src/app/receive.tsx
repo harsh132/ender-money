@@ -12,16 +12,18 @@ import { useStore } from '../lib/store';
 import { smsOn } from '../lib/transport';
 import { isRegistered } from '../lib/wallet';
 import { c, f } from '../lib/theme';
-import { Copy, Share as ShareIcon } from '../ui/icons';
-import { Button, T, TestnetPill } from '../ui/kit';
+import { Close, Copy, Share as ShareIcon } from '../ui/icons';
+import { Button, IconButton, T, TestnetPill } from '../ui/kit';
 import { QR } from '../ui/QR';
+import { closeSheet, Sheet } from '../ui/Sheet';
 
-type Mode = 'public' | 'private';
+type Mode = 'ender' | 'public' | 'private';
+const LABEL: Record<Mode, string> = { ender: 'Ender ID', public: 'Public', private: 'Private' };
 
 /**
- * Sheet: the Ender ID and its pay page link (copy), the QR of the plain address (any wallet can read it), plus copy
- * and share. On a network with a pool, a Public / Private toggle shows the private address (ender1…) too, which takes
- * private payments only.
+ * Sheet: Ender ID / Public / Private tabs, each a QR with copy and share. The Ender ID QR is the plain name
+ * (label.ender.my), so ENS wallets resolve it as well as our scanner; Public is the 0x address any wallet reads;
+ * Private (networks with a pool) is the ender1… address, which takes private payments only.
  */
 export default function Receive() {
   const wallet = useStore((s) => s.wallet);
@@ -30,8 +32,8 @@ export default function Receive() {
   const owner = useStore((s) => (isRegistered(s.network, s) ? s.shielded?.owner : undefined));
   // With Auto Shield on the public balance moves by itself.
   const canShield = useStore((s) => isRegistered(s.network, s) && !autoShieldOn(s) && Number(s.account[s.network]?.balance ?? 0) > Number(MAX_FEE));
-  const [mode, setMode] = useState<Mode>('public');
-  const [copied, setCopied] = useState<'address' | 'link'>();
+  const [mode, setMode] = useState<Mode>(wallet?.enderId ? 'ender' : 'public');
+  const [copied, setCopied] = useState(false);
   const { bottom } = useSafeAreaInsets();
   const privateAddress = useMemo(() => {
     const packed = owner ? unb64(owner.replace(/=+$/, ''), 64) : null;
@@ -39,98 +41,84 @@ export default function Receive() {
   }, [owner]);
   if (!wallet) return null;
 
-  const priv = mode === 'private' && !!privateAddress;
-  const shown = (priv && privateAddress) || wallet.address;
-  const link = wallet.enderId ? `https://${wallet.enderId}` : undefined;
-  const copy = async (what: 'address' | 'link') => {
-    await Clipboard.setStringAsync(what === 'link' ? link! : shown);
-    setCopied(what);
-    setTimeout(() => setCopied(undefined), 1500);
+  const modes = (['ender', 'public', 'private'] as const).filter((m) => (m === 'ender' ? !!wallet.enderId : m === 'private' ? !!privateAddress : true));
+  const shown = mode === 'ender' && wallet.enderId ? wallet.enderId : mode === 'private' && privateAddress ? privateAddress : wallet.address;
+  const copy = async () => {
+    await Clipboard.setStringAsync(shown);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
+  const share = () =>
+    Share.share({
+      message:
+        mode === 'private'
+          ? `Pay me privately on Ender: ${shown}`
+          : mode === 'ender'
+            ? `Pay me on Ender: ${shown}\nOr send AUSD on Monad to ${wallet.address}`
+            : sms
+              ? `Pay me on Ender: ${phoneDisplay(wallet.phone!)}\nOr send AUSD on Monad to ${wallet.address}`
+              : `Pay me in AUSD on Monad: ${wallet.address}`,
+    });
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 20, paddingBottom: bottom }}>
-      <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: c.surface2, marginBottom: 16 }} />
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <T v="title" style={{ flex: 1 }}>Receive</T>
-        {network === 'testnet' ? <TestnetPill /> : null}
-      </View>
-      {wallet.enderId ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Copy ${link}`}
-          onPress={() => copy('link')}
-          style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 20, backgroundColor: pressed ? c.surface2 : c.surface, borderWidth: 1, borderColor: c.line })}
-        >
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <T v="caption" style={{ color: c.fg3 }}>Your Ender ID</T>
-            <T numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: f.display, fontSize: 24, lineHeight: 30, color: c.fg, marginTop: 2 }}>{wallet.enderId}</T>
-          </View>
-          {copied === 'link' ? <T style={{ fontFamily: f.uiSemi, fontSize: 15, color: c.accent }}>Copied</T> : <Copy size={20} color={c.accent} />}
-        </Pressable>
-      ) : null}
-      {privateAddress ? (
-        <View style={{ flexDirection: 'row', alignSelf: 'flex-start', marginTop: 14, backgroundColor: c.surface, borderRadius: 999, borderWidth: 1, borderColor: c.line, padding: 4 }}>
-          {(['public', 'private'] as const).map((m) => (
-            <Pressable
-              key={m}
-              accessibilityRole="button"
-              accessibilityState={{ selected: mode === m }}
-              onPress={() => setMode(m)}
-              style={{ height: 40, paddingHorizontal: 18, borderRadius: 999, justifyContent: 'center', backgroundColor: mode === m ? c.surface2 : 'transparent' }}
-            >
-              <T style={{ fontFamily: f.uiSemi, fontSize: 15, color: mode === m ? c.accent : c.fg2 }}>{m === 'public' ? 'Public' : 'Private'}</T>
-            </Pressable>
-          ))}
+    <Sheet height="72%">
+      <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 14, paddingBottom: bottom }}>
+        <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: c.surface2, marginBottom: 12 }} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <T v="title" style={{ flex: 1 }}>Receive</T>
+          {network === 'testnet' ? <TestnetPill /> : null}
+          <IconButton label="Close" onPress={closeSheet}>
+            <Close size={22} />
+          </IconButton>
         </View>
-      ) : null}
-      <T v="meta" style={{ marginTop: 10 }}>
-        {priv ? 'Your private address. Takes private payments from Ender only' : `Your AUSD address on Monad${network === 'testnet' ? ' testnet' : ''}`}
-      </T>
-      {priv || network === 'testnet' ? null : (
-        <T v="meta" style={{ marginTop: 4 }}>Also takes tokens on Ethereum, Base, Arbitrum and Polygon. They arrive as AUSD.</T>
-      )}
-      <View style={{ alignSelf: 'center', marginTop: 24, marginBottom: 18, padding: 22, borderRadius: 28, backgroundColor: c.fg }}>
-        <QR value={shown} size={216} />
-      </View>
-      <T style={{ fontFamily: f.mono, fontSize: priv ? 13 : 16, lineHeight: priv ? 19 : 24, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
-        {shown}
-      </T>
-      {priv || !sms ? null : (
-        <T v="meta" style={{ textAlign: 'center', marginTop: 12 }}>
-          {wallet.enderId ? 'Or your number' : 'Or just your number'}: {phoneDisplay(wallet.phone!)}. We'll text you when money arrives.
-        </T>
-      )}
-      <View style={{ flex: 1, minHeight: 24 }} />
-      {canShield ? (
-        <Button
-          title="Make private"
-          kind="text"
-          onPress={() => {
-            router.back();
-            router.push({ pathname: '/send', params: { shield: '1' } });
-          }}
-        />
-      ) : null}
-      <View style={{ flexDirection: 'row', gap: 12, marginBottom: 28 }}>
-        <Button title={copied === 'address' ? 'Copied' : 'Copy'} kind="ghost" icon={<Copy size={20} />} onPress={() => copy('address')} style={{ flex: 1 }} />
-        <Button
-          title="Share"
-          icon={<ShareIcon size={20} color={c.accentInk} />}
-          onPress={() =>
-            Share.share({
-              message: priv
-                ? `Pay me privately on Ender: ${shown}`
-                : link
-                  ? `Pay me on Ender: ${link}\nOr send AUSD on Monad to ${wallet.address}`
-                  : sms
-                    ? `Pay me on Ender: ${phoneDisplay(wallet.phone!)}\nOr send AUSD on Monad to ${wallet.address}`
-                    : `Pay me in AUSD on Monad: ${wallet.address}`,
-            })
-          }
-          style={{ flex: 1 }}
-        />
-      </View>
-    </ScrollView>
+        {modes.length > 1 ? (
+          <View style={{ flexDirection: 'row', alignSelf: 'flex-start', marginTop: 12, backgroundColor: c.surface, borderRadius: 999, borderWidth: 1, borderColor: c.line, padding: 4 }}>
+            {modes.map((m) => (
+              <Pressable
+                key={m}
+                accessibilityRole="button"
+                accessibilityState={{ selected: mode === m }}
+                onPress={() => setMode(m)}
+                style={{ height: 38, paddingHorizontal: 16, borderRadius: 999, justifyContent: 'center', backgroundColor: mode === m ? c.surface2 : 'transparent' }}
+              >
+                <T style={{ fontFamily: f.uiSemi, fontSize: 15, color: mode === m ? c.accent : c.fg2 }}>{LABEL[m]}</T>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        <View style={{ alignSelf: 'center', marginTop: 20, marginBottom: 12, padding: 14, borderRadius: 24, backgroundColor: c.fg }}>
+          <QR value={shown} size={168} />
+        </View>
+        {mode === 'ender' ? (
+          <T numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: f.display, fontSize: 26, lineHeight: 32, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
+            {shown}
+          </T>
+        ) : (
+          <T style={{ fontFamily: f.mono, fontSize: mode === 'private' ? 13 : 15, lineHeight: mode === 'private' ? 19 : 22, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
+            {shown}
+          </T>
+        )}
+        {mode === 'private' || !sms ? null : (
+          <T v="meta" style={{ textAlign: 'center', marginTop: 10 }}>
+            Or your number: {phoneDisplay(wallet.phone!)}. We'll text you when money arrives.
+          </T>
+        )}
+        <View style={{ flex: 1, minHeight: 20 }} />
+        {canShield ? (
+          <Button
+            title="Make private"
+            kind="text"
+            onPress={() => {
+              router.back();
+              router.push({ pathname: '/send', params: { shield: '1' } });
+            }}
+          />
+        ) : null}
+        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 20 }}>
+          <Button title={copied ? 'Copied' : 'Copy'} kind="ghost" icon={<Copy size={20} />} onPress={copy} style={{ flex: 1 }} />
+          <Button title="Share" icon={<ShareIcon size={20} color={c.accentInk} />} onPress={share} style={{ flex: 1 }} />
+        </View>
+      </ScrollView>
+    </Sheet>
   );
 }

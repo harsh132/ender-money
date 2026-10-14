@@ -5,7 +5,9 @@ import { NETWORKS } from '../../../../protocol/networks';
 import { dayLabel, short, time, usd } from '../../lib/format';
 import { useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
-import { Button, Card, KV, T } from '../../ui/kit';
+import { Close } from '../../ui/icons';
+import { Button, Card, IconButton, KV, T } from '../../ui/kit';
+import { closeSheet, Sheet } from '../../ui/Sheet';
 import { meta, who } from '../../ui/TxRow';
 
 /** Detail sheet for one transfer. */
@@ -28,8 +30,14 @@ export default function TxDetail() {
       : undefined;
 
   return (
+    <Sheet height="70%">
     <ScrollView style={{ flex: 1, backgroundColor: c.bg }} contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 20, paddingBottom: bottom }}>
       <View style={{ alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: c.surface2, marginBottom: 20 }} />
+      <View style={{ position: 'absolute', top: 12, right: 16 }}>
+        <IconButton label="Close" onPress={closeSheet}>
+          <Close size={22} />
+        </IconButton>
+      </View>
       <T v="hero" style={{ textAlign: 'center', fontSize: 52, lineHeight: 60, color: incoming ? c.positive : dead ? c.fg3 : c.fg }}>
         {incoming ? '+' : '−'}${usd(tx.amount)}
       </T>
@@ -68,5 +76,6 @@ export default function TxDetail() {
         {explorer ? <Button title="View on explorer" kind={dead ? 'text' : 'ghost'} onPress={() => Linking.openURL(explorer)} /> : null}
       </View>
     </ScrollView>
+    </Sheet>
   );
 }

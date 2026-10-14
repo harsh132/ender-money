@@ -10,20 +10,27 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { onSms, pump } from '../../modules/sms-retriever';
 import { c } from '../lib/theme';
+import { LockScreen } from '../ui/LockScreen';
 import { hydrate, useStore } from '../lib/store';
-import { acceptReply, onReply } from '../lib/transport';
+import { acceptReply, onReply, useOnline } from '../lib/transport';
 import { applyOkReply, applyReceived, applyShieldedReply, autoBridge, autoMerge, autoShield } from '../lib/wallet';
 
 void SplashScreen.preventAutoHideAsync();
 void hydrate();
 
+const WEB_SHEET = { presentation: 'transparentModal', animation: 'fade', contentStyle: { backgroundColor: 'transparent' } } as const;
+
 export default function Root() {
   const [fonts] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, Geist_700Bold, GeistMono_400Regular, Newsreader_500Medium });
   const hydrated = useStore((s) => s.hydrated);
   const ready = fonts && hydrated;
+  // A wallet without a gateway session, online: nothing works until a passkey unlock signs in again. Offline the app stays
+  // open, since paying by text needs no session.
+  const online = useOnline();
+  const locked = useStore((s) => !!s.wallet && !s.token) && online !== false;
 
   useEffect(() => {
     if (ready) void SplashScreen.hideAsync();
@@ -60,12 +67,20 @@ export default function Root() {
   }, []);
 
   if (!ready) return null;
+  if (locked)
+    return (
+      <>
+        <StatusBar style="light" />
+        <LockScreen />
+      </>
+    );
   return (
     <>
       <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.bg }, animation: 'slide_from_right' }}>
-        <Stack.Screen name="receive" options={{ presentation: 'formSheet', sheetAllowedDetents: [0.86], sheetCornerRadius: 28, contentStyle: { backgroundColor: c.bg } }} />
-        <Stack.Screen name="tx/[id]" options={{ presentation: 'formSheet', sheetAllowedDetents: [0.7], sheetCornerRadius: 28, contentStyle: { backgroundColor: c.bg } }} />
+        {/* Sheets: native form sheets on the phone; on the web a transparent modal that ui/Sheet frames (backdrop, Escape). */}
+        <Stack.Screen name="receive" options={Platform.OS === 'web' ? WEB_SHEET : { presentation: 'formSheet', sheetAllowedDetents: [0.72, 0.92], sheetCornerRadius: 28, contentStyle: { backgroundColor: c.bg } }} />
+        <Stack.Screen name="tx/[id]" options={Platform.OS === 'web' ? WEB_SHEET : { presentation: 'formSheet', sheetAllowedDetents: [0.7], sheetCornerRadius: 28, contentStyle: { backgroundColor: c.bg } }} />
         <Stack.Screen name="scan" options={{ animation: 'fade' }} />
       </Stack>
     </>

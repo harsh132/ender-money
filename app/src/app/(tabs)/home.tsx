@@ -10,9 +10,9 @@ import { AUTO_SHIELD_MIN, autoShieldOn, canMerge, privateBalance } from '../../l
 import { listed, useStore } from '../../lib/store';
 import { c, f } from '../../lib/theme';
 import { smsOn, useOnline } from '../../lib/transport';
-import { afterUnlock, errorText, isRegistered, refresh, useAutoShielding } from '../../lib/wallet';
+import { afterUnlock, isRegistered, refresh, useAutoShielding } from '../../lib/wallet';
 import { ArrowDown, ArrowUp, Bolt, Merge, Scan, Shield, Signal } from '../../ui/icons';
-import { Banner, Button, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
+import { Banner, Chip, IconButton, T, TestnetPill } from '../../ui/kit';
 import { Sigil } from '../../ui/Sigil';
 import { TxRow } from '../../ui/TxRow';
 import { useQuickSend } from '../../ui/useQuickSend';
@@ -55,26 +55,6 @@ export default function Home() {
   const splittable = priv !== undefined && !shieldOn;
   const [split, setSplit] = useState(false);
   const sms = useStore(smsOn);
-  // No gateway token (it expired, or predates sign-in by signature) and no open key to renew it: a passkey unlock does.
-  const signedOut = useStore((s) => !s.token);
-  const [reconnecting, setReconnecting] = useState(false);
-  const [reconnectError, setReconnectError] = useState<string>();
-  const reconnect = async () => {
-    setReconnecting(true);
-    setReconnectError(undefined);
-    try {
-      const u = await unlockWallet({ credentialId: wallet!.credentialId });
-      await afterUnlock(u);
-      // Kept as a Quick send session, so Auto Shield can run.
-      quickSend.open(u, 0);
-      if (!(await refresh())) setReconnectError(errorText('unauthorized'));
-    } catch (e) {
-      setReconnectError(passkeyError(e));
-    } finally {
-      setReconnecting(false);
-    }
-  };
-
   const recent = useMemo(() => activity.filter((t) => t.network === network && listed(t)).sort((a, b) => b.at - a.at).slice(0, 5), [activity, network]);
   const publicBalance = snapshot?.balance ?? '0';
   const balance = priv ? (Number(publicBalance) + Number(priv)).toFixed(6) : publicBalance;
@@ -170,12 +150,6 @@ export default function Home() {
         {online === false ? (
           <View style={{ marginBottom: 16 }}>
             <Banner icon={<Signal size={20} color={c.warning} />} tone="warning">{sms ? 'No internet, payments go by text' : 'No internet'}</Banner>
-          </View>
-        ) : signedOut ? (
-          <View style={{ marginBottom: 16, gap: 8 }}>
-            <Banner tone="warning">Unlock with your passkey to see your latest balance.</Banner>
-            {reconnectError ? <Banner tone="negative">{reconnectError}</Banner> : null}
-            <Button title="Unlock" kind="ghost" busy={reconnecting} onPress={reconnect} />
           </View>
         ) : null}
 
