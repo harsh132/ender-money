@@ -372,11 +372,12 @@ describe('lookups', () => {
   test('the pay page: themed, both addresses with QR codes, no number; unknown names are a themed 404', async () => {
     const page = await call('https://bobby.ender.my/');
     expect(page.status).toBe(200);
-    for (const s of ['<h1>bobby<span>.ender.my</span></h1>', B, bobPrivate, '#141411', '#CDC971', 'Newsreader', 'Geist', '<svg', 'Pay with any wallet'])
+    for (const s of ['<h1>bobby<span>.ender.my</span></h1>', B, bobPrivate, '#141411', '#CDC971', 'Newsreader', 'Geist', '<svg', 'class="avatar"', 'for="t-private"'])
       expect(page.body).toContain(s);
     expect(page.body).not.toContain('98000');
+    // No private address: no tabs.
     const alice = await call('https://alice.ender.my/');
-    expect(alice.body).not.toContain('Private address');
+    expect(alice.body).not.toContain('for="t-private"');
     for (const host of ['https://nobody.ender.my/', 'https://ab.ender.my/', 'https://a.bobby.ender.my/', 'https://bobby.ender.my/x']) {
       hits.clear();
       const r = await call(host);

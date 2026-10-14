@@ -33,10 +33,16 @@ main{width:100%;max-width:420px}
 h1{font:500 38px/44px Newsreader,Georgia,serif;letter-spacing:-.4px;margin:0;overflow-wrap:anywhere}
 h1 span{color:var(--fg3)}
 .meta{color:var(--fg2);margin:10px 0 0}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:20px;margin-top:20px}
-.head{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.head b{font-weight:600;font-size:18px}
-.pill{font:500 14px/20px Geist,sans-serif;color:var(--fg2);border:1px solid var(--line);background:var(--surface2);border-radius:999px;padding:4px 12px}
+.profile{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px}
+.avatar{width:88px;height:88px;border-radius:50%;display:grid;place-items:center;font:500 40px/1 Newsreader,Georgia,serif;color:var(--fg);border:1px solid var(--line-2,rgba(245,241,237,.18))}
+.chip{font:14px/20px 'Geist Mono',ui-monospace,monospace;color:var(--fg2);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:20px;margin-top:24px}
+.card>input{position:absolute;opacity:0;pointer-events:none}
+.tabs{display:flex;gap:4px;padding:4px;background:var(--bg);border:1px solid var(--line);border-radius:999px}
+.tabs label{flex:1;text-align:center;font:600 15px/40px Geist,sans-serif;color:var(--fg2);border-radius:999px;cursor:pointer}
+#t-public:checked~.tabs label[for=t-public],#t-private:checked~.tabs label[for=t-private]{background:var(--surface2);color:var(--accent)}
+#t-public:focus-visible~.tabs label[for=t-public],#t-private:focus-visible~.tabs label[for=t-private]{outline:2px solid var(--accent)}
+#t-public:checked~.private,#t-private:checked~.public{display:none}
 .qr{width:216px;margin:20px auto 16px;padding:18px;border-radius:28px;background:var(--fg)}
 .qr svg{display:block;width:100%;height:auto}
 code{display:block;font:14px/21px 'Geist Mono',ui-monospace,monospace;color:var(--fg);text-align:center;overflow-wrap:anywhere;user-select:all;-webkit-user-select:all}
@@ -80,23 +86,42 @@ for (const b of document.querySelectorAll('button[data-copy]')) {
 }
 </script>`;
 
-const card = (id: string, title: string, pill: string, value: string, note: string, primary: boolean) => `
-<section class="card">
-  <div class="head"><b>${title}</b><span class="pill">${pill}</span></div>
+const panel = (id: string, value: string, note?: string) => `
+<section class="panel ${id}">
   <div class="qr">${qr(value)}</div>
   <code id="${id}">${esc(value)}</code>
-  <button type="button" data-copy="${id}" class="${primary ? '' : 'ghost'}" hidden>Copy</button>
-  <p class="note">${note}</p>
+  <button type="button" data-copy="${id}" hidden>Copy</button>
+  ${note ? `<p class="note">${note}</p>` : ''}
 </section>`;
 
+/** A circle in a colour taken from the address, with the label's first letter. */
+const avatar = (label: string, address: string) => {
+  const hue = parseInt(address.slice(2, 6), 16) % 360;
+  return `<div class="avatar" style="background:linear-gradient(135deg,hsl(${hue} 45% 42%),hsl(${(hue + 50) % 360} 50% 28%))">${esc(label[0]!.toUpperCase())}</div>`;
+};
+
+/**
+ * A profile: avatar, name, short address, then Public / Private tabs (radio inputs and CSS, so they work without
+ * JavaScript), each a QR, the address and Copy.
+ */
 export const renderNamePage = (label: string, info: { address: string; private?: string }) => {
   const name = esc(enderId(label));
+  const tabs = info.private
+    ? `<input type="radio" name="tab" id="t-public" checked><input type="radio" name="tab" id="t-private">
+<div class="tabs"><label for="t-public">Public</label><label for="t-private">Private</label></div>`
+    : '';
   return page(
     name,
-    `<h1>${esc(label)}<span>.ender.my</span></h1>
-<p class="meta">Pay with any wallet: send AUSD on Monad to this address. Wallets that read ENS names can pay ${name} directly.</p>
-${card('public', 'Public address', 'Monad', info.address, 'Payments here are public on Monad.', true)}
-${info.private ? card('private', 'Private address', 'Ender only', info.private, 'Takes private payments from the Ender app only.', false) : ''}`,
+    `<header class="profile">
+  ${avatar(label, info.address)}
+  <h1>${esc(label)}<span>.ender.my</span></h1>
+  <span class="chip">${esc(info.address.slice(0, 6))}…${esc(info.address.slice(-4))}</span>
+</header>
+<div class="card">
+${tabs}
+${panel('public', info.address)}
+${info.private ? panel('private', info.private, 'Ender app only') : ''}
+</div>`,
     COPY,
   );
 };
