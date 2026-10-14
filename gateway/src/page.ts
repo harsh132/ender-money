@@ -31,7 +31,8 @@ const STYLE = `
 [hidden]{display:none!important}
 body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);font:16px/1.4 Geist,system-ui,sans-serif;display:flex;justify-content:center;padding:40px 20px 32px}
 main{width:100%;max-width:420px}
-.brand{font:500 22px/1 Newsreader,Georgia,serif;color:var(--fg2);margin:0 0 28px}
+.brand{display:inline-flex;align-items:center;gap:10px;font:500 26px/1 Newsreader,Georgia,serif;letter-spacing:-.01em;color:var(--fg);text-decoration:none;margin:0 0 32px}
+.brand svg{width:36px;height:36px}
 h1{font:500 38px/44px Newsreader,Georgia,serif;letter-spacing:-.4px;margin:0;overflow-wrap:anywhere}
 h1 span{color:var(--fg3)}
 .meta{color:var(--fg2);margin:10px 0 0}
@@ -52,9 +53,10 @@ button{display:block;width:100%;height:56px;margin-top:16px;border:0;border-radi
 button:active{background:var(--accent-press)}
 button.ghost{background:var(--surface2);color:var(--fg);border:1px solid var(--line)}
 .note{color:var(--fg3);font-size:14px;margin:12px 0 0;text-align:center}
-.foot{color:var(--fg3);font-size:14px;text-align:center;margin-top:28px}
-.foot a{color:var(--accent);text-decoration:none}
 `;
+
+/** The Ender mark, as on ender.money (site/public/favicon.svg). */
+const MARK = `<svg viewBox="0 0 96 96" aria-hidden="true"><rect x=".5" y=".5" width="95" height="95" rx="30" fill="#1E1D1A" stroke="rgba(245,241,237,.18)"/><g fill="none" stroke="#CDC971" stroke-linecap="round" stroke-linejoin="round"><path d="M26 30h44a4 4 0 0 1 4 4v24a4 4 0 0 1-4 4H44l-12 10v-10h-6a4 4 0 0 1-4-4V34a4 4 0 0 1 4-4z" stroke-width="3.5"/><path d="M53 39.5c-1.2-1.6-3-2.5-5-2.5-3 0-5 1.6-5 4s2.2 3.3 5 4 5 1.6 5 4-2 4-5 4c-2.2 0-4-1-5.2-2.6M48 34v3M48 53v3" stroke-width="3"/></g></svg>`;
 
 const page = (title: string, body: string, script = '') => `<!doctype html>
 <html lang="en">
@@ -70,9 +72,8 @@ const page = (title: string, body: string, script = '') => `<!doctype html>
 <style>${STYLE}</style>
 </head>
 <body><main>
-<p class="brand">Ender</p>
+<a class="brand" href="https://ender.money" aria-label="Ender home">${MARK}<span>Ender</span></a>
 ${body}
-<p class="foot">Pay by text with <a href="https://ender.money">Ender</a></p>
 </main>${script}</body>
 </html>`;
 
