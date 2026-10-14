@@ -212,7 +212,7 @@ export default function Settings() {
         <Group>
           <Row
             title="Auto-bridge"
-            sub={`Tokens sent to your address on Ethereum, Base, Arbitrum or Polygon arrive here as AUSD.${network === 'mainnet' ? '' : ' Works with Test mode off.'}`}
+            sub={`Tokens sent to your address on Base, Arbitrum or Polygon arrive here as AUSD.${network === 'mainnet' ? '' : ' Works with Test mode off.'}`}
             right={<Switch value={bridgeOn} onValueChange={toggleAutoBridge} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={bridgeOn ? '#fff' : c.fg3} />}
             last
           />
