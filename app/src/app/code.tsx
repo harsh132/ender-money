@@ -115,7 +115,6 @@ export default function CodeScreen() {
           style={{ position: 'absolute', opacity: 0, height: 1, width: 1 }}
           accessibilityLabel="Code"
         />
-        <T v="meta" style={{ color: c.fg3, fontSize: 15, marginTop: 12 }}>Fills in by itself when the text arrives.</T>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 20 }}>
           {wait > 0 ? (
             <T v="meta">Resend code in 0:{String(wait).padStart(2, '0')}</T>

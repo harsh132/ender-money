@@ -3,13 +3,12 @@ import { router } from 'expo-router';
 import { useState, type ReactNode } from 'react';
 import { Alert, Pressable, ScrollView, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { formatUnits } from 'viem';
-import { AUSD_DECIMALS, NETWORKS, type NetworkName } from '../../../../protocol/networks';
+import type { NetworkName } from '../../../../protocol/networks';
 import { api } from '../../lib/api';
 import { WEB } from '../../lib/config';
 import { ago, phoneMasked, short } from '../../lib/format';
 import { lock, passkeyError, quickSend, unlockWallet } from '../../lib/keys';
-import { AUTO_SHIELD_MIN, autoShieldOn, hasPool } from '../../lib/private';
+import { autoShieldOn, hasPool } from '../../lib/private';
 import { getState, setState, signOut, useStore } from '../../lib/store';
 import { c } from '../../lib/theme';
 import { online, smsOn } from '../../lib/transport';
@@ -146,7 +145,7 @@ export default function Settings() {
           {/* On the web a number gets texts and lets people pay it; paying by text stays on the phone. */}
           <Row
             title="Phone number"
-            sub={wallet.phone ? phoneMasked(wallet.phone) : WEB ? 'Add one to get texts when you get paid' : 'Add one to get texts and pay offline'}
+            sub={wallet.phone ? phoneMasked(wallet.phone) : 'Not added'}
             // The web has no Alert menu: a tap there changes the number.
             onPress={() => (wallet.phone && !WEB ? phoneOptions() : router.push('/phone'))}
           />
@@ -164,7 +163,6 @@ export default function Settings() {
         <Group>
           <Row
             title="Testnet mode"
-            sub={network === 'testnet' ? 'Monad testnet. Test money only.' : 'Off: real money on Monad.'}
             right={
               <Switch
                 value={network === 'testnet'}
@@ -191,14 +189,12 @@ export default function Settings() {
             <Group>
               <Row
                 title="Auto Shield"
-                sub={`Moves your public balance to your private one once it's $${AUTO_SHIELD_MIN} or more${
-                  NETWORKS[network].poolMaxDeposit ? `, up to $${formatUnits(NETWORKS[network].poolMaxDeposit!, AUSD_DECIMALS)} at a time` : ''
-                }. $0.01 fee each time.`}
+                sub="Keeps your balance private"
                 right={<Switch value={shieldOn} onValueChange={toggleAutoShield} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={shieldOn ? '#fff' : c.fg3} />}
               />
               <Row
                 title="Auto-merge"
-                sub="Combines your 12 largest private notes when you have more than 12. $0.01 fee each time."
+                sub="Combines small private notes"
                 right={<Switch value={merge} onValueChange={toggleAutoMerge} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={merge ? '#fff' : c.fg3} />}
                 last
               />
@@ -210,7 +206,7 @@ export default function Settings() {
         <Group>
           <Row
             title="Auto-bridge"
-            sub={`Tokens sent to your address on Base, Arbitrum or Polygon arrive here as AUSD.${network === 'mainnet' ? '' : ' Works with Test mode off.'}`}
+            sub="From Base, Arbitrum and Polygon"
             right={<Switch value={bridgeOn} onValueChange={toggleAutoBridge} trackColor={{ true: c.accent, false: c.surface2 }} thumbColor={bridgeOn ? '#fff' : c.fg3} />}
             last
           />
@@ -220,7 +216,7 @@ export default function Settings() {
 
         <Label>This phone</Label>
         <Group>
-          <Row title="Log out" sub="Your wallet comes back with your passkey." onPress={logOut} danger last />
+          <Row title="Log out" onPress={logOut} danger last />
         </Group>
 
         <T v="caption" style={{ color: c.fg3, textAlign: 'center', marginTop: 28 }}>

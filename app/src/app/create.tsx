@@ -64,10 +64,9 @@ export default function Create() {
         <View style={{ height: 64 }} />
         <Steps at={1} of={2} />
         <T v="headline" style={{ fontSize: 36 }}>Setting up your wallet</T>
-        <T v="meta" style={{ fontSize: 18, marginTop: 12 }}>A few seconds.</T>
         <View style={{ marginTop: 32, gap: 4 }}>
           <Progress done title={existing ? 'Passkey checked' : 'Passkey created'} />
-          <Progress done={false} failed={!!error} title="Setting up your wallet on Monad" sub="No fees for you. Ender covers it." last />
+          <Progress done={false} failed={!!error} title="Setting up your wallet on Monad" last />
         </View>
         {error ? (
           <>
@@ -88,13 +87,10 @@ export default function Create() {
           </View>
         </View>
         <T v="headline" style={{ textAlign: 'center', fontSize: 36 }}>Your Ender ID</T>
-        <T v="meta" style={{ fontSize: 18, lineHeight: 27, textAlign: 'center', marginTop: 12, marginHorizontal: 8 }}>
-          Anyone can pay you at it, from Ender or any wallet.
-        </T>
         <Card style={{ marginTop: 28 }}>
           <KV k="Ender ID" v={name ?? ''} last />
         </Card>
-        <T v="meta" style={{ textAlign: 'center', marginTop: 16 }}>You can change it once in Settings.</T>
+        <T v="meta" style={{ textAlign: 'center', marginTop: 16 }}>Change it once in Settings.</T>
         <View style={{ flex: 1, minHeight: 24 }} />
         <Button title="Add money" onPress={() => { router.replace('/home'); router.push('/receive'); }} />
         <Button title="Go to home" kind="text" onPress={() => router.replace('/home')} style={{ marginBottom: 4 }} />
@@ -112,7 +108,7 @@ export default function Create() {
       </View>
       <T v="headline" style={{ fontSize: 36, textAlign: 'center' }}>Your fingerprint is your key</T>
       <T v="meta" style={{ fontSize: 18, lineHeight: 27, marginTop: 14, textAlign: 'center' }}>
-        We'll make a passkey on this phone. No seed phrase, nothing to write down. It's saved to your Google account as “Ender”, so a new phone can get your wallet back.
+        No seed phrase. Saved to your Google account.
       </T>
       {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
       <View style={{ flex: 1, minHeight: 24 }} />

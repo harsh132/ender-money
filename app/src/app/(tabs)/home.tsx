@@ -170,7 +170,7 @@ export default function Home() {
           recent.map((tx) => <TxRow key={tx.id} tx={tx} />)
         ) : (
           <T v="meta" style={{ marginTop: 8 }}>
-            Nothing yet. Share your number or tap Receive to get paid.
+            No payments yet.
           </T>
         )}
       </ScrollView>

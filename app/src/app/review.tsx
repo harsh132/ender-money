@@ -13,7 +13,7 @@ import { api, ApiError, OfflineError } from '../lib/api';
 import { MAX_FEE } from '../lib/config';
 import { countdown, phoneDisplay, short, time, usd } from '../lib/format';
 import { lock, passkeyError, quickSend, unlockWallet, whileOwnScreen, type Unlocked } from '../lib/keys';
-import { checkShieldedQuote, hasPool, MERGE_OVER, signPrivate, signShield, textNetwork, type Awaiting, type PrivateDraft, type ShieldedQuote } from '../lib/private';
+import { checkShieldedQuote, MERGE_OVER, signPrivate, signShield, textNetwork, type Awaiting, type PrivateDraft, type ShieldedQuote } from '../lib/private';
 import { getState, rememberRecipient, upsertTx, useStore } from '../lib/store';
 import { c, f } from '../lib/theme';
 import { acceptReply, NoSmsError, onReply, online, textGateway, type Pipe } from '../lib/transport';
@@ -493,7 +493,7 @@ export default function Review() {
     request: times.request ? time(times.request) : undefined,
     // Once approved the quote's expiry no longer matters: just when it came.
     quote: times.approve && times.quote ? time(times.quote) : deadline ? (left > 0 ? `${quotePipe === 'text' ? 'Arrived by text · ' : ''}valid for ${countdown(left)}` : 'Expired') : phase.k === 'wait-quote' ? 'Waiting for the reply text' : undefined,
-    approve: usedQuick || (phase.k === 'review' && quick) ? 'Quick send, no fingerprint' : 'Signs exactly what\'s above',
+    approve: usedQuick || (phase.k === 'review' && quick) ? 'Quick send' : undefined,
     sent: phase.k === 'wait-sent' ? 'Waiting for the reply text' : phase.k === 'done' ? (times.sent ? time(times.sent) : 'On its way') : undefined,
   };
 
@@ -548,8 +548,6 @@ export default function Review() {
               Private addresses take private payments only, and your private balance doesn't cover ${usd(total(draft.amount, MAX_FEE))} with the fee. Make private first.
             </Banner>
           </View>
-        ) : hasPool(network) && route === 'public' ? (
-          <T v="meta" style={{ marginTop: 10, marginHorizontal: 4 }}>Public payment: amount and wallets are visible on Monad.</T>
         ) : null}
 
         <View style={{ marginTop: 24 }}>

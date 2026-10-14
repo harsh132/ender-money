@@ -41,9 +41,6 @@ export default function PhoneScreen() {
       <Screen>
         <BackHeader />
         <T v="headline" style={{ fontSize: 36 }}>{change ? 'Your new number' : 'Your number'}</T>
-        <T v="meta" style={{ fontSize: 18, lineHeight: 27, marginTop: 12 }}>
-          We'll text you a code to check it's you. Then people can pay you at this number, we'll text you when money arrives, and you can pay by text without internet.
-        </T>
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 28 }}>
           <View style={{ width: 108 }}>
             <Field
@@ -70,9 +67,6 @@ export default function PhoneScreen() {
             />
           </View>
         </View>
-        <T v="meta" style={{ color: c.fg3, fontSize: 15, marginTop: 12, lineHeight: 22 }}>
-          Ender's gateway keeps your number next to your wallet address to route payments and alerts.
-        </T>
         {error ? <View style={{ marginTop: 20 }}><Banner tone="negative">{error}</Banner></View> : null}
         <View style={{ flex: 1, minHeight: 24 }} />
         <Button title="Send code" onPress={send} busy={busy} disabled={!phone} style={{ marginBottom: 12 }} />

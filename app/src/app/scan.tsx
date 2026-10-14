@@ -51,7 +51,6 @@ export default function Scan() {
           ) : null}
         </View>
         <T v="title" style={{ textAlign: 'center', marginTop: 12 }}>Scan to pay</T>
-        <T v="meta" style={{ textAlign: 'center', marginTop: 8, color: c.fg }}>Point at an Ender code or any wallet address QR.</T>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           {permission?.granted ? (
             <View style={st.frame} />

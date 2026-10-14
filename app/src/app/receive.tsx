@@ -98,11 +98,6 @@ export default function Receive() {
             {shown}
           </T>
         )}
-        {mode === 'private' || !sms ? null : (
-          <T v="meta" style={{ textAlign: 'center', marginTop: 10 }}>
-            Or your number: {phoneDisplay(wallet.phone!)}. We'll text you when money arrives.
-          </T>
-        )}
         <View style={{ flex: 1, minHeight: 20 }} />
         {canShield ? (
           <Button

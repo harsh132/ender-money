@@ -76,11 +76,11 @@ export default function NameScreen() {
             <KV k="Your Ender ID" v={status.name ?? ''} last />
           </Card>
           {status.locked ? (
-            <T v="meta" style={{ marginTop: 16 }}>You've already changed it once, so it stays as it is.</T>
+            <T v="meta" style={{ marginTop: 16 }}>Already changed.</T>
           ) : (
             <>
               <T v="meta" style={{ fontSize: 18, lineHeight: 27, marginTop: 20 }}>
-                You can change it once. Your current ID keeps working too.
+                You can change it once.
               </T>
               {error ? <View style={{ marginTop: 16 }}><Banner tone="negative">{error}</Banner></View> : null}
               <View style={{ flex: 1, minHeight: 24 }} />
@@ -95,7 +95,7 @@ export default function NameScreen() {
                 <Button title={paid ? 'Choose a name (paid)' : `Pay $${fee}`} onPress={() => setUnlock('pay')} style={{ marginBottom: 12 }} />
               ) : (
                 <T v="meta" style={{ textAlign: 'center', marginBottom: 16 }}>
-                  {network !== 'mainnet' ? `Paying $${fee} works with Test mode off.` : `Paying needs $${fee} and the fee in your public balance.`}
+                  {network !== 'mainnet' ? `Pay $${fee} with Test mode off.` : `Needs $${fee} in your public balance.`}
                 </T>
               )}
             </>

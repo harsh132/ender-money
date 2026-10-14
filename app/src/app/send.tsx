@@ -146,7 +146,7 @@ export default function Send() {
         {!to ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, paddingHorizontal: 16, borderRadius: 20, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line }}>
             <Shield size={28} color={c.accent} />
-            <T v="meta" style={{ flex: 1 }}>From your public balance to your private one. Private payments don't show who you paid.</T>
+            <T v="body" style={{ flex: 1 }}>To your private balance</T>
           </View>
         ) : (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, paddingHorizontal: 16, borderRadius: 20, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line }}>
@@ -287,13 +287,7 @@ export default function Send() {
               );
             })}
           </>
-        ) : (
-          <T v="meta" style={{ marginTop: 20 }}>
-            {sms
-              ? 'Type a phone number or Ender ID (name.ender.my), or paste an address. Pick a contact or scan a code with the buttons above.'
-              : 'Type an Ender ID (name.ender.my), or paste an address. Scan a code with the button above.'}
-          </T>
-        )}
+        ) : null}
       </ScrollView>
     </Screen>
   );
