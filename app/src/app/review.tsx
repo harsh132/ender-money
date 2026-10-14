@@ -491,7 +491,8 @@ export default function Review() {
 
   const stepSub: Record<Step, string | undefined> = {
     request: times.request ? time(times.request) : undefined,
-    quote: deadline ? (left > 0 ? `${quotePipe === 'text' ? 'Arrived by text · ' : ''}valid for ${countdown(left)}` : 'Expired') : phase.k === 'wait-quote' ? 'Waiting for the reply text' : undefined,
+    // Once approved the quote's expiry no longer matters: just when it came.
+    quote: times.approve && times.quote ? time(times.quote) : deadline ? (left > 0 ? `${quotePipe === 'text' ? 'Arrived by text · ' : ''}valid for ${countdown(left)}` : 'Expired') : phase.k === 'wait-quote' ? 'Waiting for the reply text' : undefined,
     approve: usedQuick || (phase.k === 'review' && quick) ? 'Quick send, no fingerprint' : 'Signs exactly what\'s above',
     sent: phase.k === 'wait-sent' ? 'Waiting for the reply text' : phase.k === 'done' ? (times.sent ? time(times.sent) : 'On its way') : undefined,
   };
