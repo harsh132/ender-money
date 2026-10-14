@@ -90,7 +90,8 @@ export default function Receive() {
           <QR value={shown} size={168} />
         </View>
         {mode === 'ender' ? (
-          <T numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: f.display, fontSize: 26, lineHeight: 32, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
+          // No adjustsFontSizeToFit: Android clips the serif when it shrinks it. A long name wraps instead.
+          <T style={{ fontFamily: f.display, fontSize: 22, lineHeight: 30, color: c.fg, textAlign: 'center', paddingHorizontal: 12 }} selectable>
             {shown}
           </T>
         ) : (
@@ -98,7 +99,9 @@ export default function Receive() {
             {shown}
           </T>
         )}
-        <View style={{ flex: 1, minHeight: 20 }} />
+        {/* A fixed gap, not a flex spacer: the native sheet lays out at its tallest detent, so a spacer pushed the
+            buttons below the 72% fold. */}
+        <View style={{ height: 24 }} />
         {canShield ? (
           <Button
             title="Make private"
